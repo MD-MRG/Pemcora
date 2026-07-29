@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* ── Design tokens ───────────────────────────────────────────────────────────
+   Navy & brass, from the approved Field Kit direction. Semantic colours
+   (pass/fail/na) are deliberately kept clear of the brass accent so a status
+   can never be mistaken for branding. */
+@theme {
+  --color-navy: #1b3a5c;
+  --color-navy-deep: #12293f;
+  --color-navy-item: #24486e;
+  --color-navy-edge: #33628f;
+  --color-navy-ink: #14293f;
+
+  --color-brass: #c8a24a;
+  --color-brass-lit: #dcbb6d;
+  --color-bone: #e6dcc6;
+  --color-espresso: #2a2119;
+
+  --color-pass: #1e7a45;
+  --color-fail: #c22e1c;
+  --color-na: #7c8894;
+
+  --color-stage: #eef1f3;
+  --color-card: #ffffff;
+  --color-hair: #dde2e6;
+  --color-ink: #1a2027;
+  --color-ink-soft: #6a7683;
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-stage);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Brand plate tokens — set at runtime from the chosen swatch. */
+:root {
+  --plate-bg: #c8a24a;
+  --plate-fg: #14293f;
+  --plate-mark: rgba(20, 41, 63, 0.18);
+  --plate-edge: rgba(0, 0, 0, 0.16);
+}
+
+/* The shell animates its own column width; nothing else moves. */
+.shell-grid {
+  transition: grid-template-columns 0.22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-brass);
+  outline-offset: 2px;
+}
