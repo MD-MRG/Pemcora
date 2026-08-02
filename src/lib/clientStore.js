@@ -124,6 +124,76 @@ export function saveFloors(clientId, locationId, floors) {
   return true
 }
 
+/**
+ * Saves edits to an existing location, and renames its client if the name
+ * changed. Returns { outcome, existing?, conflictName? }:
+ *   'saved'         — details written (client renamed too, if applicable)
+ *   'duplicate'     — ANOTHER location of this client already has that
+ *                     address + suburb; nothing written
+ *   'name-conflict' — a DIFFERENT client already uses the new name; renaming
+ *                     would silently merge two clients, so nothing is written
+ *
+ * The duplicate check deliberately skips the location being edited — otherwise
+ * saving a location without touching its address matches itself and blocks.
+ */
+export function saveEditedLocation(clientId, locationId, details) {
+  const clients = read()
+  const client = clients.find(c => c.id === clientId)
+  const location = client?.locations.find(l => l.id === locationId)
+  if (!location) return { outcome: 'missing' }
+
+  const newName = details.name.trim()
+  if (normalise(newName) !== normalise(client.name)) {
+    const clash = clients.find(c => c.id !== clientId && normalise(c.name) === normalise(newName))
+    if (clash) return { outcome: 'name-conflict', conflictName: clash.name }
+  }
+
+  const a = normalise(details.address)
+  const s = normalise(details.suburb)
+  const twin = client.locations.find(
+    l => l.id !== locationId && normalise(l.address) === a && normalise(l.suburb) === s,
+  )
+  if (twin) return { outcome: 'duplicate', existing: twin }
+
+  client.name = newName
+  Object.assign(location, {
+    address: details.address,
+    suburb: details.suburb,
+    city: details.city,
+    state: details.state,
+    postcode: details.postcode,
+  })
+  write(clients)
+  return { outcome: 'saved' }
+}
+
+// Adds a location to a known client, refusing an exact address + suburb twin.
+export function addLocationToClient(clientId, details) {
+  const clients = read()
+  const client = clients.find(c => c.id === clientId)
+  if (!client) return { outcome: 'missing' }
+
+  const existing = findLocation(client, details.address, details.suburb)
+  if (existing) return { outcome: 'duplicate', existing }
+
+  const location = newLocation(details)
+  client.locations.push(location)
+  write(clients)
+  return { outcome: 'saved', locationId: location.id }
+}
+
+// Distinct values of a location field, for the filter dropdown.
+export function distinctValues(field) {
+  const seen = new Map()
+  for (const c of read()) {
+    for (const l of c.locations) {
+      const v = String(l[field] ?? '').trim()
+      if (v && !seen.has(normalise(v))) seen.set(normalise(v), v)
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b))
+}
+
 export function getLocation(clientId, locationId) {
   const client = read().find(c => c.id === clientId)
   if (!client) return null

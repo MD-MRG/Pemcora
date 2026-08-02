@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
+import FloorsEditor from '../components/FloorsEditor.jsx'
 import { useClientDraft } from '../lib/useClientDraft.js'
 
 const ADDRESS_LABELS = [
@@ -42,22 +42,6 @@ function SaveNotice({ notice }) {
     <Notice
       title={`Client "${notice.clientName}" found in the database. New location being added.`}
     />
-  )
-}
-
-function AddButton({ onClick, children, tone = 'soft' }) {
-  const styles =
-    tone === 'strong'
-      ? 'border-navy/25 bg-navy/5 text-navy hover:bg-navy/10'
-      : 'border-hair bg-white text-navy hover:bg-slate-50'
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`min-h-[46px] w-full rounded-lg border border-dashed px-4 text-[13.5px] font-semibold transition-colors ${styles}`}
-    >
-      + {children}
-    </button>
   )
 }
 
@@ -167,63 +151,11 @@ function ClientHeader({ details, totals, saveState }) {
   )
 }
 
-function FloorBlock({ floor, index, setFloorLabel, setRoom, addRoom, registerRef }) {
-  return (
-    <section className="border-hair rounded-xl border bg-white p-4 shadow-sm">
-      <Field
-        label={`Floor ${index + 1}`}
-        value={floor.label}
-        onChange={v => setFloorLabel(floor.id, v)}
-        placeholder="e.g. Level 47"
-        inputRef={registerRef('floor', floor.id)}
-      />
-
-      <div className="mt-4 flex flex-col gap-3">
-        {floor.rooms.map((room, ri) => (
-          <div key={room.id} className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Field
-              label={ri === 0 ? 'Room' : ''}
-              aria-label={`Floor ${index + 1} room ${ri + 1} name`}
-              value={room.name}
-              onChange={v => setRoom(floor.id, room.id, 'name', v)}
-              placeholder="Room name"
-              inputRef={registerRef('room', room.id)}
-            />
-            <Field
-              label={ri === 0 ? 'Floor plan no.' : ''}
-              aria-label={`Floor ${index + 1} room ${ri + 1} plan number`}
-              value={room.planNumber}
-              onChange={v => setRoom(floor.id, room.id, 'planNumber', v)}
-              placeholder="Plan number"
-            />
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3">
-        <AddButton onClick={() => addRoom(floor.id)}>New Room</AddButton>
-      </div>
-    </section>
-  )
-}
-
 /* ── Page ────────────────────────────────────────────────────────────────── */
 export default function NewClient() {
   const navigate = useNavigate()
   const draft = useClientDraft()
   const { details, floors, saved, notice, lastAdded, canSave, totals, saveState } = draft
-
-  // Focus the entry that was just added, so a run of rooms can be typed
-  // without hunting for the new input.
-  const refs = useRef(new Map())
-  const registerRef = (kind, id) => el => {
-    if (el) refs.current.set(`${kind}:${id}`, el)
-    else refs.current.delete(`${kind}:${id}`)
-  }
-  useEffect(() => {
-    if (!lastAdded) return
-    refs.current.get(`${lastAdded.type}:${lastAdded.id}`)?.focus()
-  }, [lastAdded])
 
   if (!saved) {
     return (
@@ -250,22 +182,15 @@ export default function NewClient() {
 
         <ClientHeader details={details} totals={totals} saveState={saveState} />
 
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {floors.map((floor, i) => (
-            <FloorBlock
-              key={floor.id}
-              floor={floor}
-              index={i}
-              setFloorLabel={draft.setFloorLabel}
-              setRoom={draft.setRoom}
-              addRoom={draft.addRoom}
-              registerRef={registerRef}
-            />
-          ))}
-
-          <AddButton tone="strong" onClick={draft.addFloor}>
-            Another floor
-          </AddButton>
+        <div className="mx-auto max-w-3xl">
+          <FloorsEditor
+            floors={floors}
+            lastAdded={lastAdded}
+            setFloorLabel={draft.setFloorLabel}
+            setRoom={draft.setRoom}
+            addRoom={draft.addRoom}
+            addFloor={draft.addFloor}
+          />
         </div>
       </div>
 
