@@ -15,6 +15,7 @@ import {
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 
@@ -188,6 +189,7 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
 function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
   const [adding, setAdding] = useState(false)
   const [askExport, setAskExport] = useState(false)
+  const [askFinish, setAskFinish] = useState(false)
 
   const visits = listVisits(client.id, location.id)
   const current = visits.find(v => !v.completedAt) ?? visits[0] ?? null
@@ -252,12 +254,7 @@ function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
           if (already && !current.exportPreference) setAskExport(true)
           else runExport(current.exportPreference ?? 'revision')
         }}
-        onFinish={() => {
-          if (current && window.confirm('Finish this visit? It moves into history and a new visit can be started.')) {
-            completeVisit(client.id, location.id, current.id)
-            onChanged()
-          }
-        }}
+        onFinish={() => setAskFinish(true)}
       />
 
       {adding ? (
@@ -320,6 +317,21 @@ function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
             </section>
           ))}
         </div>
+      )}
+
+      {askFinish && current && (
+        <ConfirmDialog
+          title="Finish this visit?"
+          confirmLabel="Finish visit"
+          onCancel={() => setAskFinish(false)}
+          onConfirm={() => {
+            completeVisit(client.id, location.id, current.id)
+            setAskFinish(false)
+            onChanged()
+          }}
+        >
+          It moves into history and a new visit can be started. Results are kept.
+        </ConfirmDialog>
       )}
 
       {askExport && current && (
@@ -385,6 +397,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, onBack, o
   const [troubleshooting, setTroubleshooting] = useState(() => stored?.troubleshooting ?? {})
   const [comments, setComments] = useState(() => stored?.comments ?? '')
   const [complete, setComplete] = useState(() => stored?.status === 'complete')
+  const [pending, setPending] = useState(null)
 
   const labelFor = useCallback(
     testId =>
@@ -411,19 +424,8 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, onBack, o
     [client.id, location.id, visit, roomId, results, sections, troubleshooting, comments, snapshot, complete, onChanged, readOnly],
   )
 
-  const setResult = (groupId, testId, value) => {
-    if (readOnly) return
+  const applyResult = (groupId, testId, value) => {
     const was = results[groupId]?.[testId]
-    const note = troubleshooting[testId]
-    // Leaving FAIL discards the note it generated — warn first (v1 §8.2).
-    if (was === 'FAIL' && value !== 'FAIL' && note && note.trim()) {
-      const ok = window.confirm(
-        `Discard troubleshooting notes for "${labelFor(testId)}"?\n\n` +
-          'Changing the result away from FAIL will remove the notes you typed.',
-      )
-      if (!ok) return
-    }
-
     const nextResults = { ...results, [groupId]: { ...(results[groupId] ?? {}), [testId]: value } }
     let nextNotes = troubleshooting
     if (was === 'FAIL' && value !== 'FAIL' && testId in troubleshooting) {
@@ -433,6 +435,18 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, onBack, o
     setResults(nextResults)
     setTroubleshooting(nextNotes)
     persist({ results: nextResults, troubleshooting: nextNotes })
+  }
+
+  const setResult = (groupId, testId, value) => {
+    if (readOnly) return
+    const was = results[groupId]?.[testId]
+    const note = troubleshooting[testId]
+    // Leaving FAIL discards the note it generated — confirm first (v1 §8.2).
+    if (was === 'FAIL' && value !== 'FAIL' && note && note.trim()) {
+      setPending({ groupId, testId, value, label: labelFor(testId) })
+      return
+    }
+    applyResult(groupId, testId, value)
   }
 
   const toggleSection = (sectionId, on) => {
@@ -569,6 +583,22 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, onBack, o
         </button>
         )}
       </div>
+
+      {pending && (
+        <ConfirmDialog
+          danger
+          title={`Discard troubleshooting notes for "${pending.label}"?`}
+          confirmLabel="Discard notes"
+          cancelLabel="Keep the note"
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            applyResult(pending.groupId, pending.testId, pending.value)
+            setPending(null)
+          }}
+        >
+          Changing the result away from FAIL removes the notes you typed for it.
+        </ConfirmDialog>
+      )}
 
       <footer className="border-hair mt-2 grid shrink-0 grid-cols-3 gap-2 border-t-2 bg-white py-3">
         <button
