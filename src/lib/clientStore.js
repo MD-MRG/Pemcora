@@ -356,6 +356,52 @@ export function saveRoomEntry(clientId, locationId, visitId, roomId, patch) {
   return entry
 }
 
+// ── Report exports ──────────────────────────────────────────────────────────
+//
+// Only the revision record is kept, never the file. The visit holds everything
+// needed to regenerate any revision, so an old one can never go stale.
+
+export function nextRevision(visit) {
+  const highest = (visit?.exports ?? []).reduce((n, e) => Math.max(n, e.revision ?? 0), 0)
+  return highest + 1
+}
+
+/**
+ * Records an export against a visit and closes the visit if it was still open —
+ * producing the report is the point at which a PM is finished.
+ *
+ * mode 'revision' files it as the next revision; 'replace' re-stamps the
+ * highest existing one, so the technician overwrites the file they already sent.
+ */
+export function recordExport(clientId, locationId, visitId, { mode, filename }) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return null
+  visit.exports = visit.exports ?? []
+
+  const highest = visit.exports.reduce((n, e) => Math.max(n, e.revision ?? 0), 0)
+  const revision = visit.exports.length === 0 ? 1 : mode === 'replace' ? highest : highest + 1
+
+  const record = { revision, filename, createdAt: new Date().toISOString() }
+  const existing = visit.exports.findIndex(e => e.revision === revision)
+  if (existing >= 0) visit.exports[existing] = record
+  else visit.exports.push(record)
+
+  if (!visit.completedAt) visit.completedAt = new Date().toISOString()
+
+  write(clients)
+  return record
+}
+
+export function setExportPreference(clientId, locationId, visitId, preference) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return false
+  visit.exportPreference = preference
+  write(clients)
+  return true
+}
+
 // Test/maintenance helper.
 export function clearClients() {
   try {

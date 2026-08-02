@@ -14,6 +14,9 @@ import {
   lastSectionToggles,
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
+import ExportDialog from '../components/ExportDialog.jsx'
+import { downloadReport } from '../lib/report.js'
+import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 
 const fmt = iso => (iso ? new Date(iso).toLocaleDateString() : '')
 
@@ -38,7 +41,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, onStart, onContinue, onFinish }) {
+function VisitCard({ visit, roomCount, doneCount, onStart, onContinue, onFinish, onExport }) {
   const open = visit && !visit.completedAt
 
   return (
@@ -83,6 +86,15 @@ function VisitCard({ visit, roomCount, doneCount, onStart, onContinue, onFinish 
             className="border-hair text-ink min-h-[46px] rounded-lg border px-5 text-[14px] font-semibold hover:bg-slate-50"
           >
             Finish visit
+          </button>
+        )}
+        {visit && (
+          <button
+            type="button"
+            onClick={onExport}
+            className="border-pass text-pass min-h-[46px] rounded-lg border-2 px-5 text-[14px] font-semibold hover:bg-green-50"
+          >
+            Export report
           </button>
         )}
       </div>
@@ -175,6 +187,7 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
 /* ── Level 3 · visit overview ─────────────────────────────────────────────── */
 function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
   const [adding, setAdding] = useState(false)
+  const [askExport, setAskExport] = useState(false)
 
   const visits = listVisits(client.id, location.id)
   const current = visits.find(v => !v.completedAt) ?? visits[0] ?? null
@@ -193,6 +206,21 @@ function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
     }
     return [...map.entries()]
   }, [rooms])
+
+  const runExport = async (mode, remember = false) => {
+    if (!current) return
+    const revision =
+      (current.exports ?? []).length === 0
+        ? 1
+        : mode === 'replace'
+          ? nextRevision(current) - 1
+          : nextRevision(current)
+    const filename = await downloadReport({ client, location, visit: current, rooms, revision })
+    recordExport(client.id, location.id, current.id, { mode, filename })
+    if (remember) setExportPreference(client.id, location.id, current.id, mode)
+    setAskExport(false)
+    onChanged()
+  }
 
   const floors = (location.floors ?? []).map(f => ({ id: f.id, label: f.label }))
 
@@ -215,6 +243,14 @@ function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
         onContinue={() => {
           const first = rooms.find(r => r.status !== 'complete') ?? rooms[0]
           if (first) onOpenRoom(first.id)
+        }}
+        onExport={() => {
+          if (!current) return
+          const already = (current.exports ?? []).length > 0
+          // Only ask once a report exists, and skip the prompt if the
+          // technician chose to remember an answer for this visit.
+          if (already && !current.exportPreference) setAskExport(true)
+          else runExport(current.exportPreference ?? 'revision')
         }}
         onFinish={() => {
           if (current && window.confirm('Finish this visit? It moves into history and a new visit can be started.')) {
@@ -284,6 +320,15 @@ function VisitLevel({ client, location, onBack, onOpenRoom, onChanged }) {
             </section>
           ))}
         </div>
+      )}
+
+      {askExport && current && (
+        <ExportDialog
+          nextRev={nextRevision(current)}
+          currentRev={nextRevision(current) - 1}
+          onCancel={() => setAskExport(false)}
+          onChoose={({ mode, remember }) => runExport(mode, remember)}
+        />
       )}
 
       {visits.length > 1 && (
