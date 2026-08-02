@@ -108,4 +108,14 @@ export const CUSTOM = { main: [], sections: [] }
    Commissioning and Maintenance are then just templates that ship with two
    sections pre-named "Room controls" and "Additional AV Sources" — no special
    casing, and one editor serves all three workflows.
+
+   Section gating (decided): the old YES/NO "Room specifics" gate is dropped.
+   Each section carries its own per-room toggle, defaulting to whatever the
+   previous room in the same job used. A room with nothing extra therefore costs
+   zero taps, and on a 20-room site the common configuration is set once rather
+   than repeated. Any room is still free to differ.
+
+   Unchanged from before: switching a section off preserves its results in
+   storage and merely excludes them from the export, so toggling is never
+   destructive.
    ────────────────────────────────────────────────────────────────────────── */
