@@ -201,6 +201,107 @@ export function getLocation(clientId, locationId) {
   return location ? { client, location } : null
 }
 
+// ── PM visits ───────────────────────────────────────────────────────────────
+//
+// A visit is one dated PM session against a location. Keeping them as history
+// is what makes "continue an unfinished PM", "start a new one" and "revise a
+// finished one" states of one object rather than three separate features.
+//
+//   Visit { id, startedAt, completedAt|null, rooms: { [roomId]: {...} },
+//           exports: [], exportPreference: null }
+
+const findLoc = (clients, clientId, locationId) =>
+  clients.find(c => c.id === clientId)?.locations.find(l => l.id === locationId) ?? null
+
+export function listVisits(clientId, locationId) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location?.visits) return []
+  // Newest first.
+  return [...location.visits].sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
+}
+
+export function openVisit(clientId, locationId) {
+  return listVisits(clientId, locationId).find(v => !v.completedAt) ?? null
+}
+
+export function startVisit(clientId, locationId) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location) return null
+  location.visits = location.visits ?? []
+
+  const already = location.visits.find(v => !v.completedAt)
+  if (already) return already // never open a second visit alongside an open one
+
+  const visit = {
+    id: uid(),
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    rooms: {},
+    exports: [],
+    exportPreference: null,
+  }
+  location.visits.push(visit)
+  write(clients)
+  return visit
+}
+
+export function completeVisit(clientId, locationId, visitId) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  const visit = location?.visits?.find(v => v.id === visitId)
+  if (!visit) return false
+  visit.completedAt = new Date().toISOString()
+  write(clients)
+  return true
+}
+
+// Every room of a location, flattened with its floor, plus this visit's status.
+export function roomsWithStatus(clientId, locationId, visit) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location) return []
+  return (location.floors ?? []).flatMap(floor =>
+    floor.rooms.map(room => ({
+      floorId: floor.id,
+      floorLabel: floor.label,
+      ...room,
+      status: visit?.rooms?.[room.id]?.status ?? 'not-started',
+      fails: visit?.rooms?.[room.id]?.fails ?? 0,
+    })),
+  )
+}
+
+/**
+ * Adds a room to the LOCATION (not just the visit), so it is there next time
+ * and shows up in Edit Client too. A floor is required — either an existing
+ * one or a new label — so the room lands in the right part of the list.
+ */
+export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel, name, planNumber }) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location) return { outcome: 'missing' }
+  location.floors = location.floors ?? []
+
+  let floor = floorId ? location.floors.find(f => f.id === floorId) : null
+  if (!floor) {
+    const label = String(newFloorLabel ?? '').trim()
+    if (!label) return { outcome: 'no-floor' }
+    // Re-use a floor of the same name rather than creating a duplicate.
+    floor = location.floors.find(f => normalise(f.label) === normalise(label))
+    if (!floor) {
+      floor = { id: uid(), label, rooms: [] }
+      location.floors.push(floor)
+    }
+  }
+
+  const room = { id: uid(), name: String(name ?? '').trim(), planNumber: String(planNumber ?? '').trim() }
+  floor.rooms.push(room)
+  write(clients)
+  return { outcome: 'added', floorId: floor.id, roomId: room.id }
+}
+
 // Test/maintenance helper.
 export function clearClients() {
   try {
