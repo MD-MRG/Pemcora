@@ -302,6 +302,60 @@ export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel
   return { outcome: 'added', floorId: floor.id, roomId: room.id }
 }
 
+// ── Room entries within a visit ─────────────────────────────────────────────
+
+const findVisit = (clients, clientId, locationId, visitId) =>
+  findLoc(clients, clientId, locationId)?.visits?.find(v => v.id === visitId) ?? null
+
+export function getRoomEntry(clientId, locationId, visitId, roomId) {
+  const visit = findVisit(read(), clientId, locationId, visitId)
+  return visit?.rooms?.[roomId] ?? null
+}
+
+// Which sections the most recently touched room used, so the next room starts
+// configured the same way. On a 20-room site the layout is usually identical.
+export function lastSectionToggles(clientId, locationId, visitId) {
+  const visit = findVisit(read(), clientId, locationId, visitId)
+  if (!visit?.rooms) return null
+  const entries = Object.values(visit.rooms).filter(e => e?.sections && e.touchedAt)
+  if (!entries.length) return null
+  entries.sort((a, b) => String(b.touchedAt).localeCompare(String(a.touchedAt)))
+  return entries[0].sections
+}
+
+// FAILs count only where the section is switched on — a hidden section's
+// results are kept but must not reach the chip or the report.
+function countFails(entry) {
+  if (!entry?.results) return 0
+  let n = Object.values(entry.results.main ?? {}).filter(v => v === 'FAIL').length
+  for (const [sectionId, on] of Object.entries(entry.sections ?? {})) {
+    if (!on) continue
+    n += Object.values(entry.results[sectionId] ?? {}).filter(v => v === 'FAIL').length
+  }
+  return n
+}
+
+const hasAnyResult = entry =>
+  Object.values(entry?.results ?? {}).some(group => Object.values(group ?? {}).some(Boolean)) ||
+  String(entry?.comments ?? '').trim() !== ''
+
+export function saveRoomEntry(clientId, locationId, visitId, roomId, patch) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return null
+  visit.rooms = visit.rooms ?? {}
+
+  const entry = { ...(visit.rooms[roomId] ?? {}), ...patch, touchedAt: new Date().toISOString() }
+  entry.fails = countFails(entry)
+  // 'complete' is only ever set by the technician; everything else is derived.
+  if (entry.status !== 'complete') {
+    entry.status = hasAnyResult(entry) ? 'in-progress' : 'not-started'
+  }
+  visit.rooms[roomId] = entry
+  write(clients)
+  return entry
+}
+
 // Test/maintenance helper.
 export function clearClients() {
   try {
