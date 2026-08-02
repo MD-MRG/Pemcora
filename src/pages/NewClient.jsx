@@ -25,7 +25,7 @@ function DetailsForm({ details, setField, complete, onSave }) {
     <section className="border-hair mx-auto max-w-2xl rounded-xl border bg-white p-5 shadow-sm">
       <h2 className="text-[15px] font-bold">Client details</h2>
       <p className="text-ink-soft mt-0.5 mb-4 text-[12.5px]">
-        All four are needed before the client can be saved.
+        All six are needed before the client can be saved.
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -38,6 +38,28 @@ function DetailsForm({ details, setField, complete, onSave }) {
           className="sm:col-span-2"
         />
         <Field
+          label="Address"
+          required
+          value={details.address}
+          onChange={v => setField('address', v)}
+          placeholder="e.g. 8 Grand Avenue"
+          className="sm:col-span-2"
+        />
+        <Field
+          label="Suburb"
+          required
+          value={details.suburb}
+          onChange={v => setField('suburb', v)}
+          placeholder="e.g. Rosehill"
+        />
+        <Field
+          label="City"
+          required
+          value={details.city}
+          onChange={v => setField('city', v)}
+          placeholder="e.g. Sydney"
+        />
+        <Field
           label="State"
           required
           value={details.state}
@@ -45,19 +67,12 @@ function DetailsForm({ details, setField, complete, onSave }) {
           placeholder="e.g. NSW"
         />
         <Field
-          label="City"
+          label="Postcode"
           required
-          value={details.city}
-          onChange={v => setField('city', v)}
-          placeholder="e.g. Rosehill"
-        />
-        <Field
-          label="Address"
-          required
-          value={details.address}
-          onChange={v => setField('address', v)}
-          placeholder="e.g. 8 Grand Avenue"
-          className="sm:col-span-2"
+          value={details.postcode}
+          onChange={v => setField('postcode', v)}
+          placeholder="e.g. 2142"
+          inputMode="numeric"
         />
       </div>
 

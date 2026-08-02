@@ -5,17 +5,21 @@ import { useState, useCallback, useMemo } from 'react'
 // Shape is deliberate: the eventual database schema mirrors it, so wiring
 // persistence later is a straight mapping rather than a reshape.
 //
-//   { name, state, city, address,
+//   { name, address, suburb, city, state, postcode,
 //     floors: [ { id, label, rooms: [ { id, name, planNumber } ] } ] }
 
 const uid = () => crypto.randomUUID()
 const newRoom = () => ({ id: uid(), name: '', planNumber: '' })
 const newFloor = () => ({ id: uid(), label: '', rooms: [newRoom()] })
 
-const DETAIL_FIELDS = ['name', 'state', 'city', 'address']
+// Ordered as an address is written, which is also the order they get typed.
+const DETAIL_FIELDS = ['name', 'address', 'suburb', 'city', 'state', 'postcode']
+
+const emptyDetails = () =>
+  Object.fromEntries(DETAIL_FIELDS.map(k => [k, '']))
 
 export function useClientDraft() {
-  const [details, setDetails] = useState({ name: '', state: '', city: '', address: '' })
+  const [details, setDetails] = useState(emptyDetails)
   const [floors, setFloors] = useState(() => [newFloor()])
   const [saved, setSaved] = useState(false)
 
