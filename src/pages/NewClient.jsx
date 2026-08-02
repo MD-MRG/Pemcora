@@ -1,7 +1,49 @@
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Field from '../components/Field.jsx'
+import Notice from '../components/Notice.jsx'
 import { useClientDraft } from '../lib/useClientDraft.js'
+
+const ADDRESS_LABELS = [
+  ['name', 'Name'],
+  ['address', 'Address'],
+  ['suburb', 'Suburb'],
+  ['city', 'City'],
+  ['state', 'State'],
+  ['postcode', 'Postcode'],
+]
+
+// The location already on file, shown so the technician can see exactly what
+// they have collided with rather than guessing.
+function ExistingLocation({ clientName, existing }) {
+  const values = { name: clientName, ...existing }
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+      {ADDRESS_LABELS.map(([key, label]) => (
+        <div key={key} className="contents">
+          <dt className="font-semibold">{label}</dt>
+          <dd className="m-0">{values[key] || '—'}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function SaveNotice({ notice }) {
+  if (!notice) return null
+  if (notice.kind === 'duplicate') {
+    return (
+      <Notice blocked title="Client and location already exist.">
+        <ExistingLocation clientName={notice.clientName} existing={notice.existing} />
+      </Notice>
+    )
+  }
+  return (
+    <Notice
+      title={`Client "${notice.clientName}" found in the database. New location being added.`}
+    />
+  )
+}
 
 function AddButton({ onClick, children, tone = 'soft' }) {
   const styles =
@@ -20,13 +62,19 @@ function AddButton({ onClick, children, tone = 'soft' }) {
 }
 
 /* ── Phase 1 ─────────────────────────────────────────────────────────────── */
-function DetailsForm({ details, setField, complete, onSave }) {
+function DetailsForm({ details, setField, canSave, onSave, notice }) {
   return (
     <section className="border-hair mx-auto max-w-2xl rounded-xl border bg-white p-5 shadow-sm">
       <h2 className="text-[15px] font-bold">Client details</h2>
       <p className="text-ink-soft mt-0.5 mb-4 text-[12.5px]">
         All six are needed before the client can be saved.
       </p>
+
+      {notice && (
+        <div className="mb-4">
+          <SaveNotice notice={notice} />
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
@@ -79,7 +127,7 @@ function DetailsForm({ details, setField, complete, onSave }) {
       <button
         type="button"
         onClick={onSave}
-        disabled={!complete}
+        disabled={!canSave}
         className="bg-navy mt-5 min-h-[48px] w-full rounded-lg px-4 text-[14px] font-semibold text-white transition-colors enabled:hover:bg-[#24486e] disabled:cursor-not-allowed disabled:opacity-40"
       >
         Save Client
@@ -89,11 +137,29 @@ function DetailsForm({ details, setField, complete, onSave }) {
 }
 
 /* ── Phase 2 ─────────────────────────────────────────────────────────────── */
-function ClientHeader({ name, totals }) {
+function ClientHeader({ details, totals, saveState }) {
   const stat = (n, one, many) => `${n} ${n === 1 ? one : many}`
+  const indicator =
+    saveState === 'saving'
+      ? { text: 'Saving…', cls: 'text-ink-soft' }
+      : saveState === 'saved'
+        ? { text: 'Saved ✓', cls: 'text-pass' }
+        : saveState === 'error'
+          ? { text: 'Save failed', cls: 'text-fail' }
+          : null
+
   return (
     <header className="border-hair mx-auto mb-4 max-w-3xl rounded-xl border bg-white px-5 py-4 shadow-sm">
-      <h2 className="truncate text-[19px] leading-tight font-bold">{name}</h2>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="truncate text-[19px] leading-tight font-bold">{details.name}</h2>
+        {indicator && (
+          <span className={`shrink-0 text-[12px] ${indicator.cls}`}>{indicator.text}</span>
+        )}
+      </div>
+      {/* which of this client's locations is being worked on */}
+      <p className="text-ink-soft mt-0.5 truncate text-[13px]">
+        {[details.address, details.suburb].filter(Boolean).join(', ')}
+      </p>
       <p className="text-ink-soft mt-1 text-[13px] tabular-nums">
         {stat(totals.floors, 'floor', 'floors')} · {stat(totals.rooms, 'room', 'rooms')}
       </p>
@@ -145,7 +211,7 @@ function FloorBlock({ floor, index, setFloorLabel, setRoom, addRoom, registerRef
 export default function NewClient() {
   const navigate = useNavigate()
   const draft = useClientDraft()
-  const { details, floors, saved, lastAdded, detailsComplete, totals } = draft
+  const { details, floors, saved, notice, lastAdded, canSave, totals, saveState } = draft
 
   // Focus the entry that was just added, so a run of rooms can be typed
   // without hunting for the new input.
@@ -165,8 +231,9 @@ export default function NewClient() {
         <DetailsForm
           details={details}
           setField={draft.setField}
-          complete={detailsComplete}
+          canSave={canSave}
           onSave={draft.saveClient}
+          notice={notice}
         />
       </div>
     )
@@ -175,7 +242,13 @@ export default function NewClient() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-auto p-4 sm:p-6">
-        <ClientHeader name={details.name} totals={totals} />
+        {notice && (
+          <div className="mx-auto mb-4 max-w-3xl">
+            <SaveNotice notice={notice} />
+          </div>
+        )}
+
+        <ClientHeader details={details} totals={totals} saveState={saveState} />
 
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
           {floors.map((floor, i) => (
@@ -200,7 +273,10 @@ export default function NewClient() {
         <div className="mx-auto max-w-3xl">
           <button
             type="button"
-            onClick={() => navigate('/')}
+            onClick={() => {
+              draft.flush() // beat the debounce, so nothing typed is lost
+              navigate('/')
+            }}
             className="bg-navy min-h-[48px] w-full rounded-lg px-4 text-[14px] font-semibold text-white hover:bg-[#24486e]"
           >
             Finished
