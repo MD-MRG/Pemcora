@@ -7,23 +7,10 @@
 // These are seeds only. Once a team exists, its lists are edited in-app through
 // the test-list editor, and edits never alter already-completed work.
 
-// Room controls and Additional AV Sources are currently identical across both
-// workflows. Whether they stay linked (edit once, applies to both) or become
-// independent per workflow is an open decision — see the note at the foot.
-const ROOM_CONTROLS = [
-  'Room ON/OFF',
-  'Source selection',
-  'Speaker Volume',
-  'Speaker Mute',
-  'Mic Volume',
-  'Mic Mute',
-  'Ceiling Mic LED Mute Sync',
-  'Camera Control',
-  'Camera Presets',
-]
-
-const ADDITIONAL_SOURCES = ['Signage', 'Apple TV', 'Foxtel', 'FTA STB', 'Sonos']
-
+// Each workflow owns its own copy of every list. Commissioning and Maintenance
+// start with identical sub-lists but are seeded separately, so editing one never
+// touches the other — they are free to diverge.
+//
 // Source: "Updated commisioning List.xlsx" (Desktop\Claude\Apps\App version 3).
 // Handover verification — the fuller list, covering setup and configuration.
 export const COMMISSIONING = {
@@ -54,8 +41,18 @@ export const COMMISSIONING = {
     'Booking panel signed in with calendar displayed',
     'BYOD',
   ],
-  roomControls: ROOM_CONTROLS,
-  additionalSources: ADDITIONAL_SOURCES,
+  roomControls: [
+    'Room ON/OFF',
+    'Source selection',
+    'Speaker Volume',
+    'Speaker Mute',
+    'Mic Volume',
+    'Mic Mute',
+    'Ceiling Mic LED Mute Sync',
+    'Camera Control',
+    'Camera Presets',
+  ],
+  additionalSources: ['Signage', 'Apple TV', 'Foxtel', 'FTA STB', 'Sonos'],
 }
 
 // Supplied 2026-07-29. Recurring service visit — drops the one-off setup checks
@@ -82,11 +79,33 @@ export const MAINTENANCE = {
     'Booking panel signed in with calendar displayed',
     'BYOD',
   ],
-  roomControls: ROOM_CONTROLS,
-  additionalSources: ADDITIONAL_SOURCES,
+  roomControls: [
+    'Room ON/OFF',
+    'Source selection',
+    'Speaker Volume',
+    'Speaker Mute',
+    'Mic Volume',
+    'Mic Mute',
+    'Ceiling Mic LED Mute Sync',
+    'Camera Control',
+    'Camera Presets',
+  ],
+  additionalSources: ['Signage', 'Apple TV', 'Foxtel', 'FTA STB', 'Sonos'],
 }
 
-// Open for the Commissioning & Maintenance step:
-//   1. Are the two sub-lists shared between workflows, or independent copies a
-//      team can diverge?
-//   2. Custom List presumably starts empty and is built per job — confirm.
+// Custom List seeds nothing — a job starts with an empty main section and the
+// technician adds named sections as needed.
+export const CUSTOM = { main: [], sections: [] }
+
+/* ── Structural note ─────────────────────────────────────────────────────────
+   Custom List needs an arbitrary number of user-named sections, and the section
+   headings themselves ("Main test list", "Room specifics") must be renameable.
+   That is more general than the previous app's fixed three lists, so the schema
+   should model a template as:
+
+       template = { mainLabel, sections: [ { id, label, order, tests[] } ] }
+
+   Commissioning and Maintenance are then just templates that ship with two
+   sections pre-named "Room controls" and "Additional AV Sources" — no special
+   casing, and one editor serves all three workflows.
+   ────────────────────────────────────────────────────────────────────────── */
