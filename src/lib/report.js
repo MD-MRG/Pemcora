@@ -16,9 +16,9 @@ const sanitise = s =>
     .replace(/\s+/g, ' ')
     .trim()
 
-export function buildFilename(client, visit, revision) {
+export function buildFilename(client, visit, revision, reportTitle = 'Preventative Maintenance') {
   const date = (visit?.completedAt ?? visit?.startedAt ?? '').slice(0, 10)
-  const parts = ['Preventative Maintenance', sanitise(client.name), date].filter(Boolean)
+  const parts = [reportTitle, sanitise(client.name), date].filter(Boolean)
   const base = parts.join(' ')
   return revision > 1 ? `${base} Rev ${revision}.xlsx` : `${base}.xlsx`
 }
@@ -31,7 +31,7 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  * Pure — builds and returns the workbook. No DOM, so it can be exercised in
  * Node as well as the browser.
  */
-export async function buildWorkbook({ client, location, visit, rooms, revision }) {
+export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance' }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
 
@@ -80,7 +80,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision }
     return r
   }
 
-  title('Preventative Maintenance')
+  title(reportTitle)
   // A revised report has to announce itself, or the client cannot tell two
   // copies apart.
   if (revision > 1) {
@@ -168,10 +168,10 @@ export function triggerDownload(buffer, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export async function downloadReport({ client, location, visit, rooms, revision }) {
-  const wb = await buildWorkbook({ client, location, visit, rooms, revision })
+export async function downloadReport({ client, location, visit, rooms, revision, reportTitle }) {
+  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle })
   const buffer = await wb.xlsx.writeBuffer()
-  const filename = buildFilename(client, visit, revision)
+  const filename = buildFilename(client, visit, revision, reportTitle)
   triggerDownload(buffer, filename)
   return filename
 }

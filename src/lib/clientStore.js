@@ -201,41 +201,55 @@ export function getLocation(clientId, locationId) {
   return location ? { client, location } : null
 }
 
-// ── PM visits ───────────────────────────────────────────────────────────────
+// ── Visits ──────────────────────────────────────────────────────────────────
 //
-// A visit is one dated PM session against a location. Keeping them as history
-// is what makes "continue an unfinished PM", "start a new one" and "revise a
-// finished one" states of one object rather than three separate features.
+// A visit is one dated session against a location for a given workflow.
+// Keeping them as history is what makes "continue an unfinished one", "start a
+// new one" and "revise a finished one" states of one object rather than three
+// separate features.
 //
-//   Visit { id, startedAt, completedAt|null, rooms: { [roomId]: {...} },
+//   Visit { id, kind, startedAt, completedAt|null, rooms: { [roomId]: {...} },
 //           exports: [], exportPreference: null }
+//
+// `kind` keeps Preventative Maintenance and Commissioning apart. Without it the
+// two would share a history — and worse, one workflow's Continue could open the
+// other's visit and render it against the wrong test template.
+
+export const MAINTENANCE_KIND = 'maintenance'
+
+// Visits stored before Commissioning existed carry no kind; they were all PM.
+const kindOf = visit => visit.kind ?? MAINTENANCE_KIND
 
 const findLoc = (clients, clientId, locationId) =>
   clients.find(c => c.id === clientId)?.locations.find(l => l.id === locationId) ?? null
 
-export function listVisits(clientId, locationId) {
+export function listVisits(clientId, locationId, kind = MAINTENANCE_KIND) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location?.visits) return []
-  // Newest first.
-  return [...location.visits].sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
+  return location.visits
+    .filter(v => kindOf(v) === kind)
+    .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))) // newest first
 }
 
-export function openVisit(clientId, locationId) {
-  return listVisits(clientId, locationId).find(v => !v.completedAt) ?? null
+export function openVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
+  return listVisits(clientId, locationId, kind).find(v => !v.completedAt) ?? null
 }
 
-export function startVisit(clientId, locationId) {
+export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location) return null
   location.visits = location.visits ?? []
 
-  const already = location.visits.find(v => !v.completedAt)
-  if (already) return already // never open a second visit alongside an open one
+  // Only one open visit per workflow — a commissioning in progress must not
+  // block a PM, and vice versa.
+  const already = location.visits.find(v => !v.completedAt && kindOf(v) === kind)
+  if (already) return already
 
   const visit = {
     id: uid(),
+    kind,
     startedAt: new Date().toISOString(),
     completedAt: null,
     rooms: {},

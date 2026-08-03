@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# screenshots and downloads produced by the verification suites
+tests/*.png
+tests/*.xlsx
