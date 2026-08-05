@@ -8,7 +8,7 @@ import { BrandMark } from '../components/icons.jsx'
 // been uploaded.
 export default function BrandPlate({
   collapsed = false,
-  name = 'Field Console',
+  name = 'Pemcora',
   tagline = 'AV Service',
   logoFull = null,
   logoCollapsed = null,

@@ -38,7 +38,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   const ExcelJS = mod.default ?? mod
 
   const wb = new ExcelJS.Workbook()
-  wb.creator = 'Field Console'
+  wb.creator = 'Pemcora'
   wb.created = new Date()
 
   const ws = wb.addWorksheet('PM Report')

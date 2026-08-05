@@ -1,16 +1,50 @@
-# React + Vite
+# Pemcora
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Field console for AV service work: preventative maintenance, commissioning, and the
+Excel reports that go back to the client.
 
-Currently, two official plugins are available:
+## Running it
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+Then open http://localhost:5173/.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Dev server with HMR |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the built output |
+| `npm run lint` | Oxlint |
 
-## Expanding the Oxlint configuration
+## How it fits together
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+React 19 + Vite + Tailwind v4, using **HashRouter** so deep links survive a hard reload
+without a server-side rewrite, and `base: './'` so the build works at any sub-path.
+
+Everything persists to `localStorage` behind three store modules, which are the single
+place a backend swaps in:
+
+- `src/lib/clientStore.js` — clients → locations → floors → rooms, and visits
+- `src/lib/templateStore.js` — the maintenance, commissioning and custom test lists
+- `src/lib/settingsStore.js` — company details, logos, brand colour, default technician
+
+Preventative Maintenance and Commissioning are **the same page**. The whole workflow
+lives in `src/workflows/WorkflowPage.jsx`; each page is about fifteen lines of config.
+Change the workflow there, never by copying it.
+
+Each room stores its own snapshot of the test list when first opened, so editing a list
+in Settings can never rewrite work that has already been signed off.
+
+## Tests
+
+Headless suites in `tests/` drive the real UI and assert against `localStorage` and the
+generated `.xlsx` files. Start the dev server first, then:
+
+```bash
+node tests/pm-workflow.mjs
+```
+
+See [tests/README.md](tests/README.md) for the full list and what each one covers.

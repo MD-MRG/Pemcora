@@ -79,7 +79,7 @@ export default function AppShell() {
     })
   }, [])
 
-  const brandName = settings.company?.name?.trim() || 'Field Console'
+  const brandName = settings.company?.name?.trim() || 'Pemcora'
   const ctx = { plate, setPlate, settings, refreshSettings: () => setSettings(getSettings()) }
 
   const skipLink = (
