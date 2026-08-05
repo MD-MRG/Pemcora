@@ -1,66 +1,171 @@
 import { useOutletContext } from 'react-router-dom'
-import { PLATE_LIST } from '../lib/plates.js'
+import { useState } from 'react'
+import { PLATE_LIST, PLATES } from '../lib/plates.js'
 import { BrandMark } from '../components/icons.jsx'
+import Field from '../components/Field.jsx'
+import LogoUpload from '../components/LogoUpload.jsx'
+import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 
-function PlateSwatch({ plate, selected, onSelect }) {
+function PlateSwatch({ plate, selected, onSelect, logo }) {
   return (
     <button
       type="button"
       onClick={() => onSelect(plate.key)}
       aria-pressed={selected}
+      aria-label={`Background ${plate.name}`}
       className={`border-hair rounded-xl border-2 bg-white text-left transition-transform hover:-translate-y-px ${
         selected ? 'border-navy shadow-[0_0_0_3px_rgba(27,58,92,.15)]' : ''
       }`}
     >
       <div
-        className="flex h-[66px] items-center gap-2.5 rounded-t-[10px] px-3.5"
+        className="flex h-[62px] items-center gap-2.5 rounded-t-[10px] px-3.5"
         style={{ background: plate.bg, color: plate.fg }}
       >
-        <span
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg"
-          style={{ background: plate.mark, border: `1px solid ${plate.edge}` }}
-        >
-          <BrandMark size={17} />
-        </span>
-        <span className="min-w-0">
-          <b className="block truncate text-[13px] leading-tight">Field Console</b>
-          <span className="block text-[8.5px] tracking-[.15em] uppercase opacity-70">AV Service</span>
-        </span>
+        {logo ? (
+          <img src={logo.src} alt="" className="max-h-9 max-w-[140px] object-contain" />
+        ) : (
+          <>
+            <span
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg"
+              style={{ background: plate.mark, border: `1px solid ${plate.edge}` }}
+            >
+              <BrandMark size={17} />
+            </span>
+            <span className="min-w-0 text-[13px] leading-tight font-bold">Your logo</span>
+          </>
+        )}
       </div>
       <div className="px-3.5 py-2.5">
         <div className="flex items-baseline gap-2">
           <b className="text-[13.5px]">{plate.name}</b>
           <code className="text-ink-soft font-mono text-[11.5px]">{plate.hex}</code>
         </div>
-        <p className="text-ink-soft mt-1 text-[12px] leading-snug">{plate.note}</p>
       </div>
     </button>
   )
 }
 
 export default function Settings() {
-  const { plate, setPlate } = useOutletContext()
+  const { plate, setPlate, refreshSettings } = useOutletContext()
+  const [settings, setSettings] = useState(() => getSettings())
+  const [saveError, setSaveError] = useState('')
+
+  const update = patch => {
+    const { ok, settings: next } = saveSettings(patch)
+    setSettings(next)
+    refreshSettings() // repaint the brand plate immediately
+    setSaveError(
+      ok ? '' : 'Storage is full — remove a logo or clear old data before saving again.',
+    )
+  }
+  const updateCompany = patch => {
+    const { ok, settings: next } = saveCompany(patch)
+    setSettings(next)
+    refreshSettings()
+    setSaveError(ok ? '' : 'Storage is full — remove a logo before saving again.')
+  }
+
+  const activePlate = PLATES[plate] ?? PLATES.brass
+  const usage = storageUsage()
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
+    <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
+      {saveError && (
+        <p className="border-fail/30 bg-fail/5 text-fail rounded-lg border px-4 py-3 text-[13.5px]">
+          {saveError}
+        </p>
+      )}
+
       <section className="border-hair rounded-xl border bg-white p-6">
-        <h2 className="text-[20px] font-bold tracking-[-.01em]">Branding</h2>
-        <p className="text-ink-soft mt-1 max-w-[62ch] text-[14.5px]">
-          The plate sits top-left on every screen. Pick the background that suits your mark — text
-          and icon contrast follow automatically.
+        <h2 className="text-[19px] font-bold tracking-[-.01em]">Company</h2>
+        <p className="text-ink-soft mt-1 text-[14px]">
+          Printed on every report you send a client, and shown beside your logo.
+        </p>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Company name"
+            value={settings.company.name}
+            onChange={v => updateCompany({ name: v })}
+            placeholder="e.g. Northpoint Audio Visual"
+            className="sm:col-span-2"
+          />
+          <Field label="ABN" value={settings.company.abn} onChange={v => updateCompany({ abn: v })} placeholder="e.g. 12 345 678 901" />
+          <Field label="Phone" value={settings.company.phone} onChange={v => updateCompany({ phone: v })} placeholder="e.g. 02 9000 0000" />
+          <Field
+            label="Email"
+            value={settings.company.email}
+            onChange={v => updateCompany({ email: v })}
+            placeholder="e.g. service@northpoint.com.au"
+            className="sm:col-span-2"
+          />
+        </div>
+      </section>
+
+      <section className="border-hair rounded-xl border bg-white p-6">
+        <h2 className="text-[19px] font-bold tracking-[-.01em]">Branding</h2>
+        <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+          Two logos, because they do different jobs: the full mark sits in the open sidebar, and a
+          square one has to read at 40&nbsp;px in the collapsed rail.
         </p>
 
-        <div className="mt-5 grid gap-3.5 sm:grid-cols-2">
-          {PLATE_LIST.map(p => (
-            <PlateSwatch key={p.key} plate={p} selected={plate === p.key} onSelect={setPlate} />
-          ))}
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <LogoUpload
+            label="Full logo"
+            hint="Open sidebar · about 180×44"
+            logo={settings.logoFull}
+            plate={activePlate}
+            onChange={logo => update({ logoFull: logo })}
+          />
+          <LogoUpload
+            label="Collapsed logo"
+            hint="Rail · 40×40 square"
+            logo={settings.logoCollapsed}
+            plate={activePlate}
+            square
+            onChange={logo => update({ logoCollapsed: logo })}
+          />
         </div>
 
-        <p className="text-ink-soft border-hair mt-6 border-t pt-4 text-[12.5px]">
-          Saved on this device for now. It moves to your account when Settings is designed in full —
-          along with logo upload, company details and the test-list editor.
+        <h3 className="mt-7 text-[14px] font-bold">Background</h3>
+        <p className="text-ink-soft mt-0.5 text-[13px]">
+          Check your logo against each — a dark mark disappears on Espresso, a pale one on Bone.
         </p>
+        <div className="mt-4 grid gap-3.5 sm:grid-cols-2">
+          {PLATE_LIST.map(p => (
+            <PlateSwatch
+              key={p.key}
+              plate={p}
+              selected={plate === p.key}
+              onSelect={key => {
+                setPlate(key)
+                update({ plate: key })
+              }}
+              logo={settings.logoFull}
+            />
+          ))}
+        </div>
       </section>
+
+      <section className="border-hair rounded-xl border bg-white p-6">
+        <h2 className="text-[19px] font-bold tracking-[-.01em]">Technician</h2>
+        <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+          Recorded against each new visit and printed on its report. It can be changed on the visit
+          itself when a colleague attends.
+        </p>
+        <div className="mt-4 max-w-sm">
+          <Field
+            label="Default technician"
+            value={settings.technician}
+            onChange={v => update({ technician: v })}
+            placeholder="e.g. Michal Dolezal"
+          />
+        </div>
+      </section>
+
+      <p className="text-ink-soft px-1 text-[12.5px]">
+        Saved on this device. Logos share the same storage as your client and visit data — currently
+        using <b>{usage.label}</b>.
+      </p>
     </div>
   )
 }

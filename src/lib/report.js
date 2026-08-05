@@ -1,4 +1,6 @@
-// Excel report for a PM visit.
+import { reportImage } from './logo.js'
+
+// Excel report for a visit.
 //
 // The generated file is never stored — the data that produced it lives in the
 // store, so any revision can be regenerated on demand. A "revision" is therefore
@@ -31,7 +33,7 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  * Pure — builds and returns the workbook. No DOM, so it can be exercised in
  * Node as well as the browser.
  */
-export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance' }) {
+export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
 
@@ -80,6 +82,36 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     return r
   }
 
+  // ── Who produced this ──────────────────────────────────────────────────
+  // The report reaches a client, so it has to say who it came from. The logo
+  // floats over the top-left; the company lines sit beside and below it.
+  const company = settings?.company ?? {}
+  const image = reportImage(settings?.logoFull ?? settings?.logoCollapsed)
+  if (image) {
+    try {
+      const imageId = wb.addImage({ base64: image.base64, extension: image.extension })
+      ws.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: 190, height: 52 } })
+      // Reserve the height the floating image occupies.
+      ws.addRow([]).height = 44
+    } catch {
+      /* an unusable image must not cost the client their report */
+    }
+  }
+  if (company.name) {
+    const r = ws.addRow([company.name])
+    merge(r)
+    r.getCell(1).font = { bold: true, size: 13, color: { argb: NAVY } }
+  }
+  const contact = [company.abn && `ABN ${company.abn}`, company.phone, company.email]
+    .filter(Boolean)
+    .join('  ·  ')
+  if (contact) {
+    const r = ws.addRow([contact])
+    merge(r)
+    r.getCell(1).font = { size: 10, color: { argb: 'FF6A7683' } }
+  }
+  if (company.name || contact || image) blank()
+
   title(reportTitle)
   // A revised report has to announce itself, or the client cannot tell two
   // copies apart.
@@ -92,6 +124,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   kv('Client', client.name ?? '')
   kv('Address', [location.address, location.suburb, location.city, location.state, location.postcode]
     .filter(Boolean).join(', '))
+  kv('Technician', visit.technician ?? '')
   kv('Visit started', (visit.startedAt ?? '').slice(0, 10))
   kv('Visit completed', (visit.completedAt ?? '').slice(0, 10))
   blank()
@@ -168,8 +201,8 @@ export function triggerDownload(buffer, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export async function downloadReport({ client, location, visit, rooms, revision, reportTitle }) {
-  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle })
+export async function downloadReport({ client, location, visit, rooms, revision, reportTitle, settings }) {
+  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle, settings })
   const buffer = await wb.xlsx.writeBuffer()
   const filename = buildFilename(client, visit, revision, reportTitle)
   triggerDownload(buffer, filename)

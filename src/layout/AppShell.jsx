@@ -5,6 +5,7 @@ import ContextBar from './ContextBar.jsx'
 import SideNav from './SideNav.jsx'
 import { navByPath } from '../nav.js'
 import { prefs } from '../lib/prefs.js'
+import { getSettings, saveSettings } from '../lib/settingsStore.js'
 import { applyPlate, DEFAULT_PLATE } from '../lib/plates.js'
 import { IconClose } from '../components/icons.jsx'
 
@@ -24,7 +25,8 @@ export default function AppShell() {
   const [manual, setManual] = useState(() => prefs.getCollapsed())
   const [bp, setBp] = useState(() => breakpointOf(window.innerWidth))
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [plate, setPlate] = useState(() => prefs.getPlate() ?? DEFAULT_PLATE)
+  const [settings, setSettings] = useState(() => getSettings())
+  const plate = settings.plate ?? DEFAULT_PLATE
   const bpRef = useRef(bp)
 
   // A manual choice holds until the layout crosses into a different breakpoint,
@@ -43,9 +45,19 @@ export default function AppShell() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  const setPlate = useCallback(key => {
+    const { settings: next } = saveSettings({ plate: key })
+    setSettings(next)
+  }, [])
+
+  // Re-read on every navigation so edits made on Settings show up immediately
+  // in the plate, without a store subscription.
+  useEffect(() => {
+    setSettings(getSettings())
+  }, [location.pathname])
+
   useEffect(() => {
     applyPlate(plate)
-    prefs.setPlate(plate)
   }, [plate])
 
   // Close the drawer on navigation and on Escape.
@@ -67,7 +79,8 @@ export default function AppShell() {
     })
   }, [])
 
-  const ctx = { plate, setPlate }
+  const brandName = settings.company?.name?.trim() || 'Field Console'
+  const ctx = { plate, setPlate, settings, refreshSettings: () => setSettings(getSettings()) }
 
   const skipLink = (
     <a
@@ -105,7 +118,7 @@ export default function AppShell() {
               aria-label="Navigation"
             >
               <div className="relative h-[76px] shrink-0">
-                <BrandPlate collapsed={false} />
+                <BrandPlate collapsed={false} name={brandName} logoFull={settings.logoFull} logoCollapsed={settings.logoCollapsed} />
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
@@ -137,7 +150,12 @@ export default function AppShell() {
       }}
     >
       {skipLink}
-      <BrandPlate collapsed={collapsed} />
+      <BrandPlate
+        collapsed={collapsed}
+        name={brandName}
+        logoFull={settings.logoFull}
+        logoCollapsed={settings.logoCollapsed}
+      />
       <ContextBar item={current} />
       <SideNav collapsed={collapsed} onToggle={toggle} />
       <main id="stage" className="bg-stage overflow-auto">

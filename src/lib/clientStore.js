@@ -236,7 +236,7 @@ export function openVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   return listVisits(clientId, locationId, kind).find(v => !v.completedAt) ?? null
 }
 
-export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
+export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND, technician = '') {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location) return null
@@ -250,6 +250,9 @@ export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   const visit = {
     id: uid(),
     kind,
+    // Copied, not referenced: changing the default later must not rewrite who
+    // attended a visit months ago.
+    technician,
     startedAt: new Date().toISOString(),
     completedAt: null,
     rooms: {},
@@ -259,6 +262,15 @@ export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   location.visits.push(visit)
   write(clients)
   return visit
+}
+
+export function setVisitTechnician(clientId, locationId, visitId, technician) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return false
+  visit.technician = technician
+  write(clients)
+  return true
 }
 
 export function completeVisit(clientId, locationId, visitId) {

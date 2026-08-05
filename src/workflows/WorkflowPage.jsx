@@ -14,6 +14,8 @@ import {
   lastSectionToggles,
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
+import { getSettings } from '../lib/settingsStore.js'
+import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
@@ -42,7 +44,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, onStart, onContinue, onFinish, onExport }) {
+function VisitCard({ visit, roomCount, doneCount, config, onStart, onContinue, onFinish, onExport, onTechnician }) {
   const open = visit && !visit.completedAt
 
   return (
@@ -70,6 +72,19 @@ function VisitCard({ visit, roomCount, doneCount, config, onStart, onContinue, o
               : 'No report exported yet'}
           </p>
         </>
+      )}
+
+      {visit && (
+        <label className="mt-4 block max-w-xs">
+          <span className="text-ink-soft mb-1.5 block text-[12.5px] font-semibold">Technician</span>
+          <input
+            value={visit.technician ?? ''}
+            onChange={e => onTechnician(e.target.value)}
+            placeholder="Who attended"
+            aria-label="Technician"
+            className="border-hair text-ink focus:border-navy w-full rounded-lg border bg-white px-3 py-2 text-[14px] outline-none"
+          />
+        </label>
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -219,6 +234,7 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
           : nextRevision(current)
     const filename = await downloadReport({
       client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
+      settings: getSettings(),
     })
     recordExport(client.id, location.id, current.id, { mode, filename })
     if (remember) setExportPreference(client.id, location.id, current.id, mode)
@@ -242,7 +258,7 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
         roomCount={rooms.length}
         doneCount={done}
         onStart={() => {
-          startVisit(client.id, location.id, config.kind)
+          startVisit(client.id, location.id, config.kind, getSettings().technician ?? '')
           onChanged()
         }}
         onContinue={() => {
@@ -256,6 +272,11 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
           // technician chose to remember an answer for this visit.
           if (already && !current.exportPreference) setAskExport(true)
           else runExport(current.exportPreference ?? 'revision')
+        }}
+        onTechnician={value => {
+          if (!current) return
+          setVisitTechnician(client.id, location.id, current.id, value)
+          onChanged()
         }}
         onFinish={() => setAskFinish(true)}
       />
