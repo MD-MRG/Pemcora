@@ -210,9 +210,14 @@ log(!joined.error, 'member joins with the invite code', joined.error?.message)
 const other = await outsider.sb.rpc('create_team', { p_name: 'Other Team' })
 log(!other.error, 'outsider creates their own team', other.error?.message)
 
+// Two separate properties, deliberately not conflated. Zero rows is the
+// security guarantee; a clean read is the health check. A privilege failure
+// satisfies the first and fails the second, and reporting that as one line
+// reads as "data leaked" when the opposite is true.
 {
   const { data, error } = await outsider.sb.from('clients').select('*')
-  log(!error && (data ?? []).length === 0, "outsider sees NONE of the other team's clients", `${data?.length ?? 0} rows`)
+  log((data ?? []).length === 0, "outsider sees NONE of the other team's clients", `${data?.length ?? 0} rows`)
+  log(!error, 'outsider can query clients at all (grants exist)', error ? `${error.code} ${error.message}` : '')
 }
 
 {
