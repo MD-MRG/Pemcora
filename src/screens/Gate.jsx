@@ -1,3 +1,4 @@
+import { isTestMode } from '../lib/supabase.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTeam } from '../context/TeamContext.jsx'
 import Notice from '../components/Notice.jsx'
@@ -14,6 +15,10 @@ import OnboardingScreen from './OnboardingScreen.jsx'
 export default function Gate({ children }) {
   const { configured, loading: authLoading, session } = useAuth()
   const { team, loading: teamLoading, error: teamError } = useTeam()
+
+  // Test mode goes straight through to the app on localStorage. Checked first
+  // so nothing below it — not even the loading state — can hold the suites up.
+  if (isTestMode) return children
 
   if (!configured) {
     return (

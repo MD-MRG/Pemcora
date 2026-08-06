@@ -133,13 +133,19 @@ const visitFromRow = r => ({
   startedAt: r.started_at,
   completedAt: r.completed_at,
   createdBy: r.created_by,
+  exportPreference: r.export_preference ?? null,
   rooms: Object.fromEntries(
     (r.visit_rooms ?? [])
       .filter(vr => vr.room_id)
       .map(vr => [vr.room_id, visitRoomFromRow(vr)]),
   ),
   exports: (r.visit_exports ?? [])
-    .map(x => ({ id: x.id, revision: x.revision, createdAt: x.exported_at }))
+    .map(x => ({
+      id: x.id,
+      revision: x.revision,
+      filename: x.filename ?? '',
+      createdAt: x.exported_at,
+    }))
     .sort((a, b) => a.revision - b.revision),
 })
 
@@ -536,6 +542,7 @@ export async function updateVisit(visitId, patch) {
   const row = {}
   if ('technician' in patch) row.technician = patch.technician ?? ''
   if ('completedAt' in patch) row.completed_at = patch.completedAt
+  if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
   const { error } = await supabase.from('visits').update(row).eq('id', visitId)
   if (error) throw error
 }
@@ -568,15 +575,26 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
   return visitRoomFromRow(data)
 }
 
-export async function recordExport(teamId, visitId, revision, userId) {
+export async function recordExport(teamId, visitId, revision, filename, userId) {
   const { data, error } = await supabase
     .from('visit_exports')
     .upsert(
-      { team_id: teamId, visit_id: visitId, revision, exported_by: userId ?? null },
+      {
+        team_id: teamId,
+        visit_id: visitId,
+        revision,
+        filename: filename ?? '',
+        exported_by: userId ?? null,
+      },
       { onConflict: 'visit_id,revision' },
     )
     .select()
     .single()
   if (error) throw error
-  return { id: data.id, revision: data.revision, createdAt: data.exported_at }
+  return {
+    id: data.id,
+    revision: data.revision,
+    filename: data.filename ?? '',
+    createdAt: data.exported_at,
+  }
 }
