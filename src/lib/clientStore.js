@@ -1,14 +1,23 @@
 // Client persistence and lookup.
 //
-// Backed by localStorage for now. This file is the seam: when Supabase lands,
-// only these internals change — the page and the duplicate logic stay put.
-//
 //   Client   { id, name, locations: [Location] }
 //   Location { id, address, suburb, city, state, postcode, floors: [Floor] }
 //   Floor    { id, label, rooms: [Room] }
 //   Room     { id, name, planNumber }
+//
+// This file is the seam it always said it was, and Supabase has now landed
+// behind it: `read` and `write` go to cache.js instead of straight to
+// localStorage, and an adapter there decides whether the tree is persisted
+// locally or to Postgres.
+//
+// Everything below is unchanged and stays SYNCHRONOUS on purpose. The pages
+// read during render; making these return promises would ripple a refactor
+// through all eight consumer files for no gain, since the tree is small enough
+// to hold in memory and a technician's edits should never wait on a network
+// round trip. See cache.js for why that trade is the right one here.
 
-const KEY = 'fc.clients'
+import { readClients, writeClients, hydrateSync, hasAdapter } from './cache.js'
+import { localAdapter } from './adapters/local.js'
 
 export const uid = () => crypto.randomUUID()
 
@@ -25,22 +34,17 @@ export const normalise = s =>
 export const locationKey = (name, address, suburb) =>
   [normalise(name), normalise(address), normalise(suburb)].join('|')
 
+// When nothing has chosen an adapter yet — the headless suites, or any run
+// without a session — fall back to localStorage on first touch. Once the
+// Supabase bootstrap has installed its adapter this is a no-op, so a signed-in
+// user can never be served stale local data.
 function read() {
-  try {
-    const raw = localStorage.getItem(KEY)
-    const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
+  if (!hasAdapter()) hydrateSync(localAdapter)
+  return readClients()
 }
 
 function write(clients) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(clients))
-  } catch {
-    /* storage unavailable — the session still works, it just won't persist */
-  }
+  writeClients(clients)
 }
 
 export function listClients() {
@@ -428,11 +432,10 @@ export function setExportPreference(clientId, locationId, visitId, preference) {
   return true
 }
 
-// Test/maintenance helper.
+// Test/maintenance helper. Clears the in-memory tree as well as the stored one,
+// so a caller does not keep serving data it just deleted.
 export function clearClients() {
-  try {
-    localStorage.removeItem(KEY)
-  } catch {
-    /* nothing to clear */
-  }
+  if (!hasAdapter()) hydrateSync(localAdapter)
+  localAdapter.clear()
+  writeClients([])
 }
