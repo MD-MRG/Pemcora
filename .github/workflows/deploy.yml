@@ -53,5 +53,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The default timeout is 10 minutes, which aborted a deployment that had
+      # reached `deployment_in_progress` and was still going. Aborting also
+      # cancels the deployment for that commit, so the retry inherits a
+      # cancelled one and fails faster the next time — the failure feeds itself.
+      # Twenty minutes is cheap; a build that genuinely hangs still ends.
       - id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          timeout: 1200000
