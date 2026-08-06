@@ -219,8 +219,16 @@ export default function Settings() {
       </section>
 
       <p className="text-ink-soft px-1 text-[12.5px]">
-        Saved on this device. Logos share the same storage as your client and visit data — currently
-        using <b>{usage.label}</b>.
+        {usage ? (
+          <>
+            Saved on this device. Logos share the same storage as your client and visit data —
+            currently using <b>{usage.label}</b>.
+          </>
+        ) : (
+          // Signed in there is no shared 5MB budget to warn about, and these
+          // settings are the team's rather than this browser's.
+          <>Shared with your team, and available on every device you sign in from.</>
+        )}
       </p>
     </div>
   )

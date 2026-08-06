@@ -191,6 +191,74 @@ try {
   log(after?.length === 1, 'still exactly one client row', `${after?.length ?? 0}`)
   log(after?.[0]?.id === c.id, 'and it is the same client row throughout', after?.[0]?.id)
 
+  // ── Settings split across three rows with three different owners ─────────
+  await page.goto(BASE + '#/settings', { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1200)
+
+  await page.getByLabel('Company name').fill('Northpoint Audio Visual')
+  await page.getByLabel('ABN').fill('12 345 678 901')
+  await page.getByRole('button', { name: 'Background Espresso' }).click()
+  await page.getByLabel('Default technician').fill('Michal Dolezal')
+  await page.waitForTimeout(2500)
+
+  const { data: ts } = await sb
+    .from('team_settings')
+    .select('company, plate')
+    .eq('team_id', teamRow.team_id)
+    .single()
+
+  log(ts?.company?.name === 'Northpoint Audio Visual', 'company name reached team_settings', ts?.company?.name)
+  log(ts?.company?.abn === '12 345 678 901', 'ABN reached team_settings', ts?.company?.abn)
+  log(ts?.plate === 'espresso', 'brand plate reached team_settings', ts?.plate)
+
+  // The technician is deliberately NOT team-wide: two technicians sharing a
+  // team must not overwrite each other's name.
+  const { data: prefs } = await sb
+    .from('member_prefs')
+    .select('default_technician')
+    .eq('team_id', teamRow.team_id)
+    .single()
+  log(
+    prefs?.default_technician === 'Michal Dolezal',
+    'technician went to member_prefs, NOT team_settings',
+    prefs?.default_technician,
+  )
+  log(
+    ts?.company?.technician === undefined,
+    'and team_settings does not carry a technician at all',
+  )
+
+  // ── Templates seed themselves into team_templates on first read ──────────
+  const { data: tpl } = await sb
+    .from('team_templates')
+    .select('kind, template')
+    .eq('team_id', teamRow.team_id)
+
+  const maintenance = tpl?.find(t => t.kind === 'maintenance')?.template
+  log(tpl?.length === 3, 'all three template rows exist', `${tpl?.length ?? 0}`)
+  log(
+    Array.isArray(maintenance?.tests) && maintenance.tests.length > 0,
+    'maintenance template seeded from testLists.js into Postgres',
+    `${maintenance?.tests?.length ?? 0} tests`,
+  )
+  log(
+    (maintenance?.sections ?? []).some(s => s.label === 'Room controls'),
+    'seeded template kept its sections',
+    (maintenance?.sections ?? []).map(s => s.label).join(', '),
+  )
+
+  // ── And it all survives a real reload, from Postgres ─────────────────────
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForTimeout(2500)
+  log(
+    (await page.getByLabel('Company name').inputValue()) === 'Northpoint Audio Visual',
+    'company name comes back after a full reload',
+  )
+  log(
+    (await page.getByLabel('Default technician').inputValue()) === 'Michal Dolezal',
+    'technician comes back after a full reload',
+  )
+
   log(errs.length === 0, 'no console errors', errs.slice(0, 3).join(' | '))
 } catch (e) {
   // Without this the finally below exits 0 on a mid-suite exception, and a run
