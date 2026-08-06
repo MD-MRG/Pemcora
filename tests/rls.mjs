@@ -34,11 +34,19 @@ const log = (ok, name, extra = '') => {
 
 const fresh = () => createClient(URL_, KEY, { auth: { persistSession: false } })
 
+// Plus-aliases on the project's own address. Supabase validates the domain, so
+// example.com and other throwaway domains are rejected outright; a real one that
+// resolves is required. Nothing is ever delivered to these while "Confirm email"
+// is off, and the timestamp keeps re-runs from colliding with earlier users.
+const INBOX = 'MDGhCode@gmail.com'
 const stamp = Date.now()
-const account = n => ({
-  email: `pemcora-rls-${stamp}-${n}@example.com`,
-  password: `Test-${stamp}-${n}!`,
-})
+const account = n => {
+  const [local, domain] = INBOX.split('@')
+  return {
+    email: `${local}+rls-${stamp}-${n}@${domain}`,
+    password: `Test-${stamp}-${n}!`,
+  }
+}
 
 async function signUp(who) {
   const sb = fresh()
