@@ -32,6 +32,38 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 | `pm-room-tests.mjs` | test lists, sections, troubleshooting, complete | 23 |
 | `pm-export.mjs` | Excel export, revisions, remembered choice | 26 |
 
+## `rls.mjs` — the odd one out
+
+Not a browser suite. It talks to Supabase directly with three real sessions and
+asserts the Row-Level Security policies hold:
+
+```
+node tests/rls.mjs
+```
+
+It needs no dev server, but it does need `.env`. **This is the only way to test
+RLS.** The SQL editor runs as a superuser with RLS bypassed, so every policy
+looks like it works there whether or not it does.
+
+Two preconditions, both in the Supabase dashboard:
+
+- **"Confirm email" must be off** (Authentication → Sign In / Providers →
+  Email). With it on, sign-up returns a user but no session, and the free
+  tier's two-emails-per-hour limit stops the suite after the first account.
+  Turn it back on before real users exist.
+- **The addresses need a domain Supabase accepts.** `example.com` and
+  invented domains are rejected outright as invalid. The suite uses
+  plus-aliases on the project inbox, which resolve; with confirmation off
+  nothing is ever actually delivered to them.
+
+It deletes the teams it creates, and those cascade to every row beneath. The
+`auth.users` rows survive — removing those needs the `service_role` key, which
+deliberately is not in this repo. Clear them from the SQL editor:
+
+```sql
+delete from auth.users where email like '%+rls-%';
+```
+
 ## Two things they've caught that unit tests wouldn't
 
 - Rooms added on floor 2 landing on floor 1.
