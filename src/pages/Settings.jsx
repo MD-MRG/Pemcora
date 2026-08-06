@@ -5,6 +5,7 @@ import { BrandMark } from '../components/icons.jsx'
 import Field from '../components/Field.jsx'
 import LogoUpload from '../components/LogoUpload.jsx'
 import TemplateEditor from '../components/TemplateEditor.jsx'
+import ImportLocalData from '../components/ImportLocalData.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 
 const TEMPLATES = [
@@ -217,6 +218,8 @@ export default function Settings() {
           ))}
         </div>
       </section>
+
+      <ImportLocalData />
 
       <p className="text-ink-soft px-1 text-[12.5px]">
         {usage ? (

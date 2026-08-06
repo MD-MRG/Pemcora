@@ -19,11 +19,30 @@
 -- genuinely did not have a value, and inventing one would misreport history.
 
 alter table public.visits
-  add column if not exists export_preference text
-  check (export_preference is null or export_preference in ('revision', 'replace'));
+  add column if not exists export_preference text;
 
 alter table public.visit_exports
   add column if not exists filename text;
+
+-- The constraint is added separately rather than inline on ADD COLUMN, because
+-- `add column if not exists` skips the whole clause when the column is already
+-- there — so a database that got the column first would never get the check.
+-- This form is idempotent and closes that gap on a re-run.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'visits_export_preference_check'
+  ) then
+    alter table public.visits
+      add constraint visits_export_preference_check
+      check (export_preference is null or export_preference in ('revision', 'replace'));
+  end if;
+end $$;
+
+-- PostgREST caches the schema and will keep reporting a new column as
+-- nonexistent until it reloads. Supabase usually triggers this itself, but not
+-- always, and the failure looks exactly like the migration not having run.
+notify pgrst, 'reload schema';
 
 -- No grant statements needed: 0002 granted at table level, which covers columns
 -- added later. Verify anyway — a silent privilege gap here would look exactly

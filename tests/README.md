@@ -56,6 +56,27 @@ address nothing. It is checked behaviourally — a second room added to the same
 floor must land on that floor rather than creating a duplicate — because that is
 the failure a user would actually see.
 
+## `migrate-e2e.mjs` — the localStorage → Supabase import
+
+```
+node tests/migrate-e2e.mjs [email] [password]
+```
+
+Seeds a browser with data of the shape the app has always written, signs in,
+runs the import from Settings, then checks the rows from outside the browser.
+Same account and cleanup rules as `supabase-e2e.mjs`.
+
+Three things it exists to protect:
+
+- **Signing in must import nothing on its own.** The import writes into a shared
+  team; it is opt-in, itemised and confirmed.
+- **Malformed ids are reminted, not dropped.** This is the one path that reads
+  data written by an older build on someone's actual laptop. Ids are remapped
+  rather than replaced, because `visit.rooms` is keyed *by room id* — a new room
+  id without rewriting that key would silently orphan every result on it.
+- **Re-running creates no duplicates and says what it skipped.** A client
+  already in the team is skipped by name before any insert is attempted.
+
 ## `rls.mjs` — the odd one out
 
 Not a browser suite. It talks to Supabase directly with three real sessions and
