@@ -3,7 +3,7 @@ import { testContext } from './harness.mjs'
 import ExcelJS from 'exceljs'
 
 const DIR = process.argv[2] ?? '.'
-const BASE = 'http://localhost:5173/'
+const BASE = (process.env.PEMCORA_BASE ?? 'http://localhost:5173/')
 const URL = BASE + '#/maintenance'
 
 async function launch() {

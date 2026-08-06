@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing here writes anywhere; the suites run entirely against localStorage.
+permissions:
+  contents: read
+
+# A newer push supersedes a run still going for the same branch.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      # Server and suites in one step so the server's lifetime is obvious and it
+      # cannot outlive the job.
+      #
+      # It must be `npm run dev`, never `npm run preview`: test mode is gated on
+      # import.meta.env.DEV, which is false in a production build, so a preview
+      # server would sit at the sign-in screen and every suite would time out.
+      #
+      # No Supabase credentials are set, and none are needed — the suites bypass
+      # the gate and run on localStorage. That is deliberate: a pull request
+      # should not be able to reach the live project.
+      - name: Run the headless suites
+        run: |
+          npm run dev -- --port 5173 > vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:5173/ > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:5173/ > /dev/null || { echo "dev server never came up"; cat vite.log; exit 1; }
+          npm test
+
+      # Screenshots are how you tell a layout regression from a logic one.
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: screenshots
+          path: tests/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Dev server log
+        if: failure()
+        run: cat vite.log

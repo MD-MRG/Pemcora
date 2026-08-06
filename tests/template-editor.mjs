@@ -2,7 +2,7 @@ import { chromium } from 'playwright-core'
 import { testContext } from './harness.mjs'
 
 const DIR = process.argv[2] ?? '.'
-const BASE = 'http://localhost:5173/'
+const BASE = (process.env.PEMCORA_BASE ?? 'http://localhost:5173/')
 
 async function launch() {
   for (const channel of ['chrome', 'msedge']) {
