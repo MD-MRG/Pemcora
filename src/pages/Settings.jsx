@@ -5,6 +5,7 @@ import { BrandMark } from '../components/icons.jsx'
 import Field from '../components/Field.jsx'
 import LogoUpload from '../components/LogoUpload.jsx'
 import TemplateEditor from '../components/TemplateEditor.jsx'
+import ImportLocalData from '../components/ImportLocalData.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 
 const TEMPLATES = [
@@ -218,9 +219,19 @@ export default function Settings() {
         </div>
       </section>
 
+      <ImportLocalData />
+
       <p className="text-ink-soft px-1 text-[12.5px]">
-        Saved on this device. Logos share the same storage as your client and visit data — currently
-        using <b>{usage.label}</b>.
+        {usage ? (
+          <>
+            Saved on this device. Logos share the same storage as your client and visit data —
+            currently using <b>{usage.label}</b>.
+          </>
+        ) : (
+          // Signed in there is no shared 5MB budget to warn about, and these
+          // settings are the team's rather than this browser's.
+          <>Shared with your team, and available on every device you sign in from.</>
+        )}
       </p>
     </div>
   )

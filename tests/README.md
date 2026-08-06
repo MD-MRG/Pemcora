@@ -32,6 +32,51 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 | `pm-room-tests.mjs` | test lists, sections, troubleshooting, complete | 23 |
 | `pm-export.mjs` | Excel export, revisions, remembered choice | 26 |
 
+## `supabase-e2e.mjs` — the only suite that runs on the real backend
+
+Every suite above runs in test mode on localStorage. This one deliberately does
+not: it signs in through the real gate, so the app runs on the Supabase adapter,
+then drives the actual UI and checks the rows **from outside the browser** —
+because "it still shows on screen" could just be the in-memory cache, and the
+point is to prove the data reached Postgres.
+
+```
+node tests/supabase-e2e.mjs [email] [password]
+```
+
+Needs the dev server and a confirmed account; sign-up is closed on the project,
+so it defaults to reusing one of the RLS suite's accounts rather than creating
+more. It creates a team and deletes it, and everything under it, at the end.
+
+The assertion that matters most is that **the floor id the app minted is the
+same id the row has in Postgres**. Ids are generated client-side and sent with
+every insert; if Postgres generated its own instead, the cache and the database
+would disagree about what each row is called and every later update would
+address nothing. It is checked behaviourally — a second room added to the same
+floor must land on that floor rather than creating a duplicate — because that is
+the failure a user would actually see.
+
+## `migrate-e2e.mjs` — the localStorage → Supabase import
+
+```
+node tests/migrate-e2e.mjs [email] [password]
+```
+
+Seeds a browser with data of the shape the app has always written, signs in,
+runs the import from Settings, then checks the rows from outside the browser.
+Same account and cleanup rules as `supabase-e2e.mjs`.
+
+Three things it exists to protect:
+
+- **Signing in must import nothing on its own.** The import writes into a shared
+  team; it is opt-in, itemised and confirmed.
+- **Malformed ids are reminted, not dropped.** This is the one path that reads
+  data written by an older build on someone's actual laptop. Ids are remapped
+  rather than replaced, because `visit.rooms` is keyed *by room id* — a new room
+  id without rewriting that key would silently orphan every result on it.
+- **Re-running creates no duplicates and says what it skipped.** A client
+  already in the team is skipped by name before any insert is attempted.
+
 ## `rls.mjs` — the odd one out
 
 Not a browser suite. It talks to Supabase directly with three real sessions and

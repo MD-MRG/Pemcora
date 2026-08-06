@@ -36,6 +36,7 @@ const roomFromRow = r => ({
 })
 
 const roomToRow = (r, floorId, teamId, position) => ({
+  ...(r.id ? { id: r.id } : {}),
   floor_id: floorId,
   team_id: teamId,
   name: r.name ?? '',
@@ -51,6 +52,7 @@ const floorFromRow = r => ({
 })
 
 const floorToRow = (f, locationId, teamId, position) => ({
+  ...(f.id ? { id: f.id } : {}),
   location_id: locationId,
   team_id: teamId,
   label: f.label ?? '',
@@ -133,13 +135,19 @@ const visitFromRow = r => ({
   startedAt: r.started_at,
   completedAt: r.completed_at,
   createdBy: r.created_by,
+  exportPreference: r.export_preference ?? null,
   rooms: Object.fromEntries(
     (r.visit_rooms ?? [])
       .filter(vr => vr.room_id)
       .map(vr => [vr.room_id, visitRoomFromRow(vr)]),
   ),
   exports: (r.visit_exports ?? [])
-    .map(x => ({ id: x.id, revision: x.revision, createdAt: x.exported_at }))
+    .map(x => ({
+      id: x.id,
+      revision: x.revision,
+      filename: x.filename ?? '',
+      createdAt: x.exported_at,
+    }))
     .sort((a, b) => a.revision - b.revision),
 })
 
@@ -326,10 +334,15 @@ export async function getClient(clientId) {
 // surfacing a raw Postgres error.
 const isDuplicate = e => e?.code === '23505'
 
-export async function createClient(teamId, name) {
+// `id` is supplied by the caller, not left to gen_random_uuid(). The app mints
+// uuids client-side and hands them to React as keys and to the cache as the
+// identity of every row; if Postgres generated its own, the cache and the
+// database would disagree about what a thing is called and every subsequent
+// update would silently address a row that does not exist.
+export async function createClient(teamId, name, id) {
   const { data, error } = await supabase
     .from('clients')
-    .insert({ team_id: teamId, name: String(name ?? '').trim() })
+    .insert({ ...(id ? { id } : {}), team_id: teamId, name: String(name ?? '').trim() })
     .select(CLIENT_TREE)
     .single()
   if (isDuplicate(error)) throw new Error(`A client named "${name}" already exists.`)
@@ -351,10 +364,15 @@ export async function deleteClient(clientId) {
   if (error) throw error
 }
 
-export async function addLocation(teamId, clientId, details) {
+export async function addLocation(teamId, clientId, details, id) {
   const { data, error } = await supabase
     .from('locations')
-    .insert({ team_id: teamId, client_id: clientId, ...locationToRow(details) })
+    .insert({
+      ...(id ? { id } : {}),
+      team_id: teamId,
+      client_id: clientId,
+      ...locationToRow(details),
+    })
     .select('*, floors(*, rooms(*))')
     .single()
   if (isDuplicate(error)) throw new Error('That address and suburb already exist for this client.')
@@ -484,6 +502,28 @@ export async function listVisits(locationId, kind) {
   return data.map(visitFromRow)
 }
 
+// Every visit in the team, with its rooms and exports, in one round trip. The
+// cache hydrates the whole tree at once, so asking per location would mean one
+// request per site on every sign-in.
+export async function listVisitsForTeam(teamId) {
+  const { data, error } = await supabase
+    .from('visits')
+    .select(VISIT_TREE)
+    .eq('team_id', teamId)
+    .order('started_at', { ascending: false })
+  if (error) throw error
+  return data.map(visitFromRow)
+}
+
+export async function deleteVisitRoom(visitId, roomId) {
+  const { error } = await supabase
+    .from('visit_rooms')
+    .delete()
+    .eq('visit_id', visitId)
+    .eq('room_id', roomId)
+  if (error) throw error
+}
+
 export async function getVisit(visitId) {
   const { data, error } = await supabase
     .from('visits')
@@ -513,10 +553,12 @@ export async function openVisit(locationId, kind) {
  * two devices ask at the same instant; the loser gets 23505 and is handed the
  * winner's visit, which is what it wanted anyway.
  */
-export async function startVisit(teamId, locationId, kind, technician, userId) {
+export async function startVisit(teamId, locationId, kind, technician, userId, id, startedAt) {
   const { data, error } = await supabase
     .from('visits')
     .insert({
+      ...(id ? { id } : {}),
+      ...(startedAt ? { started_at: startedAt } : {}),
       team_id: teamId,
       location_id: locationId,
       kind,
@@ -536,6 +578,7 @@ export async function updateVisit(visitId, patch) {
   const row = {}
   if ('technician' in patch) row.technician = patch.technician ?? ''
   if ('completedAt' in patch) row.completed_at = patch.completedAt
+  if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
   const { error } = await supabase.from('visits').update(row).eq('id', visitId)
   if (error) throw error
 }
@@ -568,15 +611,26 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
   return visitRoomFromRow(data)
 }
 
-export async function recordExport(teamId, visitId, revision, userId) {
+export async function recordExport(teamId, visitId, revision, filename, userId) {
   const { data, error } = await supabase
     .from('visit_exports')
     .upsert(
-      { team_id: teamId, visit_id: visitId, revision, exported_by: userId ?? null },
+      {
+        team_id: teamId,
+        visit_id: visitId,
+        revision,
+        filename: filename ?? '',
+        exported_by: userId ?? null,
+      },
       { onConflict: 'visit_id,revision' },
     )
     .select()
     .single()
   if (error) throw error
-  return { id: data.id, revision: data.revision, createdAt: data.exported_at }
+  return {
+    id: data.id,
+    revision: data.revision,
+    filename: data.filename ?? '',
+    createdAt: data.exported_at,
+  }
 }

@@ -1,7 +1,8 @@
 import { chromium } from 'playwright-core'
+import { testContext } from './harness.mjs'
 
 const DIR = process.argv[2] ?? '.'
-const URL = 'http://localhost:5173/'
+const URL = (process.env.PEMCORA_BASE ?? 'http://localhost:5173/')
 
 async function launch() {
   for (const channel of ['chrome', 'msedge']) {
@@ -12,7 +13,7 @@ async function launch() {
 const log = (k, v, extra = '') => console.log(`${v ? 'PASS' : 'FAIL'}  ${k}${extra ? ' — ' + extra : ''}`)
 
 const browser = await launch()
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+const ctx = await testContext(browser, { viewport: { width: 1440, height: 900 } })
 const page = await ctx.newPage()
 const errs = []
 page.on('console', m => { if (m.type() === 'error') errs.push(m.text()) })
