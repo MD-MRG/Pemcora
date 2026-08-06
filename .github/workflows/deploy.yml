@@ -28,7 +28,19 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # Vite inlines VITE_* at build time, so these have to be present here —
+      # there is no runtime config to set on a static Pages site. Both values
+      # are public-safe by design: they ship inside the bundle either way, and
+      # Row-Level Security is what actually protects the data. The service_role
+      # key must never appear in this file.
+      #
+      # Without them the build still succeeds and the app shows its "not
+      # connected to a backend" screen rather than failing at load.
       - run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
       - uses: actions/upload-pages-artifact@v5
         with:
