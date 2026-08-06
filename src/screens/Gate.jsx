@@ -5,6 +5,7 @@ import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
 import AuthScreen from './AuthScreen.jsx'
 import OnboardingScreen from './OnboardingScreen.jsx'
+import DataBoot from './DataBoot.jsx'
 
 // config → auth → onboarding → app.
 //
@@ -69,5 +70,6 @@ export default function Gate({ children }) {
 
   if (!team) return <OnboardingScreen />
 
-  return children
+  // Last stage: the team's data has to be in the cache before any page reads it.
+  return <DataBoot>{children}</DataBoot>
 }
