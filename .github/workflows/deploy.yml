@@ -19,6 +19,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      bundle: ${{ steps.bundle.outputs.name }}
     steps:
       - uses: actions/checkout@v7
 
@@ -42,6 +44,16 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
+      # Vite fingerprints the bundle by content, so its filename identifies this
+      # exact build. The deploy job checks the live site for it — that is the
+      # only trustworthy evidence the deployment landed.
+      - id: bundle
+        run: |
+          NAME=$(grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' dist/index.html | head -1)
+          if [ -z "$NAME" ]; then echo "could not find the bundle in dist/index.html"; exit 1; fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "built $NAME"
+
       - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
@@ -53,12 +65,41 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # The default timeout is 10 minutes, which aborted a deployment that had
-      # reached `deployment_in_progress` and was still going. Aborting also
-      # cancels the deployment for that commit, so the retry inherits a
-      # cancelled one and fails faster the next time — the failure feeds itself.
-      # Twenty minutes is cheap; a build that genuinely hangs still ends.
+      # deploy-pages reports failure while the deployment actually succeeds. It
+      # polls, gives up at exactly ten minutes with "Timeout reached, aborting!",
+      # cancels — and GitHub publishes anyway. Its `timeout` input does not help:
+      # `timeout: 1200000` was confirmed passed in the run log and it still
+      # aborted on the ten-minute mark.
+      #
+      # So its verdict is not evidence either way, and the job must not be red
+      # because of it. A check that is routinely red when nothing is wrong is
+      # worse than no check: it trains you to ignore it, and then a genuinely
+      # broken deploy looks exactly the same.
       - id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v5
-        with:
-          timeout: 1200000
+
+      # What actually decides whether this workflow passed: is the live site
+      # serving THIS build? The content-hashed filename makes that unambiguous —
+      # a stale deployment serves a different one, so "the site is up" cannot be
+      # mistaken for "the site is current".
+      #
+      # Cache-busted, because the CDN will happily hand back the previous HTML
+      # and turn a failed deploy into a passing check.
+      - name: Verify the live site is serving this build
+        env:
+          URL: ${{ steps.deployment.outputs.page_url || 'https://md-mrg.github.io/Pemcora/' }}
+          BUNDLE: ${{ needs.build.outputs.bundle }}
+        run: |
+          echo "looking for $BUNDLE at $URL"
+          for i in $(seq 1 60); do
+            HTML=$(curl -sS -H 'Cache-Control: no-cache' "${URL}?cb=$(date +%s)" || true)
+            if printf '%s' "$HTML" | grep -qF "$BUNDLE"; then
+              echo "live after $((i * 15))s — serving $BUNDLE"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::15 minutes on, $URL is still not serving $BUNDLE"
+          printf '%s' "$HTML" | grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' | head -1 || true
+          exit 1
