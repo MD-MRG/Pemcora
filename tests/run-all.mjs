@@ -26,6 +26,7 @@ const SUITES = [
   'pm-room-tests',
   'pm-export',
   'commissioning',
+  'custom-list',
   'settings',
   'template-editor',
 ]

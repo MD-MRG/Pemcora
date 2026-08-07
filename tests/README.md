@@ -31,6 +31,7 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 | `pm-visits.mjs` | visit states, room list, add room | 22 |
 | `pm-room-tests.mjs` | test lists, sections, troubleshooting, complete | 23 |
 | `pm-export.mjs` | Excel export, revisions, remembered choice | 26 |
+| `custom-list.mjs` | the unbuilt gate, own template, own visit history | 18 |
 
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
