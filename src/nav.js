@@ -16,7 +16,7 @@ export const MAIN_NAV = [
     label: 'Home',
     path: '/',
     icon: IconHome,
-    blurb: 'Overview of sites, upcoming visits and anything needing attention',
+    blurb: 'Work in progress, anything needing attention, and your team totals',
   },
   {
     key: 'new-client',

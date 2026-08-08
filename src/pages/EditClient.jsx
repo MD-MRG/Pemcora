@@ -1,4 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+// Aliased: `location` already means the site being edited throughout this file.
+import { useLocation as useRouterLocation } from 'react-router-dom'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import FloorsEditor from '../components/FloorsEditor.jsx'
@@ -215,9 +217,13 @@ function EditLevel({ client, locationId, isNew, onBack, onSaved, onAddLocation }
 
 /* ── Page ────────────────────────────────────────────────────────────────── */
 export default function EditClient() {
+  // Home's "Add rooms" deep-links a location straight into the floors editor.
+  // Arriving any other way carries no state and opens on the client list.
+  const from = useRouterLocation().state ?? {}
+
   const [clients, setClients] = useState(() => listClients())
-  const [clientId, setClientId] = useState(null)
-  const [locationId, setLocationId] = useState(null)
+  const [clientId, setClientId] = useState(from.clientId ?? null)
+  const [locationId, setLocationId] = useState(from.locationId ?? null)
   const [addingLocation, setAddingLocation] = useState(false)
 
   const refresh = useCallback(() => setClients(listClients()), [])
