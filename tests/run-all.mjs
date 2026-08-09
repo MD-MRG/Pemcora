@@ -1,4 +1,4 @@
-// Runs the ten localStorage suites and summarises them.
+// Runs the twelve localStorage suites and summarises them.
 //
 //   npm test            (dev server must already be on 5173)
 //
@@ -19,6 +19,7 @@ const BASE = process.env.PEMCORA_BASE ?? 'http://localhost:5173/'
 
 const SUITES = [
   'shell',
+  'home',
   'new-client-form',
   'new-client-locations',
   'edit-client',

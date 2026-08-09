@@ -1,4 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
+// Aliased: `location` already means the site being worked on throughout this file.
+import { useLocation as useRouterLocation } from 'react-router-dom'
 import Field from '../components/Field.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
@@ -655,10 +657,16 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, o
 
 /* ── Page ────────────────────────────────────────────────────────────────── */
 export default function WorkflowPage({ config }) {
+  // Home deep-links straight to a location, and sometimes to a room. Every
+  // other way in — the side nav, a hard reload — carries no router state, so
+  // these fall back to null and the page opens on the client list exactly as
+  // it always has. A room that no longer exists is already handled below.
+  const from = useRouterLocation().state ?? {}
+
   const [clients, setClients] = useState(() => listClients())
-  const [clientId, setClientId] = useState(null)
-  const [locationId, setLocationId] = useState(null)
-  const [roomId, setRoomId] = useState(null)
+  const [clientId, setClientId] = useState(from.clientId ?? null)
+  const [locationId, setLocationId] = useState(from.locationId ?? null)
+  const [roomId, setRoomId] = useState(from.roomId ?? null)
 
   const refresh = useCallback(() => setClients(listClients()), [])
   const client = clients.find(c => c.id === clientId) ?? null
