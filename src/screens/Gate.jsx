@@ -1,6 +1,6 @@
 import { isTestMode } from '../lib/supabase.js'
-import { useAuth } from '../context/AuthContext.jsx'
-import { useTeam } from '../context/TeamContext.jsx'
+import { useAuth } from '../context/auth.js'
+import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
 import AuthScreen from './AuthScreen.jsx'

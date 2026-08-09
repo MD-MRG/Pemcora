@@ -33,7 +33,10 @@ export function ClientsTable({ clients, onOpen }) {
   const [field, setField] = useState('all')
   const [value, setValue] = useState('')
 
-  const options = useMemo(() => (field === 'all' ? [] : distinctValues(field)), [field, clients])
+  const options = useMemo(
+    () => (field === 'all' ? [] : distinctValues(clients, field)),
+    [field, clients],
+  )
 
   const rows = useMemo(() => {
     const q = normalise(query)

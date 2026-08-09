@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { adapterName } from '../lib/cache.js'
 import { alreadyImported, importLocalData, localSummary } from '../lib/migrate.js'
-import { useAuth } from '../context/AuthContext.jsx'
-import { useTeam } from '../context/TeamContext.jsx'
+import { useAuth } from '../context/auth.js'
+import { useTeam } from '../context/team.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import Notice from './Notice.jsx'
 

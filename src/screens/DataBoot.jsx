@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { hydrate, resetCache, flush } from '../lib/cache.js'
 import { supabaseAdapter } from '../lib/adapters/supabase.js'
-import { useAuth } from '../context/AuthContext.jsx'
-import { useTeam } from '../context/TeamContext.jsx'
+import { useAuth } from '../context/auth.js'
+import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
 
