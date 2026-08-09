@@ -1,7 +1,6 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase, isSupabaseConfigured } from '../lib/supabase.js'
-
-const AuthContext = createContext(null)
+import { AuthContext } from './auth.js'
 
 const notConfigured = { error: { message: 'Pemcora is not connected to a backend.' } }
 
@@ -37,10 +36,4 @@ export function AuthProvider({ children }) {
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
-  return ctx
 }

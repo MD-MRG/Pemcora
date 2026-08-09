@@ -1,8 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { useAuth } from './AuthContext.jsx'
-
-const TeamContext = createContext(null)
+import { useAuth } from './auth.js'
+import { TeamContext } from './team.js'
 
 export function TeamProvider({ children }) {
   const { session } = useAuth()
@@ -70,10 +69,4 @@ export function TeamProvider({ children }) {
     joinTeam,
   }
   return <TeamContext.Provider value={value}>{children}</TeamContext.Provider>
-}
-
-export function useTeam() {
-  const ctx = useContext(TeamContext)
-  if (!ctx) throw new Error('useTeam must be used within TeamProvider')
-  return ctx
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useAuth } from '../context/AuthContext.jsx'
-import { useTeam } from '../context/TeamContext.jsx'
+import { useAuth } from '../context/auth.js'
+import { useTeam } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import GateLayout, { GateButton } from './GateLayout.jsx'

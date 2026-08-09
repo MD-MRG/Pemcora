@@ -187,9 +187,15 @@ export function addLocationToClient(clientId, details) {
 }
 
 // Distinct values of a location field, for the filter dropdown.
-export function distinctValues(field) {
+//
+// Takes the client list rather than reading the store itself. The caller
+// already holds the list it is rendering, and memoising against it was the only
+// way to recompute when a client changed — as an unreferenced dependency, which
+// reads as dead and invites deletion. Passing it in makes that relationship
+// explicit and keeps the dropdown showing the same set the table does.
+export function distinctValues(clients, field) {
   const seen = new Map()
-  for (const c of read()) {
+  for (const c of clients) {
     for (const l of c.locations) {
       const v = String(l[field] ?? '').trim()
       if (v && !seen.has(normalise(v))) seen.set(normalise(v), v)

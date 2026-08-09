@@ -33,7 +33,6 @@ page.on('pageerror', e => errs.push(e.message))
 const store = () => page.evaluate(() => JSON.parse(localStorage.getItem('fc.clients') || '[]'))
 const entry = async roomId => (await store())[0].locations[0].visits[0]?.rooms?.[roomId] ?? null
 const body = async () => (await page.textContent('body')).replace(/\s+/g, ' ')
-const rowFor = label => page.locator('div').filter({ hasText: new RegExp(`^${label}PASSFAILN/A$`) }).first()
 
 async function openLocation() {
   await page.goto(BASE + '#/', { waitUntil: 'networkidle' })
