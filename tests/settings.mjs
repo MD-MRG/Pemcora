@@ -188,6 +188,19 @@ try {
   text = rows2.join('\n')
   log('report without a logo still generates', /Northpoint Audio Visual/.test(text) && ws.getImages().length === 0)
 
+  // ── Account panel ────────────────────────────────────────────────────────
+  //
+  // These suites run on localStorage with no session, so the signed-in card
+  // cannot be rendered here — what IS worth pinning is that its absence is
+  // graceful. AccountPanel reads user.email, so a missing null guard would
+  // throw and take the whole Settings page down with it. That is the
+  // regression this catches; the card itself needs a real session to see.
+  await goto('#/settings')
+  const noSession = await body()
+  log('Settings still renders with no session', /Company/.test(noSession) && /Test lists/.test(noSession))
+  log('no Account section without a session', !/Signed in as/.test(noSession))
+  log('and so no unreachable Sign out button', (await page.getByRole('button', { name: 'Sign out' }).count()) === 0)
+
   log('no console errors', errs.length === 0, errs.slice(0, 3).join(' | '))
 } catch (e) {
   console.log('ERROR', e.message)
