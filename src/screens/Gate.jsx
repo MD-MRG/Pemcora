@@ -1,14 +1,16 @@
-import { isTestMode } from '../lib/supabase.js'
+import { useState } from 'react'
+import { isTestMode, inviteTokenInUrl } from '../lib/supabase.js'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
 import AuthScreen from './AuthScreen.jsx'
+import InviteScreen from './InviteScreen.jsx'
 import NewPasswordScreen from './NewPasswordScreen.jsx'
 import TeamSetup from './TeamSetup.jsx'
 import DataBoot from './DataBoot.jsx'
 
-// config → auth → recovery → team → app.
+// config → invitation → auth → recovery → team → app.
 //
 // Each stage is a precondition for the next, so they are checked in order and
 // the first unmet one is what the person sees. The app itself is only mounted
@@ -19,6 +21,7 @@ import DataBoot from './DataBoot.jsx'
 export default function Gate({ children }) {
   const { configured, loading: authLoading, session, recovering } = useAuth()
   const { team, loading: teamLoading, error: teamError } = useTeam()
+  const [inviteDone, setInviteDone] = useState(false)
 
   // Test mode goes straight through to the app on localStorage. Checked first
   // so nothing below it — not even the loading state — can hold the suites up.
@@ -55,6 +58,15 @@ export default function Gate({ children }) {
         </p>
       </div>
     )
+  }
+
+  // Above the auth check because an invitation is the one arrival that has
+  // something to say to both sides of it: whoever it was written for has no
+  // account yet, and whoever already has one still has to be asked. Recovery
+  // takes precedence — a link cannot be both, but a stale ?invite= left in the
+  // address bar must not outrank a password that needs setting.
+  if (inviteTokenInUrl && !inviteDone && !recovering) {
+    return <InviteScreen onDismiss={() => setInviteDone(true)} />
   }
 
   if (!session) return <AuthScreen />
