@@ -341,7 +341,18 @@ declare
   v_invite public.team_invites;
 begin
   if new.email_confirmed_at is null then return new; end if;
-  if tg_op = 'UPDATE' and old.email_confirmed_at is not null then return new; end if;
+
+  -- Nested rather than `tg_op = 'UPDATE' and old.email_confirmed_at ...`, which
+  -- reads as if it short-circuits and does not. PL/pgSQL hands the whole
+  -- condition to the executor as one expression, so OLD is resolved even on an
+  -- INSERT — where it is unassigned and raises "record old is not assigned
+  -- yet". That error sits outside the handler below, so it would have rolled
+  -- back the very thing this trigger must never be able to stop: creating a
+  -- user whose address is already confirmed, which is what happens whenever
+  -- confirmations are off or an account is made from the dashboard.
+  if tg_op = 'UPDATE' then
+    if old.email_confirmed_at is not null then return new; end if;
+  end if;
 
   begin
     v_token := nullif(new.raw_user_meta_data ->> 'invite_token', '')::uuid;
