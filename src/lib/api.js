@@ -168,6 +168,30 @@ const settingsToRow = s => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Accounts — the one call made before anybody is signed in
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Is there an account for this address?
+ *
+ * `resetPasswordForEmail` deliberately reports success either way, so that a
+ * stranger cannot use the reset form to discover who has an account. Answering
+ * the question directly gives that up: this RPC is an enumeration oracle, and
+ * that is a considered trade, not an oversight — a technician who mistypes
+ * their address on a job site otherwise waits for an email that will never
+ * arrive, with nothing on screen to say why.
+ *
+ * The RPC is rate-limited per caller in 0004 to keep it from being scraped.
+ */
+export async function emailIsRegistered(email) {
+  const { data, error } = await supabase.rpc('email_is_registered', {
+    p_email: String(email ?? '').trim(),
+  })
+  if (error) throw error
+  return Boolean(data)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Team settings, templates and per-member preferences
 // ─────────────────────────────────────────────────────────────────────────────
 

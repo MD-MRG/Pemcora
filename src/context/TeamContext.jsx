@@ -41,19 +41,17 @@ export function TeamProvider({ children }) {
     refresh()
   }, [refresh])
 
-  const createTeam = async name => {
-    const { data, error: e } = await supabase.rpc('create_team', { p_name: name })
-    if (e) return { error: e }
-    await refresh()
-    return { data }
-  }
-
-  const joinTeam = async code => {
-    const { data, error: e } = await supabase.rpc('join_team', { p_invite_code: code })
-    if (e) return { error: e }
-    await refresh()
-    return { data }
-  }
+  // Stable identity: TeamSetup calls this from an effect, and a function
+  // rebuilt on every render would make that effect's dependency list a lie.
+  const createTeam = useCallback(
+    async name => {
+      const { data, error: e } = await supabase.rpc('create_team', { p_name: name })
+      if (e) return { error: e }
+      await refresh()
+      return { data }
+    },
+    [refresh],
+  )
 
   const value = {
     team,
@@ -66,7 +64,6 @@ export function TeamProvider({ children }) {
     isAdmin: role === 'owner' || role === 'admin',
     refresh,
     createTeam,
-    joinTeam,
   }
   return <TeamContext.Provider value={value}>{children}</TeamContext.Provider>
 }

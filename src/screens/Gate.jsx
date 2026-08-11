@@ -4,17 +4,20 @@ import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
 import AuthScreen from './AuthScreen.jsx'
-import OnboardingScreen from './OnboardingScreen.jsx'
+import NewPasswordScreen from './NewPasswordScreen.jsx'
+import TeamSetup from './TeamSetup.jsx'
 import DataBoot from './DataBoot.jsx'
 
-// config → auth → onboarding → app.
+// config → auth → recovery → team → app.
 //
 // Each stage is a precondition for the next, so they are checked in order and
 // the first unmet one is what the person sees. The app itself is only mounted
 // once there is a session AND a team, which is what lets every page below
 // assume both exist rather than defending against null.
+//
+// The team stage no longer asks anything — it creates the team and moves on.
 export default function Gate({ children }) {
-  const { configured, loading: authLoading, session } = useAuth()
+  const { configured, loading: authLoading, session, recovering } = useAuth()
   const { team, loading: teamLoading, error: teamError } = useTeam()
 
   // Test mode goes straight through to the app on localStorage. Checked first
@@ -56,6 +59,11 @@ export default function Gate({ children }) {
 
   if (!session) return <AuthScreen />
 
+  // Between auth and team on purpose. A recovery link arrives holding a real
+  // session, so every stage below this one would happily let it past — into an
+  // app whose password its owner still cannot remember.
+  if (recovering) return <NewPasswordScreen />
+
   if (teamError) {
     return (
       <GateLayout title="Could not load your team">
@@ -68,7 +76,7 @@ export default function Gate({ children }) {
     )
   }
 
-  if (!team) return <OnboardingScreen />
+  if (!team) return <TeamSetup />
 
   // Last stage: the team's data has to be in the cache before any page reads it.
   return <DataBoot>{children}</DataBoot>

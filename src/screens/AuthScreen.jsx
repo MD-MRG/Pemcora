@@ -3,17 +3,35 @@ import { useAuth } from '../context/auth.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import GateLayout, { GateButton } from './GateLayout.jsx'
+import ResetPasswordScreen from './ResetPasswordScreen.jsx'
 
 export default function AuthScreen() {
   const { signIn, signUp } = useAuth()
-  const [mode, setMode] = useState('sign-in') // 'sign-in' | 'sign-up'
+  const [mode, setMode] = useState('sign-in') // 'sign-in' | 'sign-up' | 'reset'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
   const [notice, setNotice] = useState('')
+  // Offered only once signing in has actually failed. Shown unprompted it is
+  // an invitation to doubt a password you remember perfectly well; shown after
+  // a refusal it is the next thing you were going to look for.
+  const [refused, setRefused] = useState(false)
 
   const signingUp = mode === 'sign-up'
+
+  if (mode === 'reset') {
+    return (
+      <ResetPasswordScreen
+        initialEmail={email}
+        onBack={() => {
+          setMode('sign-in')
+          setProblem('')
+          setNotice('')
+        }}
+      />
+    )
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -33,6 +51,7 @@ export default function AuthScreen() {
 
     if (error) {
       setProblem(error.message)
+      if (!signingUp) setRefused(true)
       return
     }
     // With email confirmation switched on, sign-up returns a user but no
@@ -60,8 +79,9 @@ export default function AuthScreen() {
             setMode(signingUp ? 'sign-in' : 'sign-up')
             setProblem('')
             setNotice('')
+            setRefused(false)
           }}
-          className="font-semibold text-navy underline-offset-2 hover:underline"
+          className="text-navy font-semibold underline-offset-2 hover:underline"
         >
           {signingUp ? 'I already have an account' : 'Create an account'}
         </button>
@@ -89,6 +109,16 @@ export default function AuthScreen() {
 
         {problem && <Notice blocked title={problem} />}
         {notice && <Notice title={notice} />}
+
+        {refused && !signingUp && (
+          <button
+            type="button"
+            onClick={() => setMode('reset')}
+            className="text-navy w-full text-center text-[13px] font-semibold underline-offset-2 hover:underline"
+          >
+            Forgot password?
+          </button>
+        )}
 
         <GateButton type="submit" disabled={busy || !email.trim() || !password}>
           {busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}
