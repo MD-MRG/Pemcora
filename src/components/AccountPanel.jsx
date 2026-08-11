@@ -4,10 +4,11 @@ import { useTeam } from '../context/team.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Signing out had no route into it. `signOut` existed on the auth context from
-// the beginning, but the only button wired to it lived on OnboardingScreen —
-// which Gate renders only when you have NO team. So the moment setup was
-// finished the button became unreachable, and the sole way out was to clear
-// localStorage by hand.
+// the beginning, but the only button wired to it sat on a gate screen shown
+// while you had NO team. So the moment setup was finished the button became
+// unreachable, and the sole way out was to clear localStorage by hand. This is
+// now the only sign-out in the app, which is why it is on the page everyone can
+// reach rather than on a screen most people see once.
 
 const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 

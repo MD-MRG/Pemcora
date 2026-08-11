@@ -55,6 +55,22 @@ export const isTestMode =
  */
 export const emailRedirectUrl = () => window.location.origin + window.location.pathname
 
+/**
+ * Did we arrive here from a password-reset email?
+ *
+ * Evaluated at module load, which is the only moment it can be: this statement
+ * runs before the createClient call below, and `detectSessionInUrl` reads the
+ * recovery hash and then erases it. By the time React has mounted there is
+ * nothing left in the URL to look at.
+ *
+ * AuthContext also listens for the PASSWORD_RECOVERY event, but that fires from
+ * inside the client's async initialisation and can land before any listener is
+ * registered. This flag cannot be missed, so it is the one that decides.
+ */
+export const isPasswordRecovery =
+  typeof window !== 'undefined' &&
+  `${window.location.hash}&${window.location.search}`.includes('type=recovery')
+
 export const supabase = isSupabaseConfigured
   ? createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true },
