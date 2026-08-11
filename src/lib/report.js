@@ -25,6 +25,25 @@ export function buildFilename(client, visit, revision, reportTitle = 'Preventati
   return revision > 1 ? `${base} Rev ${revision}.xlsx` : `${base}.xlsx`
 }
 
+// The merged comment cell spans both columns, so its usable width is roughly
+// their two widths added together. Excel row height is in points and a default
+// row is 15, so one wrapped line costs about that much.
+const COMMENT_WIDTH = 88
+const LINE_POINTS = 15
+// Somewhere to stop: a 200-line comment must not produce a page-tall row that
+// pushes the next room off the screen.
+const MAX_COMMENT_LINES = 24
+
+export function commentHeight(text) {
+  const s = String(text ?? '')
+  if (!s.trim()) return undefined
+  // Count the lines the technician typed AND the ones wrapping will add.
+  const lines = s
+    .split('\n')
+    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / COMMENT_WIDTH)), 0)
+  return Math.min(lines, MAX_COMMENT_LINES) * LINE_POINTS + 4
+}
+
 const GREY = 'FFE5E7EB'
 const NAVY = 'FF1B3A5C'
 const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
@@ -177,6 +196,11 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     const cr = ws.addRow([entry.comments || ''])
     merge(cr)
     cr.getCell(1).alignment = { wrapText: true, vertical: 'top' }
+    // wrapText alone is not enough here. Excel auto-fits row height for wrapped
+    // text only in UNMERGED cells; this one spans A:B, so without an explicit
+    // height a long comment is clipped to a single line and the rest is
+    // invisible in the file the client receives.
+    cr.height = commentHeight(entry.comments)
     blank()
     blank()
   })

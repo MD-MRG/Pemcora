@@ -2,7 +2,7 @@ import { IconMenu } from '../components/icons.jsx'
 
 // Sits to the right of the brand plate. Carries the current page's identity;
 // the right-hand slot is reserved for per-page actions as pages get built.
-export default function ContextBar({ item, onOpenNav, showMenuButton = false }) {
+export default function ContextBar({ item, detail = null, onOpenNav, showMenuButton = false }) {
   return (
     <div className="border-hair flex h-full items-center justify-between gap-4 border-b-2 bg-white px-5">
       <div className="flex min-w-0 items-center gap-3">
@@ -18,7 +18,14 @@ export default function ContextBar({ item, onOpenNav, showMenuButton = false }) 
         )}
         <div className="min-w-0">
           <h1 className="truncate text-[17px] leading-tight font-bold">{item.label}</h1>
-          <p className="text-ink-soft truncate text-[12px]">{item.blurb}</p>
+          {/* Where you are beats what the page is for. Once a room is open its
+              name replaces the blurb, so the header answers "which room am I
+              in" without the technician scrolling up to find out. */}
+          {detail ? (
+            <p className="text-navy truncate text-[12.5px] font-semibold">{detail}</p>
+          ) : (
+            <p className="text-ink-soft truncate text-[12px]">{item.blurb}</p>
+          )}
         </div>
       </div>
 

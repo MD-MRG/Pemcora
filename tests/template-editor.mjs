@@ -52,7 +52,8 @@ async function openRoom(route, roomName) {
     await start.click()
     await page.waitForTimeout(450)
   }
-  await page.getByRole('button', { name: new RegExp(roomName) }).click()
+  // Anchored — the row's delete control is named after the room too.
+  await page.getByRole('button', { name: new RegExp(`^${roomName}`) }).click()
   await page.waitForTimeout(500)
 }
 
@@ -140,7 +141,7 @@ try {
   await page.waitForTimeout(300)
   await page.locator('tbody tr').filter({ hasText: '8 Grand Avenue' }).click()
   await page.waitForTimeout(400)
-  await page.getByRole('button', { name: /Reception/ }).click()
+  await page.getByRole('button', { name: /^Reception/ }).click()
   await page.waitForTimeout(500)
   t = await body()
   log('completed room keeps its own snapshot', /Correct date and time/.test(t) && !/EDITED AFTER COMPLETION/.test(t))
@@ -150,7 +151,7 @@ try {
   // a room opened for the FIRST time now gets the newer list
   await page.getByRole('button', { name: /^List$/ }).click()
   await page.waitForTimeout(400)
-  await page.getByRole('button', { name: /Boardroom/ }).click()
+  await page.getByRole('button', { name: /^Boardroom/ }).click()
   await page.waitForTimeout(500)
   log('a freshly opened room gets the current list', /EDITED AFTER COMPLETION/.test(await body()))
 

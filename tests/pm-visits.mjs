@@ -135,7 +135,7 @@ try {
   log('rooms grouped under floor headings', groups.includes('Ground') && groups.includes('Level 3'), groups.join(' | '))
   log('status chips render', (await page.getByText('Not started').count()) >= 3)
   await page.screenshot({ path: `${DIR}/pm-rooms.png` })
-  await page.getByRole('button', { name: /Boardroom/ }).click()
+  await page.getByRole('button', { name: /^Boardroom/ }).click()
   await page.waitForTimeout(400)
   log('room opens read-only without a visit', /No visit has been started/.test(await body()))
   await page.getByRole('button', { name: /← Back/ }).click()
@@ -157,6 +157,77 @@ try {
   const visits = s.find(c => c.id === 'c3').locations[0].visits
   log('new visit added, old one kept', visits.length === 2 && visits.some(v => v.id === 'v-old'), `${visits.length} visits`)
   log('past visit listed in history', /Past visits/.test(await body()))
+
+  // ── Deleting a room ──────────────────────────────────────────────────────
+  //
+  // Confirmed, never a native dialog, and it must warn when the room holds
+  // results — deleting it means a regenerated report will no longer show it.
+  let roomsBefore = s.find(c => c.id === 'c3').locations[0].floors.flatMap(f => f.rooms).length
+  await page.getByRole('button', { name: /^Delete / }).first().click()
+  await page.waitForTimeout(300)
+  let t3 = await body()
+  log('deleting a room asks first', /Delete "/.test(t3))
+  log('and warns when that room holds results', /recorded results for this room/.test(t3), t3.slice(0, 0))
+
+  await page.getByRole('button', { name: /^Cancel$/ }).click()
+  await page.waitForTimeout(300)
+  s = await store()
+  log(
+    'cancelling deletes nothing',
+    s.find(c => c.id === 'c3').locations[0].floors.flatMap(f => f.rooms).length === roomsBefore,
+  )
+
+  await page.getByRole('button', { name: /^Delete / }).first().click()
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /^Delete room$/ }).click()
+  await page.waitForTimeout(500)
+  s = await store()
+  const after = s.find(c => c.id === 'c3').locations[0].floors.flatMap(f => f.rooms)
+  log('confirming removes it from the floor plan', after.length === roomsBefore - 1, `${after.length} left`)
+
+  // ── A finished visit: reports listed, reopen offered ─────────────────────
+  //
+  // Its own seeded state, because Reopen is only offered when the location's
+  // ONLY visit is finished — with one open, that is the visit the page shows.
+  await page.evaluate(() => {
+    localStorage.setItem('fc.clients', JSON.stringify([
+      { id: 'cz', name: 'Closed Co', locations: [
+        { id: 'lz', address: '5 Final Street', suburb: 'Ryde', city: 'Sydney', state: 'NSW', postcode: '2112',
+          floors: [{ id: 'fz', label: 'Ground', rooms: [{ id: 'rz', name: 'Studio', planNumber: 'G-1' }] }],
+          visits: [{ id: 'vz', kind: 'maintenance', startedAt: '2026-02-01T00:00:00.000Z',
+                     completedAt: '2026-02-01T05:00:00.000Z', rooms: {}, exportPreference: null,
+                     exports: [
+                       { revision: 1, filename: 'PM Closed Co.xlsx', createdAt: '2026-02-01T05:00:00.000Z' },
+                       { revision: 2, filename: 'PM Closed Co Rev 2.xlsx', createdAt: '2026-02-02T05:00:00.000Z' },
+                     ] }] },
+      ]},
+    ]))
+  })
+  await drill('Closed Co', '5 Final Street')
+  t3 = await body()
+  log('a finished visit lists its reports', /Revision 2/.test(t3) && /Revision 1/.test(t3))
+  log('and offers Reopen for editing', (await page.getByRole('button', { name: /^Reopen for editing$/ }).count()) === 1)
+
+  // Deleting a report record.
+  await page.getByRole('button', { name: /^Delete revision 2$/ }).click()
+  await page.waitForTimeout(300)
+  log('deleting a report asks first', /Delete the record of revision 2\?/.test(await body()))
+  await page.getByRole('button', { name: /^Delete record$/ }).click()
+  await page.waitForTimeout(500)
+  s = await store()
+  let exps = s[0].locations[0].visits[0].exports
+  log('the revision record is gone', exps.length === 1 && exps[0].revision === 1, JSON.stringify(exps.map(e => e.revision)))
+  log('the visit itself is untouched', s[0].locations[0].visits.length === 1)
+
+  // Reopening.
+  await page.getByRole('button', { name: /^Reopen for editing$/ }).click()
+  await page.waitForTimeout(300)
+  log('reopening asks first', /Reopen this visit for editing\?/.test(await body()))
+  await page.getByRole('button', { name: /^Reopen$/ }).click()
+  await page.waitForTimeout(500)
+  s = await store()
+  log('the visit is open again', s[0].locations[0].visits[0].completedAt === null)
+  log('and the page shows it as in progress', /in progress/.test(await body()))
 
   log('no console errors', errs.length === 0, errs.slice(0, 3).join(' | '))
 } catch (e) {

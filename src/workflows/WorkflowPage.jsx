@@ -1,9 +1,11 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
-import { useLocation as useRouterLocation } from 'react-router-dom'
+import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
+import { useCanManage } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
+import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
   listVisits,
@@ -14,6 +16,10 @@ import {
   getRoomEntry,
   saveRoomEntry,
   lastSectionToggles,
+  deleteRoom,
+  roomResultCount,
+  deleteExport,
+  reopenVisit,
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
 import { getSettings } from '../lib/settingsStore.js'
@@ -46,7 +52,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, onStart, onContinue, onFinish, onExport, onTechnician }) {
+function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
 
   return (
@@ -115,7 +121,65 @@ function VisitCard({ visit, roomCount, doneCount, config, onStart, onContinue, o
             Export report
           </button>
         )}
+        {/* Admin-only, and never on an already-open visit. Editing a finished
+            visit means changing what a client's report was generated from, so
+            it is a deliberate act rather than the default state. */}
+        {visit && !open && canManage && (
+          <button
+            type="button"
+            onClick={onReopen}
+            className="border-hair text-ink min-h-[46px] rounded-lg border px-5 text-[14px] font-semibold hover:bg-slate-50"
+          >
+            Reopen for editing
+          </button>
+        )}
       </div>
+    </section>
+  )
+}
+
+/* ── Reports filed against a visit ────────────────────────────────────────── */
+//
+// Only the revision record is kept, never the file. Deleting one therefore
+// removes the app's record that a report went out — it cannot reach a copy the
+// client already has, which is worth saying plainly in the confirm.
+function ReportList({ visit, canManage, onDelete }) {
+  const reports = [...(visit.exports ?? [])].sort((a, b) => b.revision - a.revision)
+  if (reports.length === 0) return null
+
+  return (
+    <section className="border-hair mb-4 overflow-hidden rounded-xl border bg-white">
+      <h3 className="border-hair text-ink-soft border-b bg-slate-50 px-4 py-2.5 text-[11.5px] font-semibold tracking-[.08em] uppercase">
+        Reports
+      </h3>
+      <ul className="m-0 list-none p-0">
+        {reports.map(r => (
+          <li
+            key={r.revision}
+            className="border-hair flex items-center justify-between gap-3 border-b px-4 py-3 last:border-0"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-[14px] font-semibold">
+                Revision {r.revision}
+              </span>
+              <span className="text-ink-soft block truncate text-[12px]">
+                {fmt(r.createdAt)}
+                {r.filename ? ` · ${r.filename}` : ''}
+              </span>
+            </span>
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => onDelete(r)}
+                aria-label={`Delete revision ${r.revision}`}
+                className="border-hair text-fail min-h-[38px] shrink-0 rounded-lg border px-3 text-[13px] font-semibold hover:bg-red-50"
+              >
+                Delete
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   )
 }
@@ -203,10 +267,14 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
 }
 
 /* ── Level 3 · visit overview ─────────────────────────────────────────────── */
-function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged }) {
+function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, onChanged }) {
   const [adding, setAdding] = useState(false)
   const [askExport, setAskExport] = useState(false)
   const [askFinish, setAskFinish] = useState(false)
+  const [askDeleteRoom, setAskDeleteRoom] = useState(null)
+  const [askDeleteReport, setAskDeleteReport] = useState(null)
+  const [askReopen, setAskReopen] = useState(false)
+  const [reopenError, setReopenError] = useState('')
 
   const visits = listVisits(client.id, location.id, config.kind)
   const current = visits.find(v => !v.completedAt) ?? visits[0] ?? null
@@ -281,7 +349,22 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
           onChanged()
         }}
         onFinish={() => setAskFinish(true)}
+        canManage={canManage}
+        onReopen={() => {
+          setReopenError('')
+          setAskReopen(true)
+        }}
       />
+
+      {reopenError && (
+        <p className="border-fail/30 bg-fail/5 text-fail mb-4 rounded-lg border px-4 py-3 text-[13.5px]">
+          {reopenError}
+        </p>
+      )}
+
+      {current && (
+        <ReportList visit={current} canManage={canManage} onDelete={r => setAskDeleteReport(r)} />
+      )}
 
       {adding ? (
         <AddRoomForm
@@ -317,13 +400,19 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
               <h3 className="border-hair text-ink-soft border-b bg-slate-50 px-4 py-2.5 text-[11.5px] font-semibold tracking-[.08em] uppercase">
                 {group.label || 'Unnamed floor'}
               </h3>
+              {/* The delete control is a SIBLING of the open button, not nested
+                  inside it — a button within a button is invalid HTML and the
+                  inner click gets swallowed. */}
               <ul className="m-0 list-none p-0">
                 {group.rooms.map(room => (
-                  <li key={room.id} className="border-hair border-b last:border-0">
+                  <li
+                    key={room.id}
+                    className="border-hair flex items-center border-b pr-2 last:border-0 hover:bg-slate-50"
+                  >
                     <button
                       type="button"
                       onClick={() => onOpenRoom(room.id)}
-                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3 text-left"
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-[14px] font-semibold">
@@ -336,6 +425,14 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
                         )}
                       </span>
                       <StatusChip status={room.status} fails={room.fails} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAskDeleteRoom(room)}
+                      aria-label={`Delete ${room.name || 'Unnamed room'}`}
+                      className="text-ink-soft hover:text-fail ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-lg hover:bg-red-50"
+                    >
+                      <IconTrash size={18} />
                     </button>
                   </li>
                 ))}
@@ -357,6 +454,74 @@ function VisitLevel({ client, location, config, onBack, onOpenRoom, onChanged })
           }}
         >
           It moves into history and a new visit can be started. Results are kept.
+        </ConfirmDialog>
+      )}
+
+      {askDeleteRoom && (
+        <ConfirmDialog
+          danger
+          title={`Delete "${askDeleteRoom.name || 'Unnamed room'}"?`}
+          confirmLabel="Delete room"
+          onCancel={() => setAskDeleteRoom(null)}
+          onConfirm={() => {
+            deleteRoom(client.id, location.id, askDeleteRoom.id)
+            setAskDeleteRoom(null)
+            onChanged()
+          }}
+        >
+          It is removed from this location's floor plan, here and on Edit Client.
+          {roomResultCount(client.id, location.id, askDeleteRoom.id) > 0 && (
+            <>
+              {' '}
+              <b>
+                {roomResultCount(client.id, location.id, askDeleteRoom.id)} visit(s) recorded results
+                for this room.
+              </b>{' '}
+              Those results are kept, but the room will no longer appear on a report regenerated
+              from them.
+            </>
+          )}
+        </ConfirmDialog>
+      )}
+
+      {askDeleteReport && current && (
+        <ConfirmDialog
+          danger
+          title={`Delete the record of revision ${askDeleteReport.revision}?`}
+          confirmLabel="Delete record"
+          onCancel={() => setAskDeleteReport(null)}
+          onConfirm={() => {
+            deleteExport(client.id, location.id, current.id, askDeleteReport.revision)
+            setAskDeleteReport(null)
+            onChanged()
+          }}
+        >
+          The spreadsheet itself was never stored here, so this removes the record that it went out
+          — not any copy the client already holds. The visit keeps everything needed to generate the
+          report again.
+        </ConfirmDialog>
+      )}
+
+      {askReopen && current && (
+        <ConfirmDialog
+          title="Reopen this visit for editing?"
+          confirmLabel="Reopen"
+          onCancel={() => setAskReopen(false)}
+          onConfirm={() => {
+            const outcome = reopenVisit(client.id, location.id, current.id)
+            setAskReopen(false)
+            if (outcome === 'conflict') {
+              setReopenError(
+                'Another visit of this type is already open at this location. Finish that one first — two open visits would overwrite each other.',
+              )
+              return
+            }
+            onChanged()
+          }}
+        >
+          It becomes editable again and counts as in progress. A report has already been generated
+          from it, so anything you change here will differ from the copy the client holds until you
+          export a new revision.
         </ConfirmDialog>
       )}
 
@@ -402,9 +567,17 @@ function TestRow({ test, value, onChange, readOnly }) {
   )
 }
 
-function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, onBack, onOpenRoom, onChanged }) {
+function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, canManage, onBack, onOpenRoom, onChanged, onReopen }) {
   const index = rooms.findIndex(r => r.id === roomId)
   const room = rooms[index]
+  const { setDetail } = useOutletContext()
+
+  // Put the room's name in the app header, and take it away again on the way
+  // out — the cleanup is what stops a room name sitting over Settings.
+  useEffect(() => {
+    setDetail(room ? [room.name || 'Unnamed room', room.floorLabel].filter(Boolean).join(' · ') : null)
+    return () => setDetail(null)
+  }, [room, setDetail])
 
   const template = useMemo(() => getTemplate(config.templateKind), [config.templateKind])
   const stored = visit ? getRoomEntry(client.id, location.id, visit.id, roomId) : null
@@ -508,10 +681,22 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, o
         />
 
         {readOnly && (
-          <div className="border-navy/20 bg-navy/5 text-navy mb-4 rounded-lg border px-4 py-3 text-[13.5px]">
-            {visit
-              ? 'This visit is finished — showing what it recorded. Start a new visit to make changes.'
-              : 'No visit has been started for this location yet. Start one to record results.'}
+          <div className="border-navy/20 bg-navy/5 text-navy mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-[13.5px]">
+            <span>
+              {visit
+                ? 'This visit is finished — showing what it recorded. Start a new visit to make changes.'
+                : 'No visit has been started for this location yet. Start one to record results.'}
+            </span>
+            {/* The wall is hit here, so the way through it belongs here too. */}
+            {visit && canManage && (
+              <button
+                type="button"
+                onClick={onReopen}
+                className="border-navy/30 text-navy min-h-[38px] shrink-0 rounded-lg border bg-white px-3 text-[13px] font-semibold hover:bg-slate-50"
+              >
+                Reopen for editing
+              </button>
+            )}
           </div>
         )}
 
@@ -600,6 +785,15 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, o
             const next = !complete
             setComplete(next)
             persist({ status: next ? 'complete' : 'in-progress' })
+            // Marking a room done moves straight on to the next one — that is
+            // the actual rhythm of a site walk. Only on the way TO complete:
+            // un-ticking a room means you want to stay and fix something.
+            // The last room has nowhere to advance to, so it returns to the
+            // list, which is also where Export lives.
+            if (!next) return
+            const following = rooms[index + 1]
+            if (following) onOpenRoom(following.id)
+            else onBack()
           }}
           className={`mb-4 min-h-[48px] w-full rounded-lg border-2 text-[14px] font-semibold transition-colors ${
             complete ? 'bg-pass border-pass text-white' : 'border-pass text-pass bg-white hover:bg-green-50'
@@ -667,6 +861,7 @@ export default function WorkflowPage({ config }) {
   const [clientId, setClientId] = useState(from.clientId ?? null)
   const [locationId, setLocationId] = useState(from.locationId ?? null)
   const [roomId, setRoomId] = useState(from.roomId ?? null)
+  const canManage = useCanManage()
 
   const refresh = useCallback(() => setClients(listClients()), [])
   const client = clients.find(c => c.id === clientId) ?? null
@@ -718,6 +913,13 @@ export default function WorkflowPage({ config }) {
           rooms={rooms}
           readOnly={readOnly}
           config={config}
+          canManage={canManage}
+          onReopen={() => {
+            // Cannot conflict from here: an open visit would have been the one
+            // selected above, so reaching this branch means there is none.
+            if (visit) reopenVisit(client.id, location.id, visit.id)
+            refresh()
+          }}
           onOpenRoom={setRoomId}
           onBack={() => {
             setRoomId(null)
@@ -735,6 +937,7 @@ export default function WorkflowPage({ config }) {
         client={client}
         location={location}
         config={config}
+        canManage={canManage}
         onBack={() => {
           setLocationId(null)
           refresh()

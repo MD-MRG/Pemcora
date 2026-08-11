@@ -73,7 +73,7 @@ try {
   log('reads "Commissioning in progress"', /Commissioning in progress/.test(await body()))
 
   // 1 · the commissioning template
-  await page.getByRole('button', { name: /Reception/ }).click()
+  await page.getByRole('button', { name: /^Reception/ }).click()
   await page.waitForTimeout(500)
   const mainCount = await page.locator('main section').first().locator('button[aria-pressed]').count()
   log('main list has 25 commissioning tests', mainCount === 25 * 3, `${mainCount / 3} tests`)
@@ -112,7 +112,7 @@ try {
     open.map(x => x.kind ?? 'maintenance').join(' + '))
 
   // 2 · PM template unchanged
-  await page.getByRole('button', { name: /Reception/ }).click()
+  await page.getByRole('button', { name: /^Reception/ }).click()
   await page.waitForTimeout(500)
   const pmCount = await page.locator('main section').first().locator('button[aria-pressed]').count()
   log('PM still renders 19 tests', pmCount === 19 * 3, `${pmCount / 3} tests`)

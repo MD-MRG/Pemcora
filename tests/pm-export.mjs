@@ -56,6 +56,12 @@ async function exportNow() {
   ])
   return dl
 }
+const LONG_COMMENT = [
+  'Rack tidy required. Cable management behind the AV rack is loose and several patch leads are unlabelled.',
+  'Projector filter is due for replacement at the next service visit.',
+  'Client asked about adding a second display to this room.',
+].join('\n')
+
 async function readSheet(dl, name) {
   const out = `${DIR}/${name}`
   await dl.saveAs(out)
@@ -84,7 +90,7 @@ try {
   await openLocation()
   await page.getByRole('button', { name: /^Start PM$/ }).click()
   await page.waitForTimeout(400)
-  await page.getByRole('button', { name: /Reception/ }).click()
+  await page.getByRole('button', { name: /^Reception/ }).click()
   await page.waitForTimeout(450)
   await setResult('Correct Time and Date', 'PASS')
   await setResult('Room Wake On Touch', 'FAIL')
@@ -101,7 +107,10 @@ try {
   await rc.locator('input[type=checkbox]').uncheck()
   await page.waitForTimeout(400)
   const commentBox = page.locator('textarea').last()
-  await commentBox.fill('Rack tidy required')
+  // Long and multi-line on purpose: the comment cell is merged across A:B, and
+  // Excel does not auto-fit row height on merged cells, so this is the case
+  // that used to arrive clipped to a single visible line.
+  await commentBox.fill(LONG_COMMENT)
   await commentBox.blur()
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /^List$/ }).click()
@@ -124,6 +133,17 @@ try {
   log('blank exports empty, not N/A', /Audio In room\|$/m.test(r1.text))
   log('troubleshooting note included', /Panel rebooted on site/.test(r1.text))
   log('comments included', /Rack tidy required/.test(r1.text))
+
+  // The comment must be READABLE in the file, not merely present in it.
+  let commentRow = null
+  r1.ws.eachRow({ includeEmpty: true }, row => {
+    if (String(row.getCell(1).value ?? '').includes('Rack tidy required')) commentRow = row
+  })
+  log('every line of the comment survives', /second display/.test(String(commentRow?.getCell(1).value ?? '')))
+  log('the comment cell wraps', commentRow?.getCell(1).alignment?.wrapText === true)
+  // One default row is 15pt. Three typed lines, the first of which wraps, needs
+  // roughly four — anything at or below one line means it renders clipped.
+  log('and its row is tall enough to show them', (commentRow?.height ?? 0) >= 60, `height=${commentRow?.height}`)
   log('hidden section excluded from the report', !/Mic Mute/.test(r1.text) && !/Room controls/.test(r1.text))
   log('untested room marked as such', /Not tested during this visit/.test(r1.text))
   log('no Revision line on the first report', !/Revision \d/.test(r1.text))

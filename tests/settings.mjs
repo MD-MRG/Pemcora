@@ -130,7 +130,7 @@ try {
   log('the Settings default is untouched', (await settings()).technician === 'Michal Dolezal')
 
   // 7 · report carries branding, technician and an embedded image
-  await page.getByRole('button', { name: /Reception/ }).click()
+  await page.getByRole('button', { name: /^Reception/ }).click()
   await page.waitForTimeout(500)
   await page.getByRole('button', { name: 'Correct Time and Date: PASS' }).click()
   await page.waitForTimeout(250)
