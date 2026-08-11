@@ -33,6 +33,28 @@ export const isTestMode =
     }
   })()
 
+/**
+ * Where a confirmation email should send someone back to.
+ *
+ * Without this, `signUp` sends no `redirect_to` at all — auth-js only forwards
+ * `options.emailRedirectTo` — and GoTrue falls back to the project's Site URL.
+ * That fallback is invisible from the code and was set to the bare origin, so
+ * confirmation links arrived pointing at https://md-mrg.github.io/ instead of
+ * the app, and GitHub answered "There isn't a GitHub Pages site here". The
+ * address was never verified, because the link never reached /auth/v1/verify's
+ * redirect in a usable state.
+ *
+ * Deliberately `location.pathname`, NOT `import.meta.env.BASE_URL`: vite.config
+ * sets `base: './'` so a Pages deploy works at any sub-path, which makes
+ * BASE_URL the literal string './' — and origin + './' is
+ * "https://md-mrg.github.io./", a hostname that does not exist.
+ *
+ * HashRouter keeps pathname at the app root whatever route you are on, so this
+ * is the deploy root on GitHub Pages ("/Pemcora/") and "/" on a dev server —
+ * which is why both are on the redirect allow list.
+ */
+export const emailRedirectUrl = () => window.location.origin + window.location.pathname
+
 export const supabase = isSupabaseConfigured
   ? createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true },

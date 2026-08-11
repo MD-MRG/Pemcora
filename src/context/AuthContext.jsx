@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase, isSupabaseConfigured } from '../lib/supabase.js'
+import { supabase, isSupabaseConfigured, emailRedirectUrl } from '../lib/supabase.js'
 import { AuthContext } from './auth.js'
 
 const notConfigured = { error: { message: 'Pemcora is not connected to a backend.' } }
@@ -30,8 +30,17 @@ export function AuthProvider({ children }) {
       supabase
         ? supabase.auth.signInWithPassword({ email, password })
         : Promise.resolve(notConfigured),
+    // emailRedirectTo is what puts `redirect_to` on the confirmation link.
+    // Omit it and the link's destination comes from a dashboard setting no
+    // one can see from here — see emailRedirectUrl.
     signUp: (email, password) =>
-      supabase ? supabase.auth.signUp({ email, password }) : Promise.resolve(notConfigured),
+      supabase
+        ? supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: emailRedirectUrl() },
+          })
+        : Promise.resolve(notConfigured),
     signOut: () => (supabase ? supabase.auth.signOut() : Promise.resolve({})),
   }
 
