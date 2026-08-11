@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
-import { inviteUrl } from '../lib/supabase.js'
 import {
   listAllMembers,
   listInvites,
-  createInvite,
+  sendInvite,
   revokeInvite,
   updateTeam,
   setMemberRole,
   removeMember,
   moveMember,
+  deleteAccount,
 } from '../lib/api.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
@@ -87,8 +87,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
     setBusy(true)
     setSent(null)
     try {
-      const created = await createInvite(team.id, email.trim())
-      setSent(created)
+      setSent(await sendInvite(team.id, email.trim()))
       setEmail('')
       setCopied(false)
       await loadInvites()
@@ -204,19 +203,26 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
 
                 {sent && (
                   <div className="mt-3">
-                    <Notice title={`Invitation created for ${sent.email}.`}>
+                    <Notice
+                      title={
+                        sent.emailed
+                          ? `Invitation emailed to ${sent.email}.`
+                          : `Invitation created for ${sent.email}.`
+                      }
+                    >
                       <p>
-                        Nothing has been emailed yet — that arrives with the mail sender. Send them
-                        this link, which is good for a week and can be used once.
+                        {sent.emailed
+                          ? 'It is good for a week and can be used once. Here is the same link, in case they say it never arrived.'
+                          : 'Nothing was emailed — no mail sender is configured. Send them this link yourself; it is good for a week and can be used once.'}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <code className="border-hair min-w-0 flex-1 truncate rounded-md border bg-white px-2 py-1.5 font-mono text-[11.5px]">
-                          {inviteUrl(sent.token)}
+                          {sent.link}
                         </code>
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard?.writeText(inviteUrl(sent.token))
+                            navigator.clipboard?.writeText(sent.link)
                             setCopied(true)
                           }}
                           className="border-hair text-ink min-h-[38px] shrink-0 rounded-lg border bg-white px-3 text-[12.5px] font-semibold hover:bg-slate-50"
@@ -268,7 +274,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
-  const [confirming, setConfirming] = useState(null) // 'remove' | 'move'
+  const [confirming, setConfirming] = useState(null) // 'remove' | 'move' | 'delete'
   const [moveTo, setMoveTo] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -351,9 +357,47 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
               onCancel={() => setConfirming(null)}
               onConfirm={() => run(() => removeMember(member.teamId, member.userId), onChanged)}
             >
-              Their account stays, and so does everything they recorded — clients, visits and
-              reports belong to the team, not to the person who entered them. They simply stop
-              being able to see this team. Invite them again to undo it.
+              <p>
+                Their account stays, and so does everything they recorded — clients, visits and
+                reports belong to the team, not to the person who entered them. They simply stop
+                being able to see this team. Invite them again to undo it.
+              </p>
+              <p className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => setConfirming('delete')}
+                  className="text-fail font-semibold underline-offset-2 hover:underline"
+                >
+                  Delete their Pemcora account entirely
+                </button>{' '}
+                — permanent, and not undone by inviting them again.
+              </p>
+            </ConfirmDialog>
+          </td>
+        </tr>
+      )}
+
+      {confirming === 'delete' && (
+        <tr>
+          <td colSpan={4} className="p-0">
+            <ConfirmDialog
+              title={`Delete ${member.email}?`}
+              confirmLabel="Delete this account"
+              cancelLabel="Cancel"
+              danger
+              onCancel={() => setConfirming('remove')}
+              onConfirm={() => run(() => deleteAccount(member.userId, member.teamId), onChanged)}
+            >
+              <p>
+                Their login is destroyed and cannot be restored. Everything they recorded stays —
+                clients, visits and reports belong to {member.teamName} — but their name comes off
+                it.
+              </p>
+              <p className="mt-3">
+                This is refused if they are in another team as well. An account is a person, not a
+                membership, and throwing them out of somebody else's team is not yours to do —
+                remove them from this one instead.
+              </p>
             </ConfirmDialog>
           </td>
         </tr>

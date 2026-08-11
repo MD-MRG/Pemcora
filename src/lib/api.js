@@ -20,7 +20,7 @@
 // unique-index collision) that tells the difference between "you may not" and
 // "that already exists".
 
-import { supabase } from './supabase.js'
+import { supabase, emailRedirectUrl, inviteUrl } from './supabase.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Row → app mappers
@@ -385,6 +385,60 @@ export async function createInvite(teamId, email) {
   })
   if (error) throw error
   return inviteFromRow(data)
+}
+
+/**
+ * Invite somebody and, if there is a mailer, email them the link.
+ *
+ * Falls all the way back to createInvite when the function is not deployed.
+ * That is not defensive padding — the Edge Function is deployed separately from
+ * the app, so there is a window where the built site is ahead of it, and an
+ * invitation that has to be copied by hand is a great deal better than a button
+ * that fails.
+ *
+ * Always returns { link, emailed }: the caller says "emailed to them" or "send
+ * them this" from the same shape, and never claims an email that did not go.
+ */
+export async function sendInvite(teamId, email) {
+  try {
+    const { data, error } = await supabase.functions.invoke('send-invite', {
+      body: { teamId, email, appUrl: emailRedirectUrl() },
+    })
+    // A non-2xx carries our own { error } body, which is the useful message —
+    // FunctionsHttpError's own text is only ever "non-2xx status code".
+    if (error) {
+      const said = await error.context?.json?.().catch(() => null)
+      if (said?.error) throw new Error(said.error)
+      throw error
+    }
+    return { link: data.link, emailed: Boolean(data.emailed), email: data.email ?? email }
+  } catch (e) {
+    // Only a missing or unreachable function falls through to the direct RPC.
+    // A refusal — not an admin, address already in the team — is a real answer
+    // and has to surface, not be quietly retried into the same refusal.
+    if (e instanceof Error && !/fetch|network|Failed to send|not found/i.test(e.message)) throw e
+    const invite = await createInvite(teamId, email)
+    return { link: inviteUrl(invite.token), emailed: false, email: invite.email }
+  }
+}
+
+/**
+ * Delete the account itself, not just the membership.
+ *
+ * Needs the service-role key, so it can only happen in an Edge Function. The
+ * guards live there too — owner of the team, target owns nothing, target is in
+ * no other team — because they are decisions about the whole database rather
+ * than about one team's rows.
+ */
+export async function deleteAccount(userId, teamId) {
+  const { data, error } = await supabase.functions.invoke('delete-account', {
+    body: { userId, teamId },
+  })
+  if (error) {
+    const said = await error.context?.json?.().catch(() => null)
+    throw new Error(said?.error ?? 'Deleting the account failed. Is the function deployed?')
+  }
+  if (!data?.deleted) throw new Error(data?.error ?? 'Deleting the account failed.')
 }
 
 // Outstanding only. A spent invitation is history, and the person is in the
