@@ -338,6 +338,40 @@ export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel
   return { outcome: 'added', floorId: floor.id, roomId: room.id }
 }
 
+/**
+ * Removes a room from the location's floor plan.
+ *
+ * Visit entries keyed by this room id are deliberately left alone: they are the
+ * record of what was found on the day. Note the consequence, which the confirm
+ * dialog warns about — `roomsWithStatus` reads the CURRENT floor plan, so a
+ * regenerated report for an old visit will no longer include this room. The
+ * Postgres schema copies room_name onto visit_rooms for exactly this reason;
+ * the local tree does not.
+ */
+export function deleteRoom(clientId, locationId, roomId) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location) return false
+  for (const floor of location.floors ?? []) {
+    const i = floor.rooms.findIndex(r => r.id === roomId)
+    if (i >= 0) {
+      floor.rooms.splice(i, 1)
+      write(clients)
+      return true
+    }
+  }
+  return false
+}
+
+// How many visits hold anything for this room — the difference between deleting
+// a typo and deleting someone's afternoon. Any entry counts, not just one with
+// a touchedAt: entries written before that field existed, and those restored
+// from a migration, are still somebody's recorded work.
+export function roomResultCount(clientId, locationId, roomId) {
+  const location = findLoc(read(), clientId, locationId)
+  return (location?.visits ?? []).filter(v => v.rooms?.[roomId]).length
+}
+
 // ── Room entries within a visit ─────────────────────────────────────────────
 
 const findVisit = (clients, clientId, locationId, visitId) =>
@@ -427,6 +461,50 @@ export function recordExport(clientId, locationId, visitId, { mode, filename }) 
 
   write(clients)
   return record
+}
+
+/**
+ * Removes one revision record. The file itself was never stored, so this
+ * deletes the app's record that a report went out — not the report.
+ *
+ * Note the interaction with `nextRevision`, which is max + 1: delete the
+ * highest revision and the next export reuses that number. That is the point —
+ * you delete a report you sent in error and regenerate it as the same revision.
+ */
+export function deleteExport(clientId, locationId, visitId, revision) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit?.exports) return false
+  const i = visit.exports.findIndex(e => e.revision === revision)
+  if (i < 0) return false
+  visit.exports.splice(i, 1)
+  write(clients)
+  return true
+}
+
+/**
+ * Reopens a finished visit so an admin can correct it.
+ *
+ * Refuses when another visit of the same kind is already open, because
+ * `startVisit`'s one-open-visit-per-kind rule is what stops two sessions
+ * writing over each other — reopening past it would create exactly the state
+ * that rule exists to prevent. Returns 'reopened' | 'conflict' | 'missing'.
+ */
+export function reopenVisit(clientId, locationId, visitId) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  const visit = location?.visits?.find(v => v.id === visitId)
+  if (!visit) return 'missing'
+  if (!visit.completedAt) return 'reopened'
+
+  const kind = kindOf(visit)
+  if (location.visits.some(v => v.id !== visitId && !v.completedAt && kindOf(v) === kind)) {
+    return 'conflict'
+  }
+
+  visit.completedAt = null
+  write(clients)
+  return 'reopened'
 }
 
 export function setExportPreference(clientId, locationId, visitId, preference) {

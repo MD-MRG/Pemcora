@@ -112,6 +112,14 @@ function EditLevel({ client, locationId, isNew, onBack, onSaved, onAddLocation }
       ),
     )
   }, [])
+  // Floors autosave, so the removal reaches storage on the same debounce as an
+  // edit — no separate delete call, and no window where the screen and the
+  // stored tree disagree.
+  const removeRoom = useCallback((floorId, roomId) => {
+    setFloors(fs =>
+      fs.map(f => (f.id === floorId ? { ...f, rooms: f.rooms.filter(r => r.id !== roomId) } : f)),
+    )
+  }, [])
   const addRoom = useCallback(floorId => {
     const room = newRoom()
     setFloors(fs => fs.map(f => (f.id === floorId ? { ...f, rooms: [...f.rooms, room] } : f)))
@@ -189,6 +197,7 @@ function EditLevel({ client, locationId, isNew, onBack, onSaved, onAddLocation }
             setFloorLabel={setFloorLabel}
             setRoom={setRoom}
             addRoom={addRoom}
+            removeRoom={removeRoom}
             addFloor={addFloor}
           />
         )}

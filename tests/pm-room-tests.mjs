@@ -34,6 +34,14 @@ const store = () => page.evaluate(() => JSON.parse(localStorage.getItem('fc.clie
 const entry = async roomId => (await store())[0].locations[0].visits[0]?.rooms?.[roomId] ?? null
 const body = async () => (await page.textContent('body')).replace(/\s+/g, ' ')
 
+// The line under the page title in the app header — normally the nav blurb,
+// and the open room's name once there is one.
+const headerDetail = () =>
+  page.evaluate(() => {
+    const h1 = document.querySelector('h1')
+    return h1?.parentElement?.querySelector('p')?.textContent?.trim() ?? ''
+  })
+
 async function openLocation() {
   await page.goto(BASE + '#/', { waitUntil: 'networkidle' })
   await page.waitForTimeout(120)
@@ -45,7 +53,9 @@ async function openLocation() {
   await page.waitForTimeout(350)
 }
 const openRoom = async name => {
-  await page.getByRole('button', { name: new RegExp(name) }).click()
+  // Anchored: the row's own delete control is also named after the room
+  // ("Delete Reception"), so an unanchored match now hits two elements.
+  await page.getByRole('button', { name: new RegExp(`^${name}`) }).click()
   await page.waitForTimeout(450)
 }
 const setResult = async (testLabel, value) => {
@@ -139,19 +149,18 @@ try {
   e = await entry('r1')
   log('room stores its own template snapshot', !!e.template?.tests?.length && e.template.sections.length === 2)
 
-  // 8 · mark complete
+  // 8 · mark complete — which now moves straight on to the next room
   await rc.locator('input[type=checkbox]').check()
   await page.waitForTimeout(300)
+  // Checked while we are still on the first room, before completing advances us.
+  log('Previous disabled on the first room', await page.getByRole('button', { name: /← Previous/ }).isDisabled())
+  log('the header carries the room name in place of the blurb', /Reception/.test(await headerDetail()))
+
   await page.getByRole('button', { name: /Mark room complete/ }).click()
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(500)
   e = await entry('r1')
   log('room marked complete with fail count', e.status === 'complete' && e.fails === 1, `${e.status} fails=${e.fails}`)
-
-  // 9 · footer navigation
-  log('Previous disabled on the first room', await page.getByRole('button', { name: /← Previous/ }).isDisabled())
-  await page.getByRole('button', { name: /Next →/ }).click()
-  await page.waitForTimeout(450)
-  log('Next moves to room 2', /Boardroom/.test(await body()))
+  log('marking a room complete advances to the next one', /Boardroom/.test(await body()))
 
   // 4 · carry-forward of section toggles
   const rc2 = page.locator('main section').filter({ hasText: 'Room controls' }).first()
@@ -165,6 +174,9 @@ try {
   // back to list, chip reflects completion
   await page.getByRole('button', { name: /^List$/ }).click()
   await page.waitForTimeout(450)
+  // Leaving the room must hand the header back, or a room name sits over an
+  // unrelated page for the rest of the session.
+  log('the header returns to the page blurb on leaving the room', !/Reception|Boardroom/.test(await headerDetail()), await headerDetail())
   log('room list chip shows the FAIL count', /1 FAIL/.test(await body()))
   await page.screenshot({ path: `${DIR}/pm2-list.png` })
 

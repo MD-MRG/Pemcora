@@ -26,6 +26,10 @@ export default function AppShell() {
   const [bp, setBp] = useState(() => breakpointOf(window.innerWidth))
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settings, setSettings] = useState(() => getSettings())
+  // A page can put its own line in the header — the open room's name. Pages set
+  // it through the outlet context and clear it on unmount, so navigating away
+  // cannot leave a stale room name over an unrelated page.
+  const [detail, setDetail] = useState(null)
   const plate = settings.plate ?? DEFAULT_PLATE
   const bpRef = useRef(bp)
 
@@ -80,7 +84,13 @@ export default function AppShell() {
   }, [])
 
   const brandName = settings.company?.name?.trim() || 'Pemcora'
-  const ctx = { plate, setPlate, settings, refreshSettings: () => setSettings(getSettings()) }
+  const ctx = {
+    plate,
+    setPlate,
+    settings,
+    refreshSettings: () => setSettings(getSettings()),
+    setDetail,
+  }
 
   const skipLink = (
     <a
@@ -97,7 +107,12 @@ export default function AppShell() {
       <div className="flex h-full flex-col">
         {skipLink}
         <header className="h-16 shrink-0">
-          <ContextBar item={current} showMenuButton onOpenNav={() => setDrawerOpen(true)} />
+          <ContextBar
+            item={current}
+            detail={detail}
+            showMenuButton
+            onOpenNav={() => setDrawerOpen(true)}
+          />
         </header>
 
         <main id="stage" className="bg-stage flex-1 overflow-auto">
@@ -156,7 +171,7 @@ export default function AppShell() {
         logoFull={settings.logoFull}
         logoCollapsed={settings.logoCollapsed}
       />
-      <ContextBar item={current} />
+      <ContextBar item={current} detail={detail} />
       <SideNav collapsed={collapsed} onToggle={toggle} />
       <main id="stage" className="bg-stage overflow-auto">
         <Outlet context={ctx} />
