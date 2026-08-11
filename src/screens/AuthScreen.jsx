@@ -5,10 +5,16 @@ import Notice from '../components/Notice.jsx'
 import GateLayout, { GateButton } from './GateLayout.jsx'
 import ResetPasswordScreen from './ResetPasswordScreen.jsx'
 
-export default function AuthScreen() {
+/**
+ * `invite`, when present, is `{ token, email, teamName }` from an invitation
+ * link. It changes three things: sign-up rather than sign-in is the opening
+ * mode, the address is fixed, and the token rides along in user metadata so the
+ * confirm trigger can place the new account in the team that invited it.
+ */
+export default function AuthScreen({ invite = null }) {
   const { signIn, signUp } = useAuth()
-  const [mode, setMode] = useState('sign-in') // 'sign-in' | 'sign-up' | 'reset'
-  const [email, setEmail] = useState('')
+  const [mode, setMode] = useState(invite ? 'sign-up' : 'sign-in')
+  const [email, setEmail] = useState(invite?.email ?? '')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
@@ -45,7 +51,7 @@ export default function AuthScreen() {
 
     setBusy(true)
     const { data, error } = signingUp
-      ? await signUp(email.trim(), password)
+      ? await signUp(email.trim(), password, invite ? { invite_token: invite.token } : undefined)
       : await signIn(email.trim(), password)
     setBusy(false)
 
@@ -57,21 +63,30 @@ export default function AuthScreen() {
     // With email confirmation switched on, sign-up returns a user but no
     // session. Saying so beats a form that looks like it did nothing.
     if (signingUp && !data?.session) {
-      setNotice(`Check ${email.trim()} for a confirmation link, then sign in.`)
+      setNotice(
+        invite
+          ? `Check ${email.trim()} for a confirmation link. Confirming it is what puts you in ${invite.teamName} — until then there is nothing to sign in to.`
+          : `Check ${email.trim()} for a confirmation link, then sign in.`,
+      )
       setMode('sign-in')
       setPassword('')
     }
     // On success with a session, AuthContext's listener swaps this screen out.
   }
 
+  const title = signingUp ? 'Create your account' : 'Sign in'
+  const subtitle = invite
+    ? signingUp
+      ? `You have been invited to join ${invite.teamName}. Set a password and confirm your address, and you are in as a member.`
+      : `Sign in and you will be asked whether to join ${invite.teamName}.`
+    : signingUp
+      ? 'Your clients, visits and reports live with your team, on every device you sign in from.'
+      : 'Welcome back.'
+
   return (
     <GateLayout
-      title={signingUp ? 'Create your account' : 'Sign in'}
-      subtitle={
-        signingUp
-          ? 'Your clients, visits and reports live with your team, on every device you sign in from.'
-          : 'Welcome back.'
-      }
+      title={title}
+      subtitle={subtitle}
       footer={
         <button
           type="button"
@@ -96,6 +111,11 @@ export default function AuthScreen() {
           required
           autoComplete="email"
           placeholder="you@company.com.au"
+          // Fixed for an invitation: the address is what was invited, and an
+          // account under a different one is an account the trigger will not
+          // place in any team.
+          readOnly={Boolean(invite)}
+          className={invite ? '[&_input]:bg-slate-50 [&_input]:text-ink-soft' : ''}
         />
         <Field
           label="Password"

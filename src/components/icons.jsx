@@ -66,6 +66,17 @@ export const IconList = p => (
   </Svg>
 )
 
+// Two people rather than one: the page is about who is in a team, and the
+// single-figure marks are already spoken for by the client pages.
+export const IconTeams = p => (
+  <Svg {...p}>
+    <circle cx="9" cy="8" r="3.4" />
+    <path d="M3 20c0-3.3 2.7-5.6 6-5.6s6 2.3 6 5.6" />
+    <path d="M16.2 5.1a3.4 3.4 0 0 1 0 6.5" />
+    <path d="M17.6 14.8c2 .7 3.4 2.5 3.4 5.2" />
+  </Svg>
+)
+
 export const IconSettings = p => (
   <Svg {...p}>
     <path d="M4 7.5h6M14 7.5h6M4 16.5h4M12 16.5h8" />

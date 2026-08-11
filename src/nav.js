@@ -5,6 +5,7 @@ import {
   IconCommissioning,
   IconMaintenance,
   IconList,
+  IconTeams,
   IconSettings,
 } from './components/icons.jsx'
 
@@ -52,6 +53,16 @@ export const MAIN_NAV = [
     path: '/custom-list',
     icon: IconList,
     blurb: 'Build a one-off checklist from your own test items',
+  },
+  {
+    key: 'teams',
+    label: 'Teams',
+    path: '/teams',
+    icon: IconTeams,
+    blurb: 'Your teams, who is in them, and who they are still waiting on',
+    // Owners and admins only. SideNav filters on this; the page refuses on its
+    // own account too, since a nav that merely hides a link is not a lock.
+    admin: true,
   },
 ]
 

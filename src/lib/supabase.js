@@ -71,6 +71,30 @@ export const isPasswordRecovery =
   typeof window !== 'undefined' &&
   `${window.location.hash}&${window.location.search}`.includes('type=recovery')
 
+/**
+ * The token from an invitation link, if this is one.
+ *
+ * A query parameter rather than part of the hash, because the hash belongs to
+ * HashRouter — anything put there is a route, and `#/?invite=…` would have to
+ * survive a router that rewrites it. `?invite=…` is untouched by both the
+ * router and by GoTrue's own hash handling.
+ */
+export const inviteTokenInUrl =
+  typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('invite')
+    : null
+
+// Drop it from the address bar once it has been dealt with, so a reload does
+// not reopen an invitation that has already been taken up or declined.
+export const clearInviteFromUrl = () => {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  url.searchParams.delete('invite')
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+}
+
+export const inviteUrl = token => `${emailRedirectUrl()}?invite=${encodeURIComponent(token)}`
+
 export const supabase = isSupabaseConfigured
   ? createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true },

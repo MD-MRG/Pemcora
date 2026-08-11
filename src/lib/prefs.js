@@ -3,6 +3,7 @@
 const KEY = {
   collapsed: 'fc.nav.collapsed',
   plate: 'fc.brand.plate',
+  activeTeam: 'fc.team.active',
 }
 
 function read(key, fallback) {
@@ -29,4 +30,9 @@ export const prefs = {
   setCollapsed: v => write(KEY.collapsed, v),
   getPlate: () => read(KEY.plate, null),
   setPlate: v => write(KEY.plate, v),
+  // Which team this device is working in. Per device rather than per account:
+  // the office machine and the van tablet are often pointed at different teams,
+  // and syncing the choice would mean one of them silently changing under you.
+  getActiveTeam: () => read(KEY.activeTeam, null),
+  setActiveTeam: v => write(KEY.activeTeam, v),
 }

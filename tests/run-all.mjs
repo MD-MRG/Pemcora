@@ -1,4 +1,4 @@
-// Runs the twelve localStorage suites and summarises them.
+// Runs the thirteen localStorage suites and summarises them.
 //
 //   npm test            (dev server must already be on 5173)
 //
@@ -28,6 +28,7 @@ const SUITES = [
   'pm-export',
   'commissioning',
   'custom-list',
+  'teams',
   'settings',
   'template-editor',
 ]

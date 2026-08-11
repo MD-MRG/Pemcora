@@ -313,6 +313,33 @@ export async function transferOwnership(teamId, userId) {
   if (error) throw error
 }
 
+// Every account in every team you administer — the Teams page roster. Distinct
+// from listMembers, which answers the same question for one team.
+export async function listAllMembers() {
+  const { data, error } = await supabase.rpc('all_members_overview')
+  if (error) throw error
+  return data.map(m => ({
+    userId: m.user_id,
+    email: m.email,
+    teamId: m.team_id,
+    teamName: m.team_name,
+    role: m.role,
+    joinedAt: m.joined_at,
+  }))
+}
+
+// Owner of both teams, and never a team's own owner. Their clients and visits
+// do not travel with them — those belong to the team — so this changes only
+// which work they can see.
+export async function moveMember(userId, fromTeamId, toTeamId) {
+  const { error } = await supabase.rpc('move_member', {
+    p_user_id: userId,
+    p_from_team_id: fromTeamId,
+    p_to_team_id: toTeamId,
+  })
+  if (error) throw error
+}
+
 export async function removeMember(teamId, userId) {
   const { data, error } = await supabase
     .from('team_members')
@@ -322,6 +349,84 @@ export async function removeMember(teamId, userId) {
     .select()
   if (error) throw error
   if (!data?.length) throw new Error('You do not have permission to remove that person.')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Teams and invitations
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Admin-only at the database, and reported the same way as team_settings: RLS
+// turns a refused update into zero rows rather than an error.
+export async function updateTeam(teamId, patch) {
+  const row = {}
+  if ('name' in patch) row.name = String(patch.name ?? '').trim()
+  if ('description' in patch) row.description = String(patch.description ?? '').trim()
+  const { data, error } = await supabase.from('teams').update(row).eq('id', teamId).select()
+  if (error) throw error
+  if (!data?.length) throw new Error('Only an owner or admin can change this team.')
+  return { name: data[0].name, description: data[0].description ?? '' }
+}
+
+const inviteFromRow = i => ({
+  id: i.id,
+  email: i.email,
+  token: i.token,
+  createdAt: i.created_at,
+  expiresAt: i.expires_at,
+  acceptedAt: i.accepted_at,
+})
+
+// Returns the token as well as the row: whoever asked for the invitation is
+// the one who has to deliver it.
+export async function createInvite(teamId, email) {
+  const { data, error } = await supabase.rpc('create_invite', {
+    p_team_id: teamId,
+    p_email: email,
+  })
+  if (error) throw error
+  return inviteFromRow(data)
+}
+
+// Outstanding only. A spent invitation is history, and the person is in the
+// roster below it by then anyway.
+export async function listInvites(teamId) {
+  const { data, error } = await supabase
+    .from('team_invites')
+    .select('*')
+    .eq('team_id', teamId)
+    .is('accepted_at', null)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data.map(inviteFromRow)
+}
+
+export async function revokeInvite(inviteId) {
+  const { data, error } = await supabase
+    .from('team_invites')
+    .delete()
+    .eq('id', inviteId)
+    .select()
+  if (error) throw error
+  if (!data?.length) throw new Error('You do not have permission to revoke that invitation.')
+}
+
+// Callable with no session — it is what the sign-up screen asks before anyone
+// has an account. Returns null for a token that never existed.
+export async function previewInvite(token) {
+  const { data, error } = await supabase.rpc('invite_preview', { p_token: token })
+  if (error) throw error
+  const row = data?.[0]
+  return row
+    ? { email: row.email, teamName: row.team_name, expired: row.expired, accepted: row.accepted }
+    : null
+}
+
+// For somebody who already has an account. A new account gets its membership
+// from the confirm trigger instead, since that is when the address is proven.
+export async function acceptInvite(token) {
+  const { data, error } = await supabase.rpc('accept_invite', { p_token: token })
+  if (error) throw error
+  return { id: data.id, name: data.name }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

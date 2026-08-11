@@ -9,6 +9,7 @@ import EditClient from './pages/EditClient.jsx'
 import Commissioning from './pages/Commissioning.jsx'
 import PreventativeMaintenance from './pages/PreventativeMaintenance.jsx'
 import CustomList from './pages/CustomList.jsx'
+import Teams from './pages/Teams.jsx'
 import Settings from './pages/Settings.jsx'
 
 // HashRouter: real URLs and a working back button, with no GitHub Pages
@@ -30,6 +31,7 @@ export default function App() {
                 <Route path="/commissioning" element={<Commissioning />} />
                 <Route path="/maintenance" element={<PreventativeMaintenance />} />
                 <Route path="/custom-list" element={<CustomList />} />
+                <Route path="/teams" element={<Teams />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
