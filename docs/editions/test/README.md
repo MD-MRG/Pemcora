@@ -3,9 +3,14 @@
 `run_tests.py` builds a throwaway database from the real `supabase/migrations/0001–0005`,
 makes a team the way today's app does, applies `0006` and `0007` twice (re-run
 safety), then drives every gate, policy and RPC as real signed-in roles with RLS on.
-72 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
+183 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
 seats and invites, the column lock on `teams`, the re-check clock, photo gating,
-storage folders, and the whole report delivery → claim → auto-file loop.
+storage folders, and the whole report delivery → claim → auto-file loop. Then
+the build plan's Phase A rules: a second device joining an open visit, visit
+dates and the one-time import window, the 7-day payment grace and `cancel_at`,
+the catalogue and no silent AV, seat races and notices, regular intervals, the
+Due list, reminder switches and opt-outs, hand-entered checks, report link
+expiry and "Send again", and the sign-off on a delivered report.
 
 `00_supabase_stub.sql` stands in for the parts of Supabase plain Postgres lacks:
 the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.uid()`,

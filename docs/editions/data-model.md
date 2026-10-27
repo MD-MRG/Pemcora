@@ -2,7 +2,7 @@
 
 **Status: draft for review.** Nothing here has been applied to Supabase. The two
 migrations in this folder have been run on a local Postgres on top of the real
-0001–0005, twice each, and pass 72 checks (`test/`).
+0001–0005, twice each, and pass 183 checks (`test/`).
 
 They live in `docs/editions/`, not `supabase/migrations/`, on purpose: the folder
 is linked to the Supabase CLI, and `supabase db push` would apply anything placed

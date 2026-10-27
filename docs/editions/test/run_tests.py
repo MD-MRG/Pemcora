@@ -60,6 +60,13 @@ def su(sql, params=None):
     return cur.fetchall() if cur.description else None
 
 
+def su_raw(sql, params=None):
+    """As the superuser with triggers off: for arranging history the gates would refuse."""
+    with db.transaction():
+        db.execute("set local session_replication_role = replica")
+        db.execute(sql, params)
+
+
 def act(uid, sql, params=None):
     """As a signed-in user (uid) or anonymous (None), with RLS in force."""
     with db.transaction():
@@ -85,9 +92,12 @@ def refused(name, uid, sql, params=None, contains=None, sqlstate=None):
     check(name, False, "the write was allowed")
 
 
-def user(email):
+def user(email, invite_token=None):
+    """A confirmed account. With an invite token, as if it signed up from the link."""
     uid = uuid.uuid4()
-    su("insert into auth.users (id, email, email_confirmed_at) values (%s, %s, now())", [uid, email])
+    meta = json.dumps({"invite_token": str(invite_token)} if invite_token else {})
+    su("insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values (%s, %s, %s, now())",
+       [uid, email, meta])
     return uid
 
 
@@ -389,6 +399,440 @@ act(A, "delete from storage.objects where bucket_id = 'reports' and name = %s", 
 check("a delivered report file cannot be deleted by the sender",
       su("select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"])[0][0] == 1)
 check("entitlements are private to members", one(X, "select public.team_entitlements(%s)", [TA]) is None)
+
+
+def add_site(uid, team, name, contact_name="", contact_email=""):
+    """A client with one site, as the app makes them. Returns (client id, location id)."""
+    cid, lid = uuid.uuid4(), uuid.uuid4()
+    act(uid, "insert into public.clients (id, team_id, name, contact_name, contact_email) values (%s, %s, %s, %s, %s)",
+        [cid, team, name, contact_name, contact_email])
+    act(uid, "insert into public.locations (id, client_id, team_id, address, suburb) values (%s, %s, %s, %s, 'Richmond')",
+        [lid, cid, team, f"{name} St"])
+    return cid, lid
+
+
+def add_location(uid, team, cid, address):
+    lid = uuid.uuid4()
+    act(uid, "insert into public.locations (id, client_id, team_id, address, suburb) values (%s, %s, %s, %s, 'Richmond')",
+        [lid, cid, team, address])
+    return lid
+
+
+def start_visit(uid, team, lid, kind, completed=False, started_at=None):
+    vid = uuid.uuid4()
+    act(uid, "insert into public.visits (id, team_id, location_id, kind, started_at) values (%s, %s, %s, %s, coalesce(%s, now()))",
+        [vid, team, lid, kind, started_at])
+    if completed:
+        act(uid, "update public.visits set completed_at = now() where id = %s", [vid])
+    return vid
+
+
+def months_after(d, n):
+    return su("select (%s::date + make_interval(months => %s))::date", [d, n])[0][0]
+
+
+def usage(team):
+    rows = su("select period, visits_started from public.team_usage where team_id = %s", [team])
+    return rows[0] if rows else (None, 0)
+
+
+now = datetime.now(timezone.utc)
+this_month = today.replace(day=1)
+
+# ── H. a second device joins; a different visit is refused ─────────────────
+print("\n— A second device on the same visit")
+S2 = user("two-devices@test")
+TS2 = one(S2, "select id from public.create_organisation('Two Devices', 'provider', 'vic_rental')")
+_, S2_L1 = add_site(S2, TS2, "Elm")
+_, S2_L2 = add_site(S2, TS2, "Oak")
+start_visit(S2, TS2, S2_L1, "vic_smoke_alarm")
+refused("with the allowance used, a second device starting the same open visit gets 23505 — the app joins it", S2,
+        "insert into public.visits (team_id, location_id, kind) values (%s, %s, 'vic_smoke_alarm')",
+        [TS2, S2_L1], contains="visits_one_open_per_kind_idx", sqlstate="23505")
+refused("…while a different visit is still refused with 402", S2,
+        "insert into public.visits (team_id, location_id, kind) values (%s, %s, 'vic_smoke_alarm')",
+        [TS2, S2_L2], contains="1 inspection a month", sqlstate="PT402")
+check("…and only the one inspection is counted", usage(TS2) == (this_month, 1), str(usage(TS2)))
+
+# ── I. honest dates ────────────────────────────────────────────────────────
+print("\n— Visit dates")
+DT = user("dates@test")
+TD = one(DT, "select id from public.create_organisation('Dated', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [TD])   # the webhook; no allowance in the way
+_, TD_L1 = add_site(DT, TD, "Ash")
+_, TD_L2 = add_site(DT, TD, "Birch")
+start_visit(DT, TD, TD_L1, "vic_smoke_alarm", started_at=now - timedelta(days=6))
+check("a visit started 6 days ago (an offline device) is accepted and counted in this month by the server's clock",
+      usage(TD) == (this_month, 1), str(usage(TD)))
+refused("a start date 8 days ago is refused", DT,
+        "insert into public.visits (team_id, location_id, kind, started_at) values (%s, %s, 'vic_smoke_alarm', %s)",
+        [TD, TD_L2, now - timedelta(days=8)], contains="more than 7 days ago", sqlstate="23514")
+refused("a start date 2 hours ahead is refused", DT,
+        "insert into public.visits (team_id, location_id, kind, started_at) values (%s, %s, 'vic_smoke_alarm', %s)",
+        [TD, TD_L2, now + timedelta(hours=2)], contains="in the future", sqlstate="23514")
+refused("a visit inserted already completed 9 days ago is refused", DT,
+        "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'vic_smoke_alarm', %s)",
+        [TD, TD_L2, now - timedelta(days=9)], contains="completion date", sqlstate="23514")
+check("a refused start counts nothing", usage(TD)[1] == 1)
+
+LONG = start_visit(DT, TD, TD_L2, "vic_smoke_alarm")
+su_raw("update public.visits set started_at = now() - interval '20 days' where id = %s", [LONG])
+refused("completing with a date 8 days ago is refused", DT,
+        "update public.visits set completed_at = now() - interval '8 days' where id = %s", [LONG], sqlstate="23514")
+act(DT, "update public.visits set completed_at = now() where id = %s", [LONG])
+check("a visit started 20 days ago can still be finished today",
+      su("select completed_at is not null from public.visits where id = %s", [LONG])[0][0])
+refused("a completion date cannot later be moved into the past through the API", DT,
+        "update public.visits set completed_at = now() - interval '9 days' where id = %s", [LONG], sqlstate="23514")
+refused("nor can a start date", DT,
+        "update public.visits set started_at = now() - interval '25 days' where id = %s", [LONG], sqlstate="23514")
+act(DT, "update public.visits set technician = 'Sam', started_at = started_at, completed_at = completed_at where id = %s", [LONG])
+check("sending a 20-day-old start date back unchanged with another edit passes",
+      su("select technician from public.visits where id = %s", [LONG])[0][0] == "Sam")
+act(DT, "update public.visits set completed_at = null where id = %s", [LONG])
+act(DT, "update public.visits set completed_at = now() where id = %s", [LONG])
+check("reopening and completing again passes", True)
+
+# ── J. the one-time import window ──────────────────────────────────────────
+print("\n— Import window")
+DA = user("dates-admin@test")
+su("insert into public.team_members (team_id, user_id, role) values (%s, %s, 'admin')", [TD, DA])
+refused("an admin cannot open it — the owner only", DA, "select public.open_import_window(%s)", [TD],
+        contains="owner", sqlstate="42501")
+w1 = one(DT, "select public.open_import_window(%s)", [TD])
+w2 = one(DT, "select public.open_import_window(%s)", [TD])
+check("the owner opens it for 15 minutes; asking again inside it returns the same closing time",
+      w1 is not None and w1 == w2
+      and su("select import_open_until - import_used_at from public.teams where id = %s", [TD])[0][0] == timedelta(minutes=15))
+check("entitlements say the import has been used", one(DT, "select public.team_entitlements(%s)", [TD])["import_used"] is True)
+before = usage(TD)[1]
+_, TD_L3 = add_site(DT, TD, "Cedar")
+start_visit(DT, TD, TD_L3, "vic_electrical_safety", started_at=now - timedelta(days=400))
+check("inside it, a visit from last year goes in and is history, not usage", usage(TD)[1] == before)
+_, TD_L4 = add_site(DT, TD, "Douglas")
+start_visit(DT, TD, TD_L4, "vic_electrical_safety")
+check("inside it, a visit from this month still counts", usage(TD)[1] == before + 1)
+su("update public.teams set import_open_until = now() - interval '1 second' where id = %s", [TD])
+refused("once it has closed it never opens again", DT, "select public.open_import_window(%s)", [TD],
+        contains="already used", sqlstate="PT409")
+refused("…and the app cannot reset it", DT, "update public.teams set import_used_at = null where id = %s", [TD],
+        sqlstate="42501")
+_, TD_L5 = add_site(DT, TD, "Elder")
+refused("…so the date check is back", DT,
+        "insert into public.visits (team_id, location_id, kind, started_at) values (%s, %s, 'vic_smoke_alarm', %s)",
+        [TD, TD_L5, now - timedelta(days=30)], sqlstate="23514")
+
+# ── K. card declined, and cancelling ───────────────────────────────────────
+print("\n— Billing dates")
+GR = user("grace@test")
+TG = one(GR, "select id from public.create_organisation('Graceful', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro', status = 'past_due' where team_id = %s", [TG])
+since = su("select past_due_since from public.subscriptions where team_id = %s", [TG])[0][0]
+check("going past due starts the 7-day clock", since is not None)
+su("update public.subscriptions set status = 'past_due' where team_id = %s", [TG])
+check("Stripe repeating past_due keeps the first date",
+      su("select past_due_since from public.subscriptions where team_id = %s", [TG])[0][0] == since)
+su("update public.subscriptions set past_due_since = now() - interval '6 days' where team_id = %s", [TG])
+check("past due on day 6 is still Pro", su("select public.team_is_pro(%s)", [TG])[0][0] is True)
+check("…and entitlements give the day Pro ends",
+      one(GR, "select public.team_entitlements(%s)", [TG])["past_due_until"] is not None)
+su("update public.subscriptions set past_due_since = now() - interval '8 days' where team_id = %s", [TG])
+check("past due on day 8 is Free, whether or not Stripe has said so", su("select public.team_is_pro(%s)", [TG])[0][0] is False)
+su("update public.subscriptions set status = 'active' where team_id = %s", [TG])
+check("a successful payment clears the clock and restores Pro",
+      su("select past_due_since is null, public.team_is_pro(%s) from public.subscriptions where team_id = %s",
+         [TG, TG])[0] == (True, True))
+su("update public.subscriptions set cancel_at = now() + interval '3 days' where team_id = %s", [TG])
+check("cancelled, but inside the paid period: still Pro", su("select public.team_is_pro(%s)", [TG])[0][0] is True)
+su("update public.subscriptions set cancel_at = now() - interval '1 minute' where team_id = %s", [TG])
+check("after cancel_at: Free, even before the webhook changes the status",
+      su("select public.team_is_pro(%s)", [TG])[0][0] is False)
+
+# ── L. the catalogue, and no silent AV ─────────────────────────────────────
+print("\n— Catalogue")
+check("packs: core, av, vic_rental, qld_electrical, electrical_general — qld_smoke is gone",
+      {r[0] for r in su("select id from public.packs")}
+      == {"core", "av", "vic_rental", "qld_electrical", "electrical_general"})
+wf = {r[0]: r[1:] for r in su("select id, pack_id, default_interval_months, interval_fixed from public.workflows")}
+check("qld_electrical: the smoke alarm check (12, fixed) and the new electrical check (24, adjustable)",
+      wf["qld_smoke_alarm"] == ("qld_electrical", 12, True) and wf["qld_electrical_safety"] == ("qld_electrical", 24, False))
+check("electrical_general: electrical_safety (24) and smoke_alarm_check (12), both adjustable",
+      wf["electrical_safety"] == ("electrical_general", 24, False)
+      and wf["smoke_alarm_check"] == ("electrical_general", 12, False))
+check("only the three intervals the law sets are fixed",
+      {k for k, v in wf.items() if v[2]} == {"vic_electrical_safety", "vic_smoke_alarm", "qld_smoke_alarm"})
+NP = user("no-pack@test")
+refused("a new provider team must say which pack it starts with — no silent AV", NP,
+        "select public.create_organisation('No Pack', 'provider')", contains="Choose the pack")
+refused("…a blank pack is no pack", NP,
+        "select public.create_organisation('No Pack', 'provider', '  ')", contains="Choose the pack")
+check("…and nothing was created", su("select count(*) from public.teams where name = 'No Pack'")[0][0] == 0)
+TEP = one(NP, "select id from public.create_organisation('Baseline Sparks', 'provider', 'electrical_general')")
+check("an electrician outside VIC and QLD starts on electrical_general",
+      su("select pack_id from public.team_packs where team_id = %s", [TEP]) == [("electrical_general",)])
+
+# ── M. seat races ──────────────────────────────────────────────────────────
+print("\n— Seat races")
+SO = user("seats-owner@test")
+TSR, TSR_CODE = act(SO, "select id, invite_code from public.create_organisation('Last Seat', 'provider', 'av')")[0]
+su("update public.subscriptions set plan = 'pro', seats = 2 where team_id = %s", [TSR])
+inv_bee = act(SO, "select id, token, invitee_name from public.create_invite(%s, 'bee@seats.test', 'Bee Smith')", [TSR])[0]
+check("an invitation carries the invitee's name", inv_bee[2] == "Bee Smith")
+CODER = user("coder@seats.test")
+joined = one(CODER, "select public.join_team(%s)", [TSR_CODE])
+check("someone joining with the team code takes the last seat",
+      joined.get("status") == "joined" and joined.get("id") == str(TSR), json.dumps(joined))
+BEE = user("bee@seats.test")
+res = one(BEE, "select public.accept_invite(%s)", [inv_bee[1]])
+check("the invitee who arrives second gets {status: full}, not an error",
+      res.get("status") == "full" and "id" not in res, json.dumps(res))
+inv = su("select cancelled_at is not null, cancel_reason, accepted_at from public.team_invites where id = %s", [inv_bee[0]])[0]
+check("…their invitation is cancelled, reason no_seats", inv[0] and inv[1] == "no_seats" and inv[2] is None, str(inv))
+check("…and they are not in the team",
+      su("select count(*) from public.team_members where team_id = %s and user_id = %s", [TSR, BEE])[0][0] == 0)
+notes = act(SO, "select kind, payload from public.team_notices where team_id = %s", [TSR])
+check("the owner gets a notice naming them",
+      len(notes) == 1 and notes[0][0] == "invite_cancelled_no_seats"
+      and notes[0][1]["name"] == "Bee Smith" and notes[0][1]["email"] == "bee@seats.test", str(notes))
+check("a plain member does not see notices", one(CODER, "select count(*) from public.team_notices") == 0)
+act(SO, "update public.team_notices set read_at = now() where team_id = %s", [TSR])
+check("an owner marks a notice read",
+      su("select read_at is not null from public.team_notices where team_id = %s", [TSR])[0][0])
+refused("…but cannot change anything else on it", SO,
+        "update public.team_notices set kind = 'x' where team_id = %s", [TSR], sqlstate="42501")
+refused("nobody writes notices directly", SO,
+        "insert into public.team_notices (team_id, kind) values (%s, 'fake')", [TSR], sqlstate="42501")
+check("the invitation link now says it was cancelled",
+      act(None, "select cancelled from public.invite_preview(%s)", [inv_bee[1]]) == [(True,)])
+refused("trying it again says the team is full", BEE, "select public.accept_invite(%s)", [inv_bee[1]],
+        contains="This team is full. Ask the person who invited you.")
+LATE = user("late@seats.test")
+check("joining a full team by code returns {status: full}, with nobody to notify",
+      one(LATE, "select public.join_team(%s)", [TSR_CODE]).get("status") == "full"
+      and su("select count(*) from public.team_notices where team_id = %s", [TSR])[0][0] == 1)
+refused("clients cannot insert invitations directly", SO,
+        "insert into public.team_invites (team_id, email) values (%s, 'direct@seats.test')", [TSR], sqlstate="42501")
+refused("…or un-cancel one", SO,
+        "update public.team_invites set cancelled_at = null where team_id = %s", [TSR], sqlstate="42501")
+refused("the shared seat check is not callable by clients", SO,
+        "select public.claim_seat(%s, %s)", [TSR, inv_bee[0]], sqlstate="42501")
+
+su("update public.subscriptions set seats = 3 where team_id = %s", [TSR])
+tok_eve = one(SO, "select token from public.create_invite(%s, 'eve@seats.test', 'Eve Jones')", [TSR])
+su("update public.subscriptions set seats = 2 where team_id = %s", [TSR])   # seats lowered after it went out
+EVE = user("eve@seats.test", invite_token=tok_eve)
+check("confirming an email into a team that has filled up adds nobody, and the sign-up still succeeds",
+      su("select count(*) from auth.users where id = %s", [EVE])[0][0] == 1
+      and su("select count(*) from public.team_members where team_id = %s and user_id = %s", [TSR, EVE])[0][0] == 0)
+check("…the invitation is cancelled and the notice names Eve",
+      su("select cancel_reason from public.team_invites where token = %s", [tok_eve])[0][0] == "no_seats"
+      and su("select count(*) from public.team_notices where team_id = %s and payload->>'name' = 'Eve Jones'",
+             [TSR])[0][0] == 1)
+su("update public.subscriptions set seats = 5 where team_id = %s", [TSR])
+tok_fay = one(SO, "select token from public.create_invite(%s, 'fay@seats.test')", [TSR])
+FAY = user("fay@seats.test")
+res = one(FAY, "select public.accept_invite(%s)", [tok_fay])
+check("with a seat free, accept_invite still returns the team's id and name (all today's app reads)",
+      res.get("status") == "joined" and res.get("id") == str(TSR) and res.get("name") == "Last Seat", json.dumps(res))
+tok_gus = one(SO, "select token from public.create_invite(%s, 'gus@seats.test')", [TSR])
+GUS = user("gus@seats.test", invite_token=tok_gus)
+check("…and confirming an email from an invitation still adds the person",
+      su("select count(*) from public.team_members where team_id = %s and user_id = %s", [TSR, GUS])[0][0] == 1)
+
+# ── N. regular PM visits ───────────────────────────────────────────────────
+print("\n— Regular intervals")
+PO = user("pm-owner@test")
+TPM = one(PO, "select id from public.create_organisation('Regular AV', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [TPM])
+PM_MEMBER = user("pm-member@test")
+act(PM_MEMBER, "select public.join_team(%s)", [su("select invite_code from public.teams where id = %s", [TPM])[0][0]])
+ACME, P1 = add_site(PO, TPM, "Acme", "Ann", "ann@acme.test")   # gets a PM visit
+P2 = add_location(PO, TPM, ACME, "2 Acme St")                   # never visited
+BOLT, P3 = add_site(PO, TPM, "Bolt")                            # another client
+start_visit(PO, TPM, P1, "maintenance", completed=True)
+check("with no interval set, a PM visit starts no schedule (AV PM has no default)",
+      su("select count(*) from public.compliance_items where team_id = %s", [TPM])[0][0] == 0)
+refused("a plain member cannot set the interval", PM_MEMBER,
+        "select public.set_workflow_interval(%s, 'maintenance', null, 3)", [TPM], contains="owner or admin")
+refused("an interval fixed by law cannot be changed", PO,
+        "select public.set_workflow_interval(%s, 'vic_smoke_alarm', null, 6)", [TPM], contains="set by law")
+refused("another team's client is refused", PO,
+        "select public.set_workflow_interval(%s, 'maintenance', %s, 6)", [TPM, CA], contains="not in this team")
+refused("nobody writes intervals directly", PO,
+        "insert into public.workflow_intervals (team_id, workflow_id, interval_months) values (%s, 'maintenance', 1)",
+        [TPM], sqlstate="42501")
+
+
+def pm_items():
+    return {r[0]: r[1:] for r in su("""select location_id, next_due_on, interval_months, active
+                                         from public.compliance_items
+                                        where team_id = %s and obligation = 'maintenance'""", [TPM])}
+
+
+act(PO, "select public.set_workflow_interval(%s, 'maintenance', null, 3)", [TPM])
+items = pm_items()
+check("a team default of 3 months gives every site an item", set(items) == {P1, P2, P3}, str(items))
+check("…the visited site is due 3 months after its PM visit", items[P1] == (months_after(today, 3), 3, True), str(items[P1]))
+check("…and the others have no due date yet", items[P2][0] is None and items[P3][0] is None)
+act(PO, "select public.set_workflow_interval(%s, 'maintenance', %s, 6)", [TPM, ACME])
+items = pm_items()
+check("a client's own interval recalculates that client's sites", items[P1] == (months_after(today, 6), 6, True), str(items[P1]))
+check("…and leaves other clients on the team default", items[P3][1] == 3)
+act(PO, "select public.set_workflow_interval(%s, 'maintenance', null, 4)", [TPM])
+check("changing the team default leaves the client's own interval alone",
+      pm_items()[P1][1] == 6 and pm_items()[P3][1] == 4)
+act(PO, "select public.set_workflow_interval(%s, 'maintenance', %s, null)", [TPM, ACME])
+check("'use team default' puts the client back on it, due dates and all",
+      pm_items()[P1][:2] == (months_after(today, 4), 4))
+check("members read the intervals; other teams do not",
+      one(PM_MEMBER, "select count(*) from public.workflow_intervals") == 1
+      and one(X, "select count(*) from public.workflow_intervals") == 0)
+P4 = add_location(PO, TPM, BOLT, "4 Bolt St")
+start_visit(PO, TPM, P4, "maintenance", completed=True)
+check("a site added later joins the schedule on its first PM visit", pm_items()[P4][:2] == (months_after(today, 4), 4))
+
+# ── O. the Due page ────────────────────────────────────────────────────────
+print("\n— Due list")
+act(PO, "insert into public.assets (team_id, location_id, asset_type, label, expires_on) values (%s, %s, 'smoke_alarm', 'Hall', %s)",
+    [TPM, P2, today + timedelta(days=40)])
+act(PO, "insert into public.assets (team_id, location_id, asset_type, label, expires_on) values (%s, %s, 'smoke_alarm', 'Far off', %s)",
+    [TPM, P2, today + timedelta(days=400)])
+act(PO, """insert into public.assets (team_id, location_id, asset_type, label, expires_on, removed_at)
+           values (%s, %s, 'smoke_alarm', 'Replaced', %s, now())""", [TPM, P2, today + timedelta(days=10)])
+su("update public.compliance_items set next_due_on = %s where location_id = %s", [today - timedelta(days=5), P4])
+due = act(PO, "select kind, due_on, location_id, label, client_name, contact_name, address from public.due_list(%s)", [TPM])
+kinds = {(r[0], r[2]) for r in due}
+check("an overdue check is listed, first", due and due[0][0] == "overdue" and due[0][2] == P4, str(due))
+check("sites on the regular interval with no PM visit yet are 'not done yet'",
+      ("not_done_yet", P2) in kinds and ("not_done_yet", P3) in kinds)
+check("a check due beyond 60 days is not listed", not any(r[2] == P1 for r in due))
+check("an alarm expiring within 3 months is listed; a far-off one and a replaced one are not",
+      [r[3] for r in due if r[0] == "expiring"] == ["Hall"])
+check("each row carries its client, contact and address",
+      any(r[4] == "Acme" and r[5] == "Ann" and r[6] == "2 Acme St" for r in due))
+check("a wider window brings the later check in",
+      any(r[2] == P1 for r in act(PO, "select kind, due_on, location_id from public.due_list(%s, 200)", [TPM])))
+check("members see the same list; other teams see nothing",
+      len(act(PM_MEMBER, "select * from public.due_list(%s)", [TPM])) == len(due)
+      and act(X, "select * from public.due_list(%s)", [TPM]) == [])
+refused("anonymous callers cannot read it", None, "select * from public.due_list(%s)", [TPM], sqlstate="42501")
+su("update public.compliance_items set active = false where location_id = %s and obligation = 'maintenance'", [P3])
+check("a check switched off for a site stays off the list",
+      not any(r[2] == P3 for r in act(PO, "select kind, due_on, location_id from public.due_list(%s)", [TPM])))
+act(PO, "select public.set_workflow_interval(%s, 'maintenance', null, null)", [TPM])
+check("removing the team default switches every PM item off, and 'not done yet' goes with it",
+      su("select count(*) from public.compliance_items where team_id = %s and obligation = 'maintenance' and active",
+         [TPM])[0][0] == 0
+      and not any(r[0] == "not_done_yet" for r in act(PO, "select kind, due_on from public.due_list(%s)", [TPM])))
+
+_, EG_L = add_site(NP, TEP, "Gum")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [TEP])
+start_visit(NP, TEP, EG_L, "electrical_safety", completed=True)
+eg = lambda: su("select interval_months, next_due_on, active from public.compliance_items where location_id = %s", [EG_L])[0]
+check("electrical_safety starts on its own 24-month default", eg()[0] == 24)
+act(NP, "select public.set_workflow_interval(%s, 'electrical_safety', null, 36)", [TEP])
+check("a team default of 36 months applies to it", eg()[:2] == (36, months_after(today, 36)))
+act(NP, "select public.set_workflow_interval(%s, 'electrical_safety', null, null)", [TEP])
+check("removing it falls back to 24 months and keeps the check on", eg() == (24, months_after(today, 24), True))
+
+# ── P. reminder switches and the opt-out link ──────────────────────────────
+print("\n— Reminders")
+act(PO, "update public.team_settings set reminders_enabled = false where team_id = %s", [TPM])
+check("an owner switches the whole team's reminders off",
+      su("select reminders_enabled from public.team_settings where team_id = %s", [TPM])[0][0] is False)
+act(PO, "update public.team_settings set reminders_enabled = true where team_id = %s", [TPM])
+act(PM_MEMBER, "update public.team_settings set reminders_enabled = false where team_id = %s", [TPM])
+check("a plain member cannot", su("select reminders_enabled from public.team_settings where team_id = %s", [TPM])[0][0] is True)
+act(PM_MEMBER, "update public.clients set reminders_enabled = false where id = %s", [BOLT])
+act(PM_MEMBER, "update public.compliance_items set reminders_enabled = false where location_id = %s", [P4])
+check("a member switches one client, and one check, off",
+      su("select reminders_enabled from public.clients where id = %s", [BOLT])[0][0] is False
+      and su("select reminders_enabled from public.compliance_items where location_id = %s", [P4])[0][0] is False)
+
+opt_item, opt_tok = su("""select id, reminder_token from public.compliance_items
+                           where location_id = %s and obligation = 'vic_electrical_safety'""", [LOCS[0]])[0]
+r = act(None, "select provider, address, suburb from public.reminder_opt_out(%s)", [opt_tok])
+check("'No longer needed' works without signing in and returns only the business name and address",
+      r == [("Sparky Electrical", "10 Smith St", "Richmond")], str(r))
+row = su("select reminders_enabled, opted_out_at is not null, opted_out_via from public.compliance_items where id = %s",
+         [opt_item])[0]
+check("…switches that check's reminders off and records how", tuple(row) == (False, True, "email_link"), str(row))
+n = act(A, "select payload from public.team_notices where team_id = %s and kind = 'reminder_opt_out'", [TA])
+check("…and tells the electrician who and where",
+      len(n) == 1 and n[0][0]["contact_name"] == "Jane" and n[0][0]["address"] == "10 Smith St", str(n))
+act(None, "select * from public.reminder_opt_out(%s)", [opt_tok])
+check("clicking it twice tells them once",
+      su("select count(*) from public.team_notices where team_id = %s and kind = 'reminder_opt_out'", [TA])[0][0] == 1)
+check("an unknown token returns nothing", act(None, "select * from public.reminder_opt_out(%s)", [uuid.uuid4()]) == [])
+su("update public.team_settings set company = %s where team_id = %s",
+   [json.dumps({"name": "Sparky Electrical Pty Ltd"}), TA])
+check("the business name from the company details comes first",
+      act(None, "select provider from public.reminder_opt_out(%s)", [opt_tok]) == [("Sparky Electrical Pty Ltd",)])
+
+# ── Q. checks entered by hand ──────────────────────────────────────────────
+print("\n— Hand-entered checks")
+_, GAS_L = add_site(J, TJ, "Gas")
+gas = one(J, """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on)
+               values (%s, %s, 'gas_safety', 'Gas safety check', 24, '2026-03-01') returning id""", [TJ, GAS_L])
+gas_row = lambda: su("select next_due_on, last_reminded_at from public.compliance_items where id = %s", [gas])[0]
+check("a gas check recorded as done on 1 March 2026 is next due 1 March 2028", gas_row()[0] == date(2028, 3, 1))
+su("update public.compliance_items set last_reminded_at = now() where id = %s", [gas])
+act(J, "update public.compliance_items set last_done_on = '2026-09-01' where id = %s", [gas])
+check("a newer date done moves the due date on and restarts the reminders", gas_row() == (date(2028, 9, 1), None))
+act(J, "update public.compliance_items set interval_months = 12 where id = %s", [gas])
+check("a new interval moves the due date too", gas_row()[0] == date(2027, 9, 1))
+act(J, "update public.compliance_items set last_done_on = '2026-10-01', next_due_on = '2027-06-30' where id = %s", [gas])
+check("a due date typed in the same change is kept as typed", gas_row()[0] == date(2027, 6, 30))
+
+# ── R. report links, and the sign-off on the report ────────────────────────
+print("\n— Report links and sign-off")
+RO = user("signer@test")
+TRO = one(RO, "select id from public.create_organisation('Signed Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [TRO])
+act(RO, "update public.member_prefs set licence_number = 'REC-123' where team_id = %s and user_id = %s", [TRO, RO])
+check("a technician records their own licence number",
+      su("select licence_number from public.member_prefs where team_id = %s and user_id = %s", [TRO, RO])[0][0] == "REC-123")
+_, RL = add_site(RO, TRO, "Willow", "Kim", "kim@landlord.test")
+RV = start_visit(RO, TRO, RL, "vic_electrical_safety")
+refused("a signature over 50 KB is refused", RO, "update public.visits set signoff = %s where id = %s",
+        [json.dumps({"signature": "M" + "0" * 52000}), RV], sqlstate="23514")
+refused("a sign-off has to be an object", RO, "update public.visits set signoff = '\"Sam\"' where id = %s", [RV],
+        sqlstate="23514")
+SIGNOFF = {"technician": "Sam Sparks", "licence_number": "REC-123",
+           "signed_at": "2026-10-27T01:00:00Z", "signature": "M0 0 L10 10"}
+act(RO, "update public.visits set signoff = %s, completed_at = now(), outcome = 'compliant' where id = %s",
+    [json.dumps(SIGNOFF), RV])
+RD, RTOK, RSNAP = act(RO, "select id, token, snapshot from public.send_report(%s, 'kim@landlord.test', %s)",
+                      [RV, json.dumps({"signoff": {"technician": "Forged"}, "summary": "All good"})])[0]
+check("the visit's sign-off reaches the delivered report, over anything the app sent",
+      RSNAP["signoff"] == SIGNOFF and RSNAP["summary"] == "All good", str(RSNAP.get("signoff")))
+check("the link's public view lasts 90 days",
+      su("select link_expires_at::date - sent_at::date from public.report_deliveries where id = %s", [RD])[0][0] == 90)
+pv = act(None, "select status, workflow, provider, snapshot from public.report_preview(%s)", [RTOK])
+check("a fresh link shows the report (status ok)",
+      pv and pv[0][0] == "ok" and pv[0][1] == "Electrical safety check" and pv[0][3]["signoff"] == SIGNOFF, str(pv))
+su("update public.report_deliveries set link_expires_at = now() - interval '1 minute' where id = %s", [RD])
+pv = act(None, """select status, workflow, provider, completed_on, outcome, site, snapshot, has_file
+                    from public.report_preview(%s)""", [RTOK])
+check("after 90 days it shows only who sent it (status expired), so the landlord can ask them",
+      pv and pv[0][0] == "expired" and pv[0][2] == "Signed Sparks"
+      and pv[0][1] is None and all(v is None for v in pv[0][3:]), str(pv))
+refused("another team cannot send it again", X, "select public.resend_report(%s)", [RD], contains="not sent by your team")
+RTOK2 = one(RO, "select token from public.resend_report(%s)", [RD])
+check("'Send again' issues a new link", RTOK2 is not None and RTOK2 != RTOK)
+check("…the old link stops working at once", act(None, "select status from public.report_preview(%s)", [RTOK]) == [])
+check("…and the new one shows the report for another 90 days",
+      act(None, "select status from public.report_preview(%s)", [RTOK2]) == [("ok",)]
+      and su("select link_expires_at > now() + interval '89 days' from public.report_deliveries where id = %s", [RD])[0][0])
+su("update public.report_deliveries set link_expires_at = now() - interval '1 minute' where id = %s", [RD])
+KIM = user("kim@landlord.test")
+TK = one(KIM, "select id from public.create_organisation('Kim''s rentals', 'landlord')")
+act(KIM, "select public.claim_report(%s, %s)", [RTOK2, TK])
+check("saving the report still works after the link has expired",
+      su("select recipient_team_id from public.report_deliveries where id = %s", [RD])[0][0] == TK)
+check("once saved, the link asks for a sign-in instead of showing it (status saved)",
+      act(None, "select status, provider, snapshot from public.report_preview(%s)", [RTOK2])
+      == [("saved", "Signed Sparks", None)])
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)
