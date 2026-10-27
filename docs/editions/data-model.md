@@ -84,11 +84,22 @@ All additive, all with defaults, so every existing row reads exactly as before.
 |---|---|---|
 | `teams` | `account_type` provider · landlord · agency | which side of a delivery a team is on. Column-locked: the app can still rename and describe a team and nothing else |
 | `visits.kind`, `team_templates.kind` | CHECK list → foreign key to `workflows` | the next state's rules is one INSERT, not an ALTER |
-| `clients` | `contact_name`, `contact_email`, `contact_phone` | who gets the report and the re-check reminder |
+| `teams` | `import_open_until`, `import_used_at` | the owner's one-time window for importing older work |
+| `team_invites` | `invitee_name`, `cancelled_at`, `cancel_reason` | the notice can name who lost the last seat |
+| `clients` | `contact_name`, `contact_email`, `contact_phone`, `reminders_enabled` | who gets the report and the re-check reminder, and whether they get reminders |
+| `team_settings` | `reminders_enabled` | reminders off for the whole team (admins) |
+| `member_prefs` | `licence_number` | each technician's licence, printed on reports |
 | `locations` | `site_type` commercial · residential, `is_rental` | which rules apply |
 | `rooms` | `room_type` (`bedroom`, `hallway`, `meter_box`, …) | switch on the right sections; check alarm coverage |
-| `visits` | `site_results`, `outcome` compliant · non_compliant | once-per-visit sections; the certificate's verdict, declared at sign-off |
+| `visits` | `site_results`, `outcome` compliant · non_compliant, `signoff` | once-per-visit sections; the certificate's verdict, declared at sign-off; who signed, their licence and signature, kept with the visit |
 | `visit_rooms` | `readings` | measured values beside PASS/FAIL, keyed like `results` |
+
+**Where results live** (no column changes, all jsonb): an ordinary section is
+`results[sectionId][testId]`; a section repeated for each item (each RCD, each
+smoke alarm) is `results[sectionId][assetId][testId]`, in `visit_rooms` for a
+room and in `visits.site_results` for the whole site. Readings follow the same
+paths as `{ value, unit }`. The template snapshot records each section's scope,
+so a reader knows which shape it is.
 
 ## New tables
 
@@ -108,10 +119,11 @@ All additive, all with defaults, so every existing row reads exactly as before.
 
 | Table | Holds |
 |---|---|
-| `assets` | equipment at a site, optionally in a room. `attributes` jsonb for pack fields (alarm sensor, power source, interconnected…). Removed, never deleted |
-| `compliance_items` | one row per site per obligation: interval, last done, next due, reminder lead time. Provider side = re-check pipeline; landlord side = tracker (incl. hand-entered ones like a gas check) |
+| `assets` | equipment at a site, optionally in a room. `attributes` jsonb for pack fields (alarm sensor, power source, interconnected…). Removed, never deleted. `expiry_reminded_at` for the reminder job |
+| `compliance_items` | one row per site per obligation: interval, last done, next due, reminder lead time, reminder switch and opt-out token. Provider side = re-check pipeline; landlord side = tracker (incl. hand-entered ones like a gas check, whose next due date the database works out) |
+| `workflow_intervals` | a team's chosen interval for a workflow it may set: one team default, plus per-client overrides. Written only by `set_workflow_interval()` |
 | `attachments` | photo evidence against a test (Pro) |
-| `report_deliveries` | a sent report: frozen snapshot, file, recipient email, link token, where it was filed |
+| `report_deliveries` | a sent report: frozen snapshot (with the sign-off), file, recipient email, link token and its 90-day expiry, where it was filed |
 | `site_links` | "provider's site X is landlord's property Y", so later reports file themselves |
 
 Storage: two private buckets, one folder per team — `evidence/<team_id>/…` and
@@ -162,11 +174,16 @@ publishable key in the bundle. Anything React hides, the REST API still answers.
 | `create_organisation(name, account_type, pack_id)` | anyone signed in | the new onboarding; wraps `create_team()` |
 | `choose_starter_pack(team, pack)` | owner/admin | pick or swap the starter |
 | `team_entitlements(team)` | members | plan, limits, usage, packs, `enforced` — for upgrade prompts and nav |
-| `send_report(visit, email, snapshot, file_path)` | provider members | records a delivery; address and provider name come from the DB, not the client |
-| `report_preview(token)` | anyone with the link | what the landlord sees before signing up |
-| `claim_report(token, team)` | the addressee only | saves into their landlord/agency team; auto-files when the address matches |
+| `open_import_window(team)` | owner | opens the one-time, 15-minute window for importing older work |
+| `send_report(visit, email, snapshot, file_path)` | provider members | records a delivery; address, provider name and sign-off come from the DB, not the client |
+| `report_preview(token)` | anyone with the link | `status` ok · expired · saved; content only while ok, else just the provider's name |
+| `resend_report(delivery)` | provider members | "Send again": a new token and 90 days; the old link stops working |
+| `claim_report(token, team)` | the addressee only | saves into their landlord/agency team; auto-files when the address matches; works after the link expires |
 | `file_report(delivery, location)` | recipient members | files an unfiled report under a property |
 | `revoke_report(delivery)` | provider members | withdraws a report until it's claimed |
+| `due_list(team, within_days, expiry_months)` | members | the Due page: overdue, due soon, "not done yet" sites on a regular interval, and alarms expiring |
+| `set_workflow_interval(team, workflow, client, months)` | owner/admin | regular intervals (team default or per client); refuses intervals fixed by law; recalculates due dates |
+| `reminder_opt_out(token)` | anyone with the link | a reminder's "No longer needed": switches that check's reminders off and tells the provider |
 
 Today's `create_team()` keeps working untouched: a team made that way gets Free
 with AV as its starter, which is what today's AV-only screens expect.
