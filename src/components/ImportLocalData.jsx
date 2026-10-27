@@ -24,21 +24,23 @@ const Check = ({ checked, onChange, label, hint }) => (
 /**
  * Offers to copy this browser's data into the signed-in team.
  *
- * Shown only when there is something to copy, a backend to copy it to, and no
- * record of having already done it for this team. It writes into a SHARED
- * team, so it is opt-in, itemised and confirmed — never something that happens
- * because a browser had data in it.
+ * Shown only to the team's owner, when there is something to copy, a backend to
+ * copy it to, and no record of having already done it for this team. It writes
+ * into a SHARED team, so it is opt-in, itemised and confirmed — never something
+ * that happens because a browser had data in it. Owner only because older
+ * visits need the team's one-time import window, which only the owner opens.
  */
 export default function ImportLocalData() {
   const { user } = useAuth()
-  const { team, isAdmin } = useTeam()
+  const { team, isOwner } = useTeam()
   const [summary] = useState(() => localSummary())
   const [want, setWant] = useState({ clients: true, settings: true, templates: true })
   const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [report, setReport] = useState(null)
 
-  const offer = adapterName() === 'supabase' && summary.anything && !alreadyImported(team?.id)
+  const offer =
+    adapterName() === 'supabase' && isOwner && summary.anything && !alreadyImported(team?.id)
   if (!offer && !report) return null
 
   async function run() {
@@ -80,9 +82,19 @@ export default function ImportLocalData() {
                   </ul>
                 </>
               )}
+              {report.importWindow === 'used' && (
+                <p className="mt-2">
+                  This team has already used its one-time import, so visits older than 7 days
+                  could not come in.
+                </p>
+              )}
               <p className="mt-2">
-                Nothing was removed from this device, so you can run it again if something is
-                missing.
+                Nothing was removed from this device.
+                {report.importWindow === 'open'
+                  ? ' If something is missing, you can run it again within 15 minutes.'
+                  : report.importWindow === 'used'
+                    ? ''
+                    : ' If something is missing, you can run it again.'}
               </p>
             </Notice>
           )}
@@ -107,11 +119,7 @@ export default function ImportLocalData() {
                 checked={want.settings}
                 onChange={v => setWant({ ...want, settings: v })}
                 label="Company details and branding"
-                hint={
-                  isAdmin
-                    ? 'Replaces the team’s current company details, logos and plate colour.'
-                    : 'Only an admin can change these — this part will be refused.'
-                }
+                hint="Replaces the team’s current company details, logos and plate colour."
               />
             )}
             {summary.hasTemplates && (
@@ -119,11 +127,7 @@ export default function ImportLocalData() {
                 checked={want.templates}
                 onChange={v => setWant({ ...want, templates: v })}
                 label="Test lists"
-                hint={
-                  isAdmin
-                    ? 'Replaces the team’s current lists, including any edits made since.'
-                    : 'Only an admin can change these — this part will be refused.'
-                }
+                hint="Replaces the team’s current lists, including any edits made since."
               />
             )}
           </div>
@@ -152,6 +156,12 @@ export default function ImportLocalData() {
               ' The company details and test lists you selected will replace the team’s current ones.'}
           </p>
           <p className="mt-2">Nothing is removed from this device.</p>
+          {want.clients && summary.visits > 0 && (
+            <p className="mt-2">
+              Visits older than 7 days can only come in now: this opens the team’s one-time
+              import, which stays open for 15 minutes.
+            </p>
+          )}
         </ConfirmDialog>
       )}
     </section>

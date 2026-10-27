@@ -68,7 +68,8 @@ erDiagram
 |---|---|---|
 | **#6 AV maintenance** (today) | `av`: `maintenance`, `commissioning` | unchanged; optional `compliance_items` for contract cadence (e.g. quarterly PM) |
 | **#1 VIC rental safety checks** | `vic_rental`: `vic_electrical_safety` (every 24 months), `vic_smoke_alarm` (every 12) | `visits.site_results` (switchboard, RCDs), `visit_rooms.readings` (measured values), `assets` (RCDs, alarms), `compliance_items` (re-check list), `report_deliveries` |
-| **#2 QLD smoke alarms** | `qld_smoke`: `qld_smoke_alarm` (every 12) | `rooms.room_type` (every bedroom/hallway covered?), `assets.expires_on` (10-year replacement), `compliance_items` |
+| **#2 QLD electrical and smoke alarms** | `qld_electrical`: `qld_smoke_alarm` (every 12, fixed), `qld_electrical_safety` (every 24, adjustable) | `rooms.room_type` (every bedroom/hallway covered?), `assets.expires_on` (10-year replacement), `compliance_items` |
+| **Electrical baseline** (states without their own pack) | `electrical_general`: `electrical_safety` (every 24, adjustable), `smoke_alarm_check` (every 12, adjustable) | as VIC |
 | **#3 Landlord side** | none — landlords and agencies don't inspect | `teams.account_type`, `report_deliveries`, `site_links`, their own `locations` + `compliance_items` as the tracker |
 | **Free vs Pro** | — | `subscriptions`, `team_packs`, `team_usage`, `app_settings` |
 | **Custom lists** | `core`, which every team has | unchanged |
@@ -95,12 +96,13 @@ All additive, all with defaults, so every existing row reads exactly as before.
 
 | Table | Holds | Who writes |
 |---|---|---|
-| `packs` | `core`, `av`, `vic_rental`, `qld_smoke` | migration only |
+| `packs` | `core`, `av`, `vic_rental`, `qld_electrical`, `electrical_general` | migration only |
 | `workflows` | each workflow, its pack, its recurrence in months | migration only |
 | `subscriptions` | one per team: plan, status, seats, monthly allowance, Stripe ids | Stripe webhook (service role) only |
 | `team_packs` | which packs a team has: one `starter`, plus `addon` / `comped` | `choose_starter_pack()`, webhook |
 | `team_usage` | inspections started per month (a counter: deleting visits doesn't refund) | trigger |
 | `app_settings` | one switch: `enforce_limits` | you, in the SQL editor |
+| `team_notices` | things owners and admins need to be told, such as an invitation cancelled because the seats ran out | functions and the webhook only; admins mark them read |
 
 **0007 — field data and delivery**
 
@@ -128,6 +130,12 @@ update public.app_settings set enforce_limits = true;
 
 Until then nobody can pay, and `tests/rls.mjs` joins a second person to a
 brand-new team — both would hit a one-seat Free plan.
+
+Visit dates are the exception: they are checked from the start. Whenever a
+visit's start or completion date is written — on insert, or changed later — it
+must be within the last 7 days (and no more than an hour ahead), and visits are
+counted in the server's month, not the device's. Older work comes
+in once, through the owner's 15-minute import window (`open_import_window()`).
 
 | | Free | Pro | Enforced by |
 |---|---|---|---|
@@ -172,7 +180,7 @@ Superseded by `build-plan.md`, which replaces this list. Kept for reference.
 Roughly in build order. Each item is small because the shapes above already exist.
 
 1. **Pack definitions in code.** Split `src/data/testLists.js` into
-   `src/data/packs/{av,vic_rental,qld_smoke}.js`. Each exports its workflows,
+   `src/data/packs/{av,vic_rental,qld_electrical}.js`. Each exports its workflows,
    their page config (like `PreventativeMaintenance.jsx`), and template seeds.
    `templateStore.seed(kind)` looks the kind up instead of the current if/else.
    Test lists stay in code — never in SQL (see the note in 0001).
@@ -212,8 +220,8 @@ Roughly in build order. Each item is small because the shapes above already exis
 13. **Tests.** Extend `tests/rls.mjs` with the cross-team boundaries;
     `docs/editions/test/` has the SQL-level suite to keep green.
 
-If you want a shot at Queensland's 1 January 2027 deadline, build `qld_smoke`
-first: it needs no measurement fields, so steps 2 (`measure`), 5 (readings) and
+If you want a shot at Queensland's 1 January 2027 deadline, build `qld_electrical`'s
+smoke alarm check first: it needs no measurement fields, so steps 2 (`measure`), 5 (readings) and
 the site step can wait. Treat it as a bonus — annual testing carries on after.
 
 ## Rollout
@@ -237,6 +245,6 @@ the site step can wait. Treat it as a bonus — annual testing carries on after.
 ## Known limits of this draft
 
 - One recipient per report. Forwarding (agency → owner) isn't modelled yet.
-- Backdating `started_at` through the API dodges the monthly count; the UI can't.
+- A device offline for more than 7 days can't save the visits it started: dates older than that are refused outside the owner's one-time import window.
 - Reopening a completed visit doesn't roll back a due date.
 - Branding is only a soft gate while reports are generated in the browser.

@@ -123,7 +123,7 @@ check("re-run did not duplicate packs", su("select count(*) from public.team_pac
 
 v6 = su("""select (select count(*) from public.packs), (select count(*) from public.workflows),
                   (select count(*) from pg_constraint where conname in ('visits_kind_fkey','team_templates_kind_fkey'))""")[0]
-check("catalogue: 4 packs, 6 workflows, both kind FKs", tuple(v6) == (4, 6, 2), str(v6))
+check("catalogue: 5 packs, 9 workflows, both kind FKs", tuple(v6) == (5, 9, 2), str(v6))
 
 # ── A. the team that existed before ────────────────────────────────────────
 print("\n— Legacy team")
@@ -203,6 +203,8 @@ check("a refused start does not use up allowance",
 
 last_year = datetime.now(timezone.utc) - timedelta(days=400)
 OLDV = uuid.uuid4()
+# Older work only comes in through the owner's one-time import window.
+act(A, "select public.open_import_window(%s)", [TA])
 act(A, """insert into public.visits (id, team_id, location_id, kind, started_at, completed_at)
           values (%s, %s, %s, 'vic_smoke_alarm', %s, %s)""", [OLDV, TA, LOCS[1], last_year, last_year])
 check("an imported visit from last year is history, not usage",
@@ -218,12 +220,12 @@ refused("nobody can change a team's account type from the app", A,
         "update public.teams set account_type = 'agency' where id = %s", [TA], sqlstate="42501")
 
 refused("starter pack cannot be swapped once there is work under it", A,
-        "select public.choose_starter_pack(%s, 'qld_smoke')", [TA], contains="cannot be swapped", sqlstate="PT402")
+        "select public.choose_starter_pack(%s, 'qld_electrical')", [TA], contains="cannot be swapped", sqlstate="PT402")
 F = user("fresh@test")
 TF = one(F, "select id from public.create_organisation('Fresh Co', 'provider', 'av')")
-act(F, "select public.choose_starter_pack(%s, 'qld_smoke')", [TF])
+act(F, "select public.choose_starter_pack(%s, 'qld_electrical')", [TF])
 check("an unused starter pack can be swapped",
-      su("select pack_id from public.team_packs where team_id = %s", [TF]) == [("qld_smoke",)])
+      su("select pack_id from public.team_packs where team_id = %s", [TF]) == [("qld_electrical",)])
 
 # ── D. compliance clock ────────────────────────────────────────────────────
 print("\n— Re-check dates")

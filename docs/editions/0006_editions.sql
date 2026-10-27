@@ -9,8 +9,9 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 --
 -- Pemcora stops being an AV-only console and becomes one app sold as editions:
--- AV maintenance, Victorian rental safety checks, Queensland smoke alarms, with
--- room for more. Each edition is a PACK of WORKFLOWS. A workflow is what
+-- AV maintenance, Victorian rental safety checks, Queensland electrical and
+-- smoke alarm compliance, and an electrical baseline for every other state,
+-- with room for more. Each edition is a PACK of WORKFLOWS. A workflow is what
 -- `visits.kind` and `team_templates.kind` already were — maintenance,
 -- commissioning, custom — so the existing three simply become the first rows of
 -- a catalogue instead of a hard-coded CHECK list.
@@ -26,6 +27,11 @@
 --
 -- Until then a new sign-up has no way to pay, and tests/rls.mjs joins a second
 -- person to a brand-new team — both would hit a one-seat Free plan otherwise.
+--
+-- One check is not behind the switch, because it is about honest records
+-- rather than money: a visit's start and completion dates must be within the
+-- last 7 days (Gate 1). Older work comes in once, through the owner's import
+-- window, which src/lib/migrate.js opens before importing.
 --
 -- Why the paywall lives here and not in React: Pemcora is a static site with the
 -- publishable key inside the bundle. Anything the UI hides, the REST API still
@@ -53,6 +59,9 @@
 -- recurs. The first time a recurring workflow is completed at a site, 0007
 -- uses it to start that site's re-check clock. AV maintenance has none on
 -- purpose: its cadence is the service contract's, set per site.
+--
+-- interval_fixed marks an interval the law sets. A team can choose its own
+-- cadence for any other workflow, but not for these.
 
 create table if not exists public.packs (
   id    text primary key,
@@ -65,30 +74,39 @@ create table if not exists public.workflows (
   pack_id                 text not null references public.packs(id),
   label                   text not null,
   default_interval_months int check (default_interval_months is null
-                                     or default_interval_months between 1 and 120)
+                                     or default_interval_months between 1 and 120),
+  interval_fixed          boolean not null default false
 );
 
 insert into public.packs (id, label, sort) values
-  ('core',       'Core',                              0),
-  ('av',         'AV maintenance and commissioning',  1),
-  ('vic_rental', 'Victorian rental safety checks',    2),
-  ('qld_smoke',  'Queensland smoke alarm compliance', 3)
+  ('core',               'Core',                                             0),
+  ('av',                 'AV maintenance and commissioning',                 1),
+  ('vic_rental',         'Victorian rental safety checks',                   2),
+  ('qld_electrical',     'Queensland electrical and smoke alarm compliance', 3),
+  ('electrical_general', 'Electrical compliance baseline',                   4)
 on conflict (id) do update set label = excluded.label, sort = excluded.sort;
 
 -- VIC: electrical every 2 years and smoke alarms every 12 months, for every
--- rental from 13 October 2026. QLD: every alarm tested and cleaned at least once
--- every 12 months. Custom lists belong to 'core', which every team has.
-insert into public.workflows (id, pack_id, label, default_interval_months) values
-  ('custom',                'core',       'Custom list',                       null),
-  ('maintenance',           'av',         'Preventative maintenance',          null),
-  ('commissioning',         'av',         'Commissioning',                     null),
-  ('vic_electrical_safety', 'vic_rental', 'Electrical safety check',           24),
-  ('vic_smoke_alarm',       'vic_rental', 'Smoke alarm safety check',          12),
-  ('qld_smoke_alarm',       'qld_smoke',  'Smoke alarm compliance inspection', 12)
+-- rental from 13 October 2026, both fixed by law. QLD: every alarm tested and
+-- cleaned at least once every 12 months, fixed; the electrical check defaults
+-- to 2 years and the team may change it. electrical_general is the baseline
+-- for states without their own pack yet, so nothing in it is fixed. Custom
+-- lists belong to 'core', which every team has.
+insert into public.workflows (id, pack_id, label, default_interval_months, interval_fixed) values
+  ('custom',                'core',               'Custom list',                       null, false),
+  ('maintenance',           'av',                 'Preventative maintenance',          null, false),
+  ('commissioning',         'av',                 'Commissioning',                     null, false),
+  ('vic_electrical_safety', 'vic_rental',         'Electrical safety check',           24,   true),
+  ('vic_smoke_alarm',       'vic_rental',         'Smoke alarm safety check',          12,   true),
+  ('qld_smoke_alarm',       'qld_electrical',     'Smoke alarm compliance inspection', 12,   true),
+  ('qld_electrical_safety', 'qld_electrical',     'Electrical safety check',           24,   false),
+  ('electrical_safety',     'electrical_general', 'Electrical safety check',           24,   false),
+  ('smoke_alarm_check',     'electrical_general', 'Smoke alarm check',                 12,   false)
 on conflict (id) do update
   set pack_id                 = excluded.pack_id,
       label                   = excluded.label,
-      default_interval_months = excluded.default_interval_months;
+      default_interval_months = excluded.default_interval_months,
+      interval_fixed          = excluded.interval_fixed;
 
 -- The CHECK lists from 0001 become foreign keys into the catalogue. Adding the
 -- next state's rules is then one INSERT above, not another ALTER on two tables.
@@ -128,6 +146,11 @@ begin
   end if;
 end $$;
 
+-- The one-time window for importing older work (see Gate 1). Written only by
+-- open_import_window(); the column grant below keeps the app off both.
+alter table public.teams add column if not exists import_open_until timestamptz;
+alter table public.teams add column if not exists import_used_at    timestamptz;
+
 -- teams_update lets an admin PATCH the row, and RLS cannot say which columns.
 -- So the privilege does: an admin renames and describes a team and touches
 -- nothing else. Two locks, as with team_members in 0002. updateTeam() in
@@ -144,9 +167,14 @@ grant update (name, description) on table public.teams to authenticated;
 --   seats               — only while Pro. NULL is unlimited. Free is always 1.
 --   monthly_visit_limit — only while not Pro. NULL is unlimited (a promo).
 --   comped              — not billed: the teams that existed before this file.
+--   past_due_since      — the first failed payment of the current run of them.
+--   cancel_at           — when a cancelled plan stops: the end of the paid period.
 --
--- 'past_due' still counts as Pro. Stripe retries a failed card for days, and a
--- technician on a roof should not lose the app because a bank declined once.
+-- 'past_due' counts as Pro for 7 days from past_due_since. Stripe retries a
+-- failed card for days, and a technician on a roof should not lose the app
+-- because a bank declined once — but nor does a card that never pays keep Pro
+-- for as long as Stripe keeps trying. cancel_at ends Pro on the day itself,
+-- whether or not the webhook that says so has arrived.
 create table if not exists public.subscriptions (
   team_id                uuid primary key references public.teams(id) on delete cascade,
   plan                   text not null default 'free' check (plan in ('free', 'pro')),
@@ -158,6 +186,8 @@ create table if not exists public.subscriptions (
   stripe_customer_id     text,
   stripe_subscription_id text,
   current_period_end     timestamptz,
+  past_due_since         timestamptz,
+  cancel_at              timestamptz,
   updated_at             timestamptz not null default now()
 );
 
@@ -190,6 +220,27 @@ create table if not exists public.team_usage (
 drop trigger if exists subscriptions_set_updated_at on public.subscriptions;
 create trigger subscriptions_set_updated_at before update on public.subscriptions
   for each row execute function public.set_updated_at();
+
+-- The grace clock is the database's, not the webhook's to remember. It starts
+-- the first time a plan goes past due, survives Stripe re-sending past_due on
+-- every retry (an UPDATE that leaves the column alone keeps it), and stops
+-- when the status moves on — a successful payment ends it. The webhook may set
+-- an earlier date itself, from the failed invoice.
+create or replace function public.track_past_due()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.status <> 'past_due' then
+    new.past_due_since := null;
+  elsif new.past_due_since is null then
+    new.past_due_since := now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists subscriptions_track_past_due on public.subscriptions;
+create trigger subscriptions_track_past_due before insert or update on public.subscriptions
+  for each row execute function public.track_past_due();
 
 -- The switch. One row, readable by everybody signed in so the UI can tell
 -- "you would need Pro for this" from "you need Pro for this".
@@ -266,7 +317,12 @@ create trigger teams_provision after insert on public.teams
 create or replace function public.team_is_pro(_team_id uuid)
 returns boolean language sql security definer stable set search_path = public as $$
   select coalesce((
-    select s.plan = 'pro' and s.status in ('active', 'trialing', 'past_due')
+    select s.plan = 'pro'
+       and (s.status in ('active', 'trialing')
+            or (s.status = 'past_due'
+                and s.past_due_since is not null
+                and now() < s.past_due_since + interval '7 days'))
+       and (s.cancel_at is null or now() < s.cancel_at)
       from public.subscriptions s
      where s.team_id = _team_id
   ), false);
@@ -302,21 +358,67 @@ returns boolean language sql security definer stable set search_path = public as
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Gate 1: starting an inspection needs the pack, and an allowance left
+-- Gate 1: starting an inspection needs the pack, honest dates, and an
+-- allowance left
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- BEFORE INSERT, so a refusal costs nothing: the counter bump and the row roll
--- back together. That also covers the duplicate-open-visit race startVisit()
--- already handles — the loser's 23505 undoes its increment too.
+-- Three triggers, because the order of the checks is the rule:
+--
+--   visits_gate_pack        BEFORE INSERT: the pack, and the dates.
+--   visits_gate_dates       BEFORE UPDATE OF started_at, completed_at: a changed date.
+--   visits_count_start      AFTER INSERT: the monthly counter, and the allowance.
+--
+-- The counter runs AFTER the row is in, so the one-open-visit index
+-- (visits_one_open_per_kind_idx, 0001) answers first. A second device starting
+-- the visit that is already open gets 23505, which startVisit() in api.js turns
+-- into "join the open visit" — nothing counted, nothing refused, even with the
+-- allowance used up. Only a different visit reaches the counter and its 402.
+-- A refusal still costs nothing: the row and the counter bump roll back
+-- together.
+--
+-- Dates. Visits are counted in the month the server says it is, never the one
+-- the device sends, so a start date in last month no longer dodges the count.
+-- And the dates themselves must be recent: no more than 7 days back (a device
+-- that was offline for a few days) and no more than an hour ahead (a fast
+-- clock). Otherwise a team could put any completion date it liked on a
+-- compliance report. Each date is checked whenever it is written — on insert,
+-- and on any UPDATE that changes it — never the other one alongside it: a
+-- visit started a fortnight ago can be finished today, but neither date can
+-- later be moved into the past through the API.
+--
+-- The one exception is the import window: a team's owner may open it once,
+-- for 15 minutes, to bring in work from before the account existed. Inside it
+-- the dates are not checked and visits started before this month are history,
+-- not this month's use. See open_import_window() below.
 
-create or replace function public.gate_visit_start()
+-- True while the team's one-time import window is open.
+create or replace function public.import_window_open(_team_id uuid)
+returns boolean language sql security definer stable set search_path = public as $$
+  select coalesce((
+    select t.import_open_until > now() from public.teams t where t.id = _team_id
+  ), false);
+$$;
+
+-- Refuses a visit date outside [now - 7 days, now + 1 hour].
+create or replace function public.check_visit_date(_what text, _at timestamptz)
+returns void language plpgsql stable set search_path = public as $$
+begin
+  if _at < now() - interval '7 days' then
+    raise exception '% is more than 7 days ago. Older work can only come in through the one-time import.', _what
+      using errcode = 'check_violation', hint = 'visit_date';
+  end if;
+  if _at > now() + interval '1 hour' then
+    raise exception '% is in the future. Check the date and time on this device.', _what
+      using errcode = 'check_violation', hint = 'visit_date';
+  end if;
+end;
+$$;
+
+create or replace function public.gate_visit_pack()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
-  v_pack   text;
-  v_label  text;
-  v_limit  int;
-  v_used   int;
-  v_period date := date_trunc('month', public.local_day(now()))::date;
+  v_pack  text;
+  v_label text;
 begin
   select w.pack_id, p.label into v_pack, v_label
     from public.workflows w
@@ -332,22 +434,12 @@ begin
       using errcode = 'PT402', hint = 'upgrade';
   end if;
 
-  -- Counted by when the work started, not when the row arrived: importing last
-  -- year's visits from a browser's local data is history, not this month's use.
-  -- Counted with the switch off too, so there is real usage to price against.
-  if public.local_day(new.started_at) >= v_period then
-    insert into public.team_usage as u (team_id, period, visits_started)
-      values (new.team_id, v_period, 1)
-      on conflict (team_id, period) do update set visits_started = u.visits_started + 1
-      returning u.visits_started into v_used;
-
-    v_limit := public.team_visit_limit(new.team_id);
-    if public.limits_enforced() and v_limit is not null and v_used > v_limit then
-      raise exception 'This plan includes % inspection% a month, and this month''s % been used',
-        v_limit,
-        case when v_limit = 1 then '' else 's' end,
-        case when v_limit = 1 then 'has' else 'have' end
-        using errcode = 'PT402', hint = 'upgrade';
+  -- Not behind the switch: an honest date matters on a compliance report
+  -- whether or not anybody is paying.
+  if not public.import_window_open(new.team_id) then
+    perform public.check_visit_date('The visit''s start date', new.started_at);
+    if new.completed_at is not null then
+      perform public.check_visit_date('The visit''s completion date', new.completed_at);
     end if;
   end if;
 
@@ -355,9 +447,68 @@ begin
 end;
 $$;
 
-drop trigger if exists visits_gate_start on public.visits;
-create trigger visits_gate_start before insert on public.visits
-  for each row execute function public.gate_visit_start();
+-- Only a date that actually changes. Completing (or completing again after
+-- reopenVisit()) changes completed_at; clearing it to reopen is not a date.
+-- Rewriting other fields of a visit finished months ago (the technician's
+-- name, say) sends the same completed_at back unchanged, and passes.
+create or replace function public.gate_visit_dates()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if public.import_window_open(new.team_id) then return new; end if;
+  if new.started_at is distinct from old.started_at then
+    perform public.check_visit_date('The visit''s start date', new.started_at);
+  end if;
+  if new.completed_at is not null and new.completed_at is distinct from old.completed_at then
+    perform public.check_visit_date('The visit''s completion date', new.completed_at);
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.count_visit_start()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_limit  int;
+  v_used   int;
+  v_period date := date_trunc('month', public.local_day(now()))::date;
+begin
+  -- Last year's visits, brought in through the import window, are history.
+  -- This month's still count, window or not.
+  if public.import_window_open(new.team_id)
+     and public.local_day(new.started_at) < v_period then
+    return new;
+  end if;
+
+  -- Counted with the switch off too, so there is real usage to price against.
+  insert into public.team_usage as u (team_id, period, visits_started)
+    values (new.team_id, v_period, 1)
+    on conflict (team_id, period) do update set visits_started = u.visits_started + 1
+    returning u.visits_started into v_used;
+
+  v_limit := public.team_visit_limit(new.team_id);
+  if public.limits_enforced() and v_limit is not null and v_used > v_limit then
+    raise exception 'This plan includes % inspection% a month, and this month''s % been used',
+      v_limit,
+      case when v_limit = 1 then '' else 's' end,
+      case when v_limit = 1 then 'has' else 'have' end
+      using errcode = 'PT402', hint = 'upgrade';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists visits_gate_pack on public.visits;
+create trigger visits_gate_pack before insert on public.visits
+  for each row execute function public.gate_visit_pack();
+
+drop trigger if exists visits_gate_dates on public.visits;
+create trigger visits_gate_dates before update of started_at, completed_at on public.visits
+  for each row execute function public.gate_visit_dates();
+
+drop trigger if exists visits_count_start on public.visits;
+create trigger visits_count_start after insert on public.visits
+  for each row execute function public.count_visit_start();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Gate 2: seats
@@ -368,9 +519,10 @@ create trigger visits_gate_start before insert on public.visits
 -- team_id, hence the second event). The plan row is locked first so two people
 -- accepting the last seat at the same moment cannot both get it.
 --
--- consume_invite_on_confirm (0005) swallows errors by design, so a person
--- confirming into a full team simply isn't added. Gate 3 is what stops it
--- getting that far.
+-- The last line of defence. join_team, accept_invite and the confirmation
+-- trigger ask claim_seat() first (see "Seat races" below), which can cancel
+-- the losing invitation and tell the admins — a raise from here would undo
+-- both.
 
 create or replace function public.gate_team_seats()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -427,7 +579,8 @@ begin
 
   select (select count(*) from public.team_members m where m.team_id = new.team_id)
        + (select count(*) from public.team_invites i
-           where i.team_id = new.team_id and i.accepted_at is null and i.expires_at > now())
+           where i.team_id = new.team_id and i.accepted_at is null
+             and i.cancelled_at is null and i.expires_at > now())
     into v_used;
 
   if v_used >= v_limit then
@@ -442,6 +595,289 @@ $$;
 drop trigger if exists team_invites_gate_seats on public.team_invites;
 create trigger team_invites_gate_seats before insert on public.team_invites
   for each row execute function public.gate_team_invites();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Seat races: two people, one seat
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- Gate 3 stops an admin inviting more people than there are seats, but seats
+-- can still run out under an invitation already sent: the seat count is
+-- lowered, or somebody joins with the team code while the invitation is open.
+-- Then whoever arrives second misses out. Their invitation is cancelled, and
+-- the team's owners and admins get a notice naming them, so the person who
+-- sent it learns why it never came to anything.
+--
+-- That only works if nothing raises: an exception would roll back the
+-- cancellation and the notice along with the membership. So join_team and
+-- accept_invite return {status: 'full'} instead of an error, and the
+-- confirmation trigger never raises at all (0005's rule). Their success result
+-- keeps the team's id and name, which is all the app reads from it today.
+
+alter table public.team_invites add column if not exists invitee_name  text not null default '';
+alter table public.team_invites add column if not exists cancelled_at  timestamptz;
+alter table public.team_invites add column if not exists cancel_reason text;
+
+-- 0005 granted select and delete but relied on RLS alone against writes, and
+-- Supabase's default privileges grant everything to anon too. Two locks:
+-- invitations are minted, spent and cancelled only by functions.
+revoke all on table public.team_invites from anon;
+revoke insert, update on table public.team_invites from authenticated;
+
+-- Things a team's owners and admins need to be told. Written only by functions
+-- and the billing webhook; the app reads them and marks them read.
+create table if not exists public.team_notices (
+  id         uuid primary key default gen_random_uuid(),
+  team_id    uuid not null references public.teams(id) on delete cascade,
+  kind       text not null,
+  payload    jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  read_at    timestamptz
+);
+create index if not exists team_notices_team_idx on public.team_notices(team_id, created_at desc);
+
+/**
+ * The one seat check every road in shares. True if the caller may add a member.
+ *
+ * Locks the plan row — the same lock gate_team_seats takes — so two people going
+ * for the last seat queue here, and the second counts the first. When the team
+ * is full and the attempt came through an invitation, that invitation is
+ * cancelled and the admins get an 'invite_cancelled_no_seats' notice.
+ *
+ * Internal: never callable by a client, or anyone could cancel anyone's
+ * invitations.
+ */
+create or replace function public.claim_seat(_team_id uuid, _invite_id uuid default null)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare
+  v_limit  int;
+  v_used   int;
+  v_invite public.team_invites;
+begin
+  if not public.limits_enforced() then return true; end if;
+
+  perform 1 from public.subscriptions where team_id = _team_id for update;
+
+  v_limit := public.team_seat_limit(_team_id);
+  if v_limit is null then return true; end if;
+
+  select count(*) into v_used from public.team_members where team_id = _team_id;
+  if v_used < v_limit then return true; end if;
+
+  if _invite_id is not null then
+    update public.team_invites
+       set cancelled_at = now(), cancel_reason = 'no_seats'
+     where id = _invite_id and cancelled_at is null
+     returning * into v_invite;
+
+    if v_invite.id is not null then
+      insert into public.team_notices (team_id, kind, payload)
+        values (_team_id, 'invite_cancelled_no_seats', jsonb_build_object(
+          'invite_id', v_invite.id,
+          'email',     v_invite.email,
+          'name',      v_invite.invitee_name,
+          'seats',     v_limit));
+    end if;
+  end if;
+
+  return false;
+end;
+$$;
+
+-- create_invite gains the invitee's name, for the notice. The two-argument
+-- version is dropped rather than left alongside, for the reason 0005 dropped
+-- create_team(text): two overloads differing only by a defaulted argument make
+-- the call ambiguous to PostgREST. A two-argument call — the app's, and the
+-- send-invite function's — still resolves to this one.
+drop function if exists public.create_invite(uuid, text);
+
+create or replace function public.create_invite(p_team_id uuid, p_email text, p_name text default '')
+returns public.team_invites language plpgsql security definer set search_path = public, auth as $$
+declare
+  v_email  text := lower(btrim(coalesce(p_email, '')));
+  v_invite public.team_invites;
+begin
+  if not public.is_team_admin(p_team_id) then
+    raise exception 'Only an owner or admin can invite people to this team';
+  end if;
+  if v_email = '' or position('@' in v_email) = 0 then
+    raise exception 'That is not an email address';
+  end if;
+  if exists (
+    select 1 from public.team_members m
+    join auth.users u on u.id = m.user_id
+    where m.team_id = p_team_id and lower(u.email) = v_email
+  ) then
+    raise exception 'That address is already in this team';
+  end if;
+
+  -- Replaces anything outstanding — expired, cancelled or still live — so
+  -- re-inviting is always the same call as inviting the first time.
+  delete from public.team_invites
+   where team_id = p_team_id and lower(email) = v_email and accepted_at is null;
+
+  insert into public.team_invites (team_id, email, invitee_name, invited_by)
+    values (p_team_id, v_email, btrim(coalesce(p_name, '')), auth.uid())
+    returning * into v_invite;
+
+  return v_invite;
+end;
+$$;
+
+-- Gains `cancelled`, so the sign-up screen can say why a link stopped working.
+-- The return type changes, which create or replace cannot do, hence the drop.
+drop function if exists public.invite_preview(uuid);
+
+create or replace function public.invite_preview(p_token uuid)
+returns table (email text, team_name text, expired boolean, accepted boolean, cancelled boolean)
+language sql security definer set search_path = public as $$
+  select i.email, t.name, i.expires_at <= now(), i.accepted_at is not null, i.cancelled_at is not null
+  from public.team_invites i
+  join public.teams t on t.id = i.team_id
+  where i.token = p_token;
+$$;
+
+-- Returns {status: 'joined', id, name} or {status: 'full', team_name} instead
+-- of the team row; see the section header. The return type changes, hence the
+-- drop.
+drop function if exists public.accept_invite(uuid);
+
+create or replace function public.accept_invite(p_token uuid)
+returns jsonb language plpgsql security definer set search_path = public, auth as $$
+declare
+  v_uid    uuid := auth.uid();
+  v_email  text;
+  v_invite public.team_invites;
+  v_team   public.teams;
+begin
+  if v_uid is null then raise exception 'Not authenticated'; end if;
+  select lower(u.email) into v_email from auth.users u where u.id = v_uid;
+
+  select * into v_invite from public.team_invites where token = p_token for update;
+  if v_invite.id is null then raise exception 'That invitation link is not valid'; end if;
+  if v_invite.accepted_at is not null then raise exception 'That invitation has already been used'; end if;
+  if v_invite.cancelled_at is not null then
+    raise exception 'This team is full. Ask the person who invited you.';
+  end if;
+  if v_invite.expires_at <= now() then
+    raise exception 'That invitation has expired. Ask for a new one.';
+  end if;
+  if lower(v_invite.email) <> v_email then
+    raise exception 'That invitation was sent to %, not to you', v_invite.email;
+  end if;
+
+  select * into v_team from public.teams where id = v_invite.team_id;
+
+  -- Somebody already in the team takes no new seat.
+  if not exists (
+    select 1 from public.team_members where team_id = v_invite.team_id and user_id = v_uid
+  ) then
+    if not public.claim_seat(v_invite.team_id, v_invite.id) then
+      return jsonb_build_object('status', 'full', 'team_name', v_team.name);
+    end if;
+    insert into public.team_members (team_id, user_id, role)
+      values (v_invite.team_id, v_uid, v_invite.role)
+      on conflict (team_id, user_id) do nothing;
+  end if;
+  insert into public.member_prefs (team_id, user_id)
+    values (v_invite.team_id, v_uid)
+    on conflict (team_id, user_id) do nothing;
+
+  update public.team_invites
+     set accepted_at = now(), accepted_user_id = v_uid
+   where id = v_invite.id;
+
+  return jsonb_build_object('status', 'joined', 'id', v_team.id, 'name', v_team.name);
+end;
+$$;
+
+-- The same shape as accept_invite. A code has no invitation behind it, so a
+-- full team is simply full: nothing to cancel, nobody to tell.
+drop function if exists public.join_team(text);
+
+create or replace function public.join_team(p_invite_code text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_team public.teams;
+begin
+  if v_uid is null then raise exception 'Not authenticated'; end if;
+
+  select * into v_team from public.teams where invite_code = upper(trim(p_invite_code));
+  if v_team.id is null then raise exception 'Invalid invite code'; end if;
+
+  if not exists (
+    select 1 from public.team_members where team_id = v_team.id and user_id = v_uid
+  ) then
+    if not public.claim_seat(v_team.id) then
+      return jsonb_build_object('status', 'full', 'team_name', v_team.name);
+    end if;
+    -- Always 'member'. Promotion is the owner's call alone.
+    insert into public.team_members (team_id, user_id, role)
+      values (v_team.id, v_uid, 'member')
+      on conflict (team_id, user_id) do nothing;
+  end if;
+  insert into public.member_prefs (team_id, user_id)
+    values (v_team.id, v_uid)
+    on conflict (team_id, user_id) do nothing;
+
+  return jsonb_build_object('status', 'joined', 'id', v_team.id, 'name', v_team.name);
+end;
+$$;
+
+-- 0005's trigger, now asking claim_seat() first and skipping cancelled
+-- invitations. Still wrapped so that nothing raised here can roll back the
+-- email confirmation itself; a full team cancels the invitation, leaves the
+-- notice, and returns without adding anybody.
+create or replace function public.consume_invite_on_confirm()
+returns trigger language plpgsql security definer set search_path = public, auth as $$
+declare
+  v_token  uuid;
+  v_invite public.team_invites;
+begin
+  if new.email_confirmed_at is null then return new; end if;
+
+  -- Nested, not `tg_op = 'UPDATE' and old.email_confirmed_at ...` — see 0005.
+  if tg_op = 'UPDATE' then
+    if old.email_confirmed_at is not null then return new; end if;
+  end if;
+
+  begin
+    v_token := nullif(new.raw_user_meta_data ->> 'invite_token', '')::uuid;
+    if v_token is null then return new; end if;
+
+    select * into v_invite
+      from public.team_invites
+     where token = v_token and accepted_at is null and cancelled_at is null
+       and expires_at > now()
+       for update;
+
+    if v_invite.id is null then return new; end if;
+    -- The token is not proof by itself. Whoever confirms has to be the address
+    -- that was invited, so a leaked link cannot be redeemed by somebody else.
+    if lower(v_invite.email) <> lower(new.email) then return new; end if;
+
+    if not exists (
+      select 1 from public.team_members where team_id = v_invite.team_id and user_id = new.id
+    ) then
+      if not public.claim_seat(v_invite.team_id, v_invite.id) then return new; end if;
+      insert into public.team_members (team_id, user_id, role)
+        values (v_invite.team_id, new.id, v_invite.role)
+        on conflict (team_id, user_id) do nothing;
+    end if;
+    insert into public.member_prefs (team_id, user_id)
+      values (v_invite.team_id, new.id)
+      on conflict (team_id, user_id) do nothing;
+
+    update public.team_invites
+       set accepted_at = now(), accepted_user_id = new.id
+     where id = v_invite.id;
+  exception when others then
+    return new;
+  end;
+
+  return new;
+end;
+$$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Onboarding RPCs
@@ -506,6 +942,10 @@ $$;
  * calls create_team today keeps working untouched until the new onboarding
  * ships. Landlord and agency teams get no pack: they receive reports, they do
  * not carry out inspections.
+ *
+ * A provider must say which pack it starts with. A new inspecting team never
+ * silently gets AV: that fallback lives only in provision_team(), for teams
+ * made by today's create_team(), and goes when the new sign-up replaces it.
  */
 create or replace function public.create_organisation(
   p_name         text,
@@ -519,6 +959,9 @@ begin
   if coalesce(p_account_type, '') not in ('provider', 'landlord', 'agency') then
     raise exception 'An organisation is a provider, a landlord or an agency, not "%"', p_account_type;
   end if;
+  if p_account_type = 'provider' and nullif(btrim(coalesce(p_pack_id, '')), '') is null then
+    raise exception 'Choose the pack this team starts with';
+  end if;
 
   v_team := public.create_team(p_name, p_description);
 
@@ -529,7 +972,7 @@ begin
   -- provision_team() gave it AV. Clear that and set what was actually chosen.
   delete from public.team_packs where team_id = v_team.id and source = 'starter';
   if p_account_type = 'provider' then
-    perform public.choose_starter_pack(v_team.id, coalesce(p_pack_id, 'av'));
+    perform public.choose_starter_pack(v_team.id, p_pack_id);
   end if;
 
   return v_team;
@@ -537,8 +980,53 @@ end;
 $$;
 
 /**
+ * Open the team's one-time window for importing older work. Owner only.
+ *
+ * Fifteen minutes from the first call, once per team, ever. Calling it again
+ * while the window is still open returns the same closing time, so a botched
+ * import can be re-run straight away; after that the answer is PT409 with
+ * hint 'import_used'. Inside the window Gate 1 neither checks visit dates nor
+ * counts visits started before this month.
+ *
+ * Owner, not admin: this is the one door through which past dates reach a
+ * compliance record, so it is opened by the one person answerable for the team.
+ */
+create or replace function public.open_import_window(p_team_id uuid)
+returns timestamptz language plpgsql security definer set search_path = public as $$
+declare
+  v_until timestamptz;
+  v_used  timestamptz;
+begin
+  if not public.is_team_owner(p_team_id) then
+    raise exception 'Only the team''s owner can import older work'
+      using errcode = '42501';
+  end if;
+
+  select import_open_until, import_used_at into v_until, v_used
+    from public.teams where id = p_team_id
+     for update;
+
+  if v_used is null then
+    update public.teams
+       set import_open_until = now() + interval '15 minutes', import_used_at = now()
+     where id = p_team_id
+     returning import_open_until into v_until;
+    return v_until;
+  end if;
+
+  if v_until > now() then return v_until; end if;
+
+  raise exception 'This team has already used its one-time import'
+    using errcode = 'PT409', hint = 'import_used';
+end;
+$$;
+
+/**
  * Everything the UI needs to explain a limit before somebody hits it.
  * Members only; NULL limits are unlimited.
+ *
+ * past_due_until is when a past-due team drops to Free; cancel_at is when a
+ * cancelled one does. open_visits is what the plan-ending banner lists.
  */
 create or replace function public.team_entitlements(p_team_id uuid)
 returns jsonb language sql security definer stable set search_path = public as $$
@@ -558,7 +1046,13 @@ returns jsonb language sql security definer stable set search_path = public as $
     'packs',        '["core"]'::jsonb || coalesce((
                       select jsonb_agg(p.pack_id order by p.pack_id)
                         from public.team_packs p where p.team_id = p_team_id
-                    ), '[]'::jsonb)
+                    ), '[]'::jsonb),
+    'past_due_until', (select s.past_due_since + interval '7 days' from public.subscriptions s
+                        where s.team_id = p_team_id and s.status = 'past_due'),
+    'cancel_at',      (select s.cancel_at from public.subscriptions s where s.team_id = p_team_id),
+    'import_used',    (select t.import_used_at is not null from public.teams t where t.id = p_team_id),
+    'open_visits',    (select count(*) from public.visits v
+                        where v.team_id = p_team_id and v.completed_at is null)
   ) end;
 $$;
 
@@ -572,6 +1066,7 @@ alter table public.subscriptions enable row level security;
 alter table public.team_packs    enable row level security;
 alter table public.team_usage    enable row level security;
 alter table public.app_settings  enable row level security;
+alter table public.team_notices  enable row level security;
 
 drop policy if exists app_settings_select on public.app_settings;
 create policy app_settings_select on public.app_settings
@@ -610,11 +1105,38 @@ grant select on table
   public.app_settings
 to authenticated;
 
--- Trigger functions: nobody calls these directly.
-revoke execute on function public.provision_team()    from public, anon, authenticated;
-revoke execute on function public.gate_visit_start()  from public, anon, authenticated;
-revoke execute on function public.gate_team_seats()   from public, anon, authenticated;
-revoke execute on function public.gate_team_invites() from public, anon, authenticated;
+-- Notices: owners and admins read their team's and mark them read. Marking
+-- read is the only write, so the privilege is on that one column — the policy
+-- says whose rows, the grant says which field. Nobody inserts or deletes.
+drop policy if exists team_notices_select on public.team_notices;
+create policy team_notices_select on public.team_notices
+  for select to authenticated using (public.is_team_admin(team_id));
+
+drop policy if exists team_notices_update on public.team_notices;
+create policy team_notices_update on public.team_notices
+  for update to authenticated
+  using (public.is_team_admin(team_id)) with check (public.is_team_admin(team_id));
+
+revoke all on table public.team_notices from anon, authenticated;
+grant select on table public.team_notices to authenticated;
+grant update (read_at) on table public.team_notices to authenticated;
+
+-- An earlier draft had one visit trigger doing what the three in Gate 1 do.
+-- Gone, so a database that ran that draft does not count every visit twice.
+drop trigger  if exists visits_gate_start on public.visits;
+drop function if exists public.gate_visit_start();
+
+-- Trigger functions and internal helpers: nobody calls these directly.
+revoke execute on function public.provision_team()                    from public, anon, authenticated;
+revoke execute on function public.track_past_due()                    from public, anon, authenticated;
+revoke execute on function public.gate_visit_pack()                   from public, anon, authenticated;
+revoke execute on function public.gate_visit_dates()                  from public, anon, authenticated;
+revoke execute on function public.count_visit_start()                 from public, anon, authenticated;
+revoke execute on function public.gate_team_seats()                   from public, anon, authenticated;
+revoke execute on function public.gate_team_invites()                 from public, anon, authenticated;
+revoke execute on function public.import_window_open(uuid)            from public, anon, authenticated;
+revoke execute on function public.check_visit_date(text, timestamptz) from public, anon, authenticated;
+revoke execute on function public.claim_seat(uuid, uuid)              from public, anon, authenticated;
 
 -- Helpers. Policies in 0007 call these as the signed-in user, so they stay
 -- executable for `authenticated`; `anon` has no use for them.
@@ -634,34 +1156,49 @@ grant  execute on function public.team_has_pack(uuid, text)     to authenticated
 revoke execute on function public.choose_starter_pack(uuid, text)               from public, anon;
 revoke execute on function public.create_organisation(text, text, text, text)   from public, anon;
 revoke execute on function public.team_entitlements(uuid)                       from public, anon;
+revoke execute on function public.open_import_window(uuid)                      from public, anon;
+revoke execute on function public.create_invite(uuid, text, text)               from public, anon;
+revoke execute on function public.accept_invite(uuid)                           from public, anon;
+revoke execute on function public.join_team(text)                               from public, anon;
 grant  execute on function public.choose_starter_pack(uuid, text)               to authenticated;
 grant  execute on function public.create_organisation(text, text, text, text)   to authenticated;
 grant  execute on function public.team_entitlements(uuid)                       to authenticated;
+grant  execute on function public.open_import_window(uuid)                      to authenticated;
+grant  execute on function public.create_invite(uuid, text, text)               to authenticated;
+grant  execute on function public.accept_invite(uuid)                           to authenticated;
+grant  execute on function public.join_team(text)                               to authenticated;
+-- anon as well, as in 0005: it is read before there is an account.
+grant  execute on function public.invite_preview(uuid)                          to anon, authenticated;
 
 -- PostgREST caches the schema; without this the new functions 404 until the
 -- next restart.
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Verification. Expected: packs 4, workflows 6, teams_without_plan 0,
--- kind_fkeys 2, gates 4, and enforced false until you turn it on. The second
--- result lists every team with its plan — the ones that existed before this
--- file should read pro / comped / av.
+-- Verification. Expected: packs 5, workflows 9, fixed_intervals 3,
+-- teams_without_plan 0, kind_fkeys 2, gates 6, notices_locked 1, and enforced
+-- false until you turn it on. The second result lists every team with its
+-- plan — the ones that existed before this file should read pro / comped / av.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 select
   (select enforce_limits from public.app_settings)                          as enforced,
   (select count(*) from public.packs)                                        as packs,
   (select count(*) from public.workflows)                                    as workflows,
+  (select count(*) from public.workflows where interval_fixed)               as fixed_intervals,
   (select count(*) from public.teams t
     where not exists (select 1 from public.subscriptions s where s.team_id = t.id))
                                                                              as teams_without_plan,
   (select count(*) from pg_constraint
     where conname in ('visits_kind_fkey', 'team_templates_kind_fkey'))       as kind_fkeys,
   (select count(*) from pg_trigger
-    where not tgisinternal and tgname in ('teams_provision', 'visits_gate_start',
+    where not tgisinternal and tgname in ('teams_provision', 'visits_gate_pack',
+                                          'visits_gate_dates', 'visits_count_start',
                                           'team_members_gate_seats', 'team_invites_gate_seats'))
-                                                                             as gates;
+                                                                             as gates,
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'team_notices'
+      and c.relrowsecurity)                                                  as notices_locked;
 
 select t.name, t.account_type, s.plan, s.comped,
        coalesce(string_agg(p.pack_id || ' (' || p.source || ')', ', ' order by p.pack_id), '') as packs

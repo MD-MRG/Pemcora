@@ -477,10 +477,32 @@ export async function previewInvite(token) {
 
 // For somebody who already has an account. A new account gets its membership
 // from the confirm trigger instead, since that is when the address is proven.
+//
+// Once the editions migration is in, a team with no seat left answers
+// { status: 'full' } rather than an error — an error would undo the cancelled
+// invitation and the notice to the admins. Before it, the answer is the team
+// row itself, which has no status and is read the same way.
 export async function acceptInvite(token) {
   const { data, error } = await supabase.rpc('accept_invite', { p_token: token })
   if (error) throw error
+  if (data?.status === 'full') throw new Error('This team is full. Ask the person who invited you.')
   return { id: data.id, name: data.name }
+}
+
+/**
+ * Opens the team's one-time window for importing older work. Owner only.
+ *
+ * Returns 'open' (until the time given), 'used' when the team has had its
+ * window, or 'unavailable' before the editions migration exists, when there is
+ * no window and no date check to need one. Anything else is a real refusal and
+ * is thrown.
+ */
+export async function openImportWindow(teamId) {
+  const { data, error } = await supabase.rpc('open_import_window', { p_team_id: teamId })
+  if (!error) return { status: 'open', until: data }
+  if (error.code === 'PT409') return { status: 'used' }
+  if (error.code === 'PGRST202') return { status: 'unavailable' }
+  throw error
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
