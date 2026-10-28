@@ -1,12 +1,12 @@
 # Pemcora editions — data model
 
-**Status: draft for review.** Nothing here has been applied to Supabase. The two
-migrations in this folder have been run on a local Postgres on top of the real
-0001–0005, twice each, and pass 288 checks (`test/`), the fixes from the pre-A4 security review and its two re-checks included.
-
-They live in `docs/editions/`, not `supabase/migrations/`, on purpose: the folder
-is linked to the Supabase CLI, and `supabase db push` would apply anything placed
-there. Move them across once reviewed.
+**Status: ready to apply (step A4).** The two migrations, now
+`supabase/migrations/0006_editions.sql` and `0007_compliance_and_reports.sql`, have been
+run on a local Postgres on top of the real 0001–0005, twice each, and pass 288 checks
+(`test/`), the fixes from the pre-A4 security review and its two re-checks included.
+They are applied by hand in the Supabase SQL editor, as the build plan's A4 says. Never
+with `supabase db push`: the folder is linked to the CLI, which would try to apply every
+file in it.
 
 **Build plan.** `build-plan.md` in this folder is the plan Claude Code works from. It
 changes parts of this design (its Phase A); where the two differ, the build plan wins.

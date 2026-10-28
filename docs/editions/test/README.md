@@ -27,7 +27,7 @@ Needs Postgres 16 you don't mind it creating roles on (never Supabase itself), a
 `pip install "psycopg[binary]"`. From the repo root:
 
 ```
-PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations docs/editions
+PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 ```
 
 It drops and recreates a database called `pemcora_editions_test`. Exit code is 0

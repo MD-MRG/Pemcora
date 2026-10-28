@@ -5,8 +5,10 @@ Applies 0001-0005 (the real files from the repo), creates a "legacy" team the wa
 the app does today, then applies 0006 + 0007 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
-    PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py \
-        supabase/migrations docs/editions
+    PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
+
+All seven files live in supabase/migrations. A second folder, if given, is where
+0006 and 0007 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -23,7 +25,8 @@ from pathlib import Path
 import psycopg
 
 OLD = Path(sys.argv[1])
-NEW = Path(sys.argv[2])
+NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
+EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql")
 STUB = Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -102,9 +105,12 @@ def user(email, invite_token=None):
 
 
 # ── 0001-0005, and a team made the way the app makes one today ─────────────
+# Not 0006 or 0007, which sit in the same folder: the legacy team has to exist
+# before they run, as the live team did.
 run_file(STUB)
 for f in sorted(OLD.glob("000*.sql")):
-    run_file(f)
+    if f.name not in EDITIONS:
+        run_file(f)
 
 O = user("owner@legacy.test")
 O2 = user("colleague@legacy.test")
@@ -120,7 +126,7 @@ act(O, "insert into public.visits (team_id, location_id, kind, completed_at) val
 
 # ── 0006 + 0007, twice ─────────────────────────────────────────────────────
 for attempt in (1, 2):
-    for f in ("0006_editions.sql", "0007_compliance_and_reports.sql"):
+    for f in EDITIONS:
         try:
             run_file(NEW / f)
             check(f"{f} applies (run {attempt})", True)

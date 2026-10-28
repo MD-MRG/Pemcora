@@ -17,9 +17,10 @@ Pages on every push to `main`.
 - Parts marked **M.D.'s note** are decisions already made.
 - `docs/editions/data-model.md` explains the drafted database. Where it and the plan
   differ, the plan wins.
-- `docs/editions/0006_editions.sql` and `0007_compliance_and_reports.sql` are drafts that
-  have never been applied. Phase A edits them in place; step A4 moves them into
-  `supabase/migrations/`.
+- `supabase/migrations/0006_editions.sql` and `0007_compliance_and_reports.sql` were
+  drafted in `docs/editions/` during Phase A; step A4 moved them across. They are applied
+  only by M.D., in the Supabase SQL editor. Never run `supabase db push`: the folder is
+  linked to the CLI, which would try to apply every file in it.
 - The `vic_rental`, `qld_electrical` and `electrical_general` test lists are proposals.
   A licensed electrician checks them before they ship.
 - Section 5 decisions use their listed defaults. Settle D1 and D2 (pricing and add-ons)
@@ -48,7 +49,7 @@ Pages on every push to `main`.
 
 - `npm run lint`, then the affected `tests/*.mjs` suites (`npm test` runs them all).
 - When SQL changed, run the SQL suite from the repo root:
-  `PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations docs/editions`
+  `PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations`
   It needs a local Postgres 16 and `pip install "psycopg[binary]"`. It drops and
   recreates a database called `pemcora_editions_test`. Never point it at Supabase.
 - Add tests for anything new.
