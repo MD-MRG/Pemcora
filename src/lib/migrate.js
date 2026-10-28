@@ -19,6 +19,11 @@
 //   and failures are collected and reported, rather than a single duplicate
 //   name aborting the whole run.
 //
+// Visits older than a week only go in through the team's one-time import
+// window: the database refuses older dates otherwise, so a compliance record
+// cannot be backdated. Only the owner can open it, once, for 15 minutes — so a
+// botched import can be run again straight away, but not next week.
+//
 // Note that localStorage is per-origin: data entered on the deployed site is
 // not visible to a dev server, and vice versa. The import can only ever see
 // what belongs to the origin it is running on.
@@ -134,11 +139,16 @@ function withValidIds(client) {
   }
 }
 
+const hasVisits = clients =>
+  (clients ?? []).some(c => (c.locations ?? []).some(l => (l.visits ?? []).length > 0))
+
 /**
  * Copies the selected slices into the team, then reloads the cache from the
  * backend so the app shows what actually landed rather than what was sent.
  *
- * Returns { clients: {imported, failed: [{name, reason}]}, settings, templates }.
+ * Returns { clients: {imported, failed: [{name, reason}]}, settings, templates,
+ * importWindow }, where importWindow is 'open', 'used', 'unavailable' or
+ * 'not-needed'.
  */
 export async function importLocalData(teamId, userId, options = {}) {
   const { clients = true, settings = true, templates = true } = options
@@ -149,6 +159,14 @@ export async function importLocalData(teamId, userId, options = {}) {
     clients: { imported: 0, failed: [] },
     settings: 'skipped',
     templates: 'skipped',
+    importWindow: 'not-needed',
+  }
+
+  // Before anything is written, so a refusal (not the owner) costs nothing.
+  // A used window is not fatal: settings, lists and recent visits still go in,
+  // and any client with older visits fails with the database's reason.
+  if (clients && hasVisits(local.clients)) {
+    report.importWindow = (await api.openImportWindow(teamId)).status
   }
 
   // Settings and templates first: they are single rows, and getting them in

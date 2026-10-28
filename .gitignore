@@ -31,3 +31,6 @@ dist-ssr
 # screenshots and downloads produced by the verification suites
 tests/*.png
 tests/*.xlsx
+
+# Supabase CLI link state, never committed
+supabase/.temp/
