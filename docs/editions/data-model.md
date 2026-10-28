@@ -2,7 +2,7 @@
 
 **Status: draft for review.** Nothing here has been applied to Supabase. The two
 migrations in this folder have been run on a local Postgres on top of the real
-0001–0005, twice each, and pass 183 checks (`test/`).
+0001–0005, twice each, and pass 255 checks (`test/`), the fixes from the pre-A4 security review included.
 
 They live in `docs/editions/`, not `supabase/migrations/`, on purpose: the folder
 is linked to the Supabase CLI, and `supabase db push` would apply anything placed
@@ -84,14 +84,14 @@ All additive, all with defaults, so every existing row reads exactly as before.
 |---|---|---|
 | `teams` | `account_type` provider · landlord · agency | which side of a delivery a team is on. Column-locked: the app can still rename and describe a team and nothing else |
 | `visits.kind`, `team_templates.kind` | CHECK list → foreign key to `workflows` | the next state's rules is one INSERT, not an ALTER |
-| `teams` | `import_open_until`, `import_used_at` | the owner's one-time window for importing older work |
+| `teams` | `import_open_until`, `import_used_at`; `invite_code` lengthened to 12 characters (60 bits) | the owner's one-time window for importing older work; a join code too long to guess |
 | `team_invites` | `invitee_name`, `cancelled_at`, `cancel_reason` | the notice can name who lost the last seat |
 | `clients` | `contact_name`, `contact_email`, `contact_phone`, `reminders_enabled` | who gets the report and the re-check reminder, and whether they get reminders |
 | `team_settings` | `reminders_enabled` | reminders off for the whole team (admins) |
 | `member_prefs` | `licence_number` | each technician's licence, printed on reports |
 | `locations` | `site_type` commercial · residential, `is_rental` | which rules apply |
 | `rooms` | `room_type` (`bedroom`, `hallway`, `meter_box`, …) | switch on the right sections; check alarm coverage |
-| `visits` | `site_results`, `outcome` compliant · non_compliant, `signoff` | once-per-visit sections; the certificate's verdict, declared at sign-off; who signed, their licence and signature, kept with the visit |
+| `visits` | `site_results`, `outcome` compliant · non_compliant, `signoff`, `first_completed_at` | once-per-visit sections; the certificate's verdict, declared at sign-off; who signed, their licence and signature, kept with the visit and stamped by the database with who saved it and when; when the visit was first completed, which a reopened visit keeps |
 | `visit_rooms` | `readings` | measured values beside PASS/FAIL, keyed like `results` |
 
 **Where results live** (no column changes, all jsonb): an ordinary section is
@@ -114,6 +114,7 @@ so a reader knows which shape it is.
 | `team_usage` | inspections started per month (a counter: deleting visits doesn't refund) | trigger |
 | `app_settings` | one switch: `enforce_limits` | you, in the SQL editor |
 | `team_notices` | things owners and admins need to be told, such as an invitation cancelled because the seats ran out | functions and the webhook only; admins mark them read |
+| `visit_imports` | which visits came in through the import window, and which of them are still waiting to be counted | triggers only; no client access at all |
 
 **0007 — field data and delivery**
 
@@ -148,6 +149,18 @@ visit's start or completion date is written — on insert, or changed later — 
 must be within the last 7 days (and no more than an hour ahead), and visits are
 counted in the server's month, not the device's. Older work comes
 in once, through the owner's 15-minute import window (`open_import_window()`).
+
+Also on from the start, from the pre-A4 security review:
+
+- A visit's check, site and team are fixed once it has started, and it never ends
+  before it began. A completion date can be corrected only within 7 days, and
+  completing a reopened visit again keeps the date it was first completed.
+- Every row hangs only off its own team's rows (a visit off its own team's site,
+  a site off its own team's client, and so on), on 0001's tables as well.
+- A client's emailed opt-out sticks: the team can't switch those reminders back
+  on, and the opt-out record and reminder bookkeeping aren't client-writable.
+- `anon` holds no table privilege anywhere, so RLS is never the only lock; signed-out
+  pages call SECURITY DEFINER functions only.
 
 | | Free | Pro | Enforced by |
 |---|---|---|---|
@@ -263,5 +276,5 @@ the site step can wait. Treat it as a bonus — annual testing carries on after.
 
 - One recipient per report. Forwarding (agency → owner) isn't modelled yet.
 - A device offline for more than 7 days can't save the visits it started: dates older than that are refused outside the owner's one-time import window.
-- Reopening a completed visit doesn't roll back a due date.
+- Reopening a completed visit doesn't roll back a due date, and completing it again keeps its first completion date, so it doesn't move one on either.
 - Branding is only a soft gate while reports are generated in the browser.

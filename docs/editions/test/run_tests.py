@@ -799,18 +799,25 @@ refused("a signature over 50 KB is refused", RO, "update public.visits set signo
 refused("a sign-off has to be an object", RO, "update public.visits set signoff = '\"Sam\"' where id = %s", [RV],
         sqlstate="23514")
 SIGNOFF = {"technician": "Sam Sparks", "licence_number": "REC-123",
-           "signed_at": "2026-10-27T01:00:00Z", "signature": "M0 0 L10 10"}
+           "signed_at": datetime.now(timezone.utc).isoformat(), "signature": "M0 0 L10 10"}
+APP_KEYS = ("technician", "licence_number", "signature")
 act(RO, "update public.visits set signoff = %s, completed_at = now(), outcome = 'compliant' where id = %s",
     [json.dumps(SIGNOFF), RV])
 RD, RTOK, RSNAP = act(RO, "select id, token, snapshot from public.send_report(%s, 'kim@landlord.test', %s)",
                       [RV, json.dumps({"signoff": {"technician": "Forged"}, "summary": "All good"})])[0]
 check("the visit's sign-off reaches the delivered report, over anything the app sent",
-      RSNAP["signoff"] == SIGNOFF and RSNAP["summary"] == "All good", str(RSNAP.get("signoff")))
+      all(RSNAP["signoff"][k] == SIGNOFF[k] for k in APP_KEYS) and RSNAP["summary"] == "All good",
+      str(RSNAP.get("signoff")))
+check("…carrying who signed it, recorded by the database",
+      RSNAP["signoff"].get("signed_by") == str(RO) and RSNAP["signoff"].get("recorded_at"), str(RSNAP.get("signoff")))
 check("the link's public view lasts 90 days",
       su("select link_expires_at::date - sent_at::date from public.report_deliveries where id = %s", [RD])[0][0] == 90)
 pv = act(None, "select status, workflow, provider, snapshot from public.report_preview(%s)", [RTOK])
 check("a fresh link shows the report (status ok)",
-      pv and pv[0][0] == "ok" and pv[0][1] == "Electrical safety check" and pv[0][3]["signoff"] == SIGNOFF, str(pv))
+      pv and pv[0][0] == "ok" and pv[0][1] == "Electrical safety check"
+      and all(pv[0][3]["signoff"][k] == SIGNOFF[k] for k in APP_KEYS), str(pv))
+check("…without the signer's account id, like the provider's team id",
+      "signed_by" not in pv[0][3]["signoff"] and "team_id" not in pv[0][3]["provider"])
 su("update public.report_deliveries set link_expires_at = now() - interval '1 minute' where id = %s", [RD])
 pv = act(None, """select status, workflow, provider, completed_on, outcome, site, snapshot, has_file
                     from public.report_preview(%s)""", [RTOK])
@@ -833,6 +840,428 @@ check("saving the report still works after the link has expired",
 check("once saved, the link asks for a sign-in instead of showing it (status saved)",
       act(None, "select status, provider, snapshot from public.report_preview(%s)", [RTOK2])
       == [("saved", "Signed Sparks", None)])
+
+# ── S. the pre-A4 security review: F1–F11 ──────────────────────────────────
+# One block per finding. Each failed on the drafts at d4bfeb2 and passes with
+# its fix. F5's reopen check and F6 follow the rules chosen for notes 1 and 6.
+
+# F1 — a started visit keeps its check (kind), site (location_id) and team (team_id).
+print("\n— Review F1: a started visit keeps its check, site and team")
+F1U = user("f1-owner@review.test")
+F1T = one(F1U, "select id from public.create_organisation('F1 AV Only', 'provider', 'av')")   # Free; AV is its only pack
+_, F1_L1 = add_site(F1U, F1T, "F1 One")
+_, F1_L2 = add_site(F1U, F1T, "F1 Two")
+F1_V = start_visit(F1U, F1T, F1_L1, "maintenance")   # this month's one free inspection
+refused("F1: (insert gate, for contrast) a Free AV team cannot start a VIC check", F1U,
+        "insert into public.visits (team_id, location_id, kind) values (%s, %s, 'vic_electrical_safety')",
+        [F1T, F1_L2], sqlstate="PT402")
+refused("F1: …nor turn its AV visit into a VIC check by changing the kind", F1U,
+        "update public.visits set kind = 'vic_electrical_safety' where id = %s", [F1_V], sqlstate="23514")
+refused("F1: …nor move the month's one counted visit to another site to inspect that one uncounted", F1U,
+        "update public.visits set location_id = %s where id = %s", [F1_L2, F1_V], sqlstate="23514")
+F1T2 = one(F1U, "select id from public.create_organisation('F1 Second Team', 'provider', 'vic_rental')")
+refused("F1: …nor move it into another of the person's teams", F1U,
+        "update public.visits set team_id = %s where id = %s", [F1T2, F1_V])
+act(F1U, """update public.visits set technician = 'Sam', kind = kind, location_id = location_id, team_id = team_id
+             where id = %s""", [F1_V])
+check("F1: an edit that sends the same check, site and team back still saves",
+      su("select technician from public.visits where id = %s", [F1_V])[0][0] == "Sam")
+
+# F2 — a team's join code is a credential, so it has to be too long to guess.
+print("\n— Review F2: a team's join code cannot be guessed")
+F2U = user("f2-owner@review.test")
+F2T, F2_CODE = act(F2U, "select id, invite_code from public.create_organisation('F2 Co', 'provider', 'av')")[0]
+check("F2: a new team's join code carries at least 60 bits (12 characters from a 32-letter alphabet)",
+      len(F2_CODE) >= 12 and set(F2_CODE) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789"), F2_CODE)
+F2N = user("f2-today@review.test")
+F2_TODAY = one(F2N, "select invite_code from public.create_team('F2 Today', '')")
+check("F2: …and so does one made by today's create_team()", len(F2_TODAY) >= 12, F2_TODAY)
+F2_SHORT = su("select count(*) from public.teams where length(invite_code) < 12")[0][0]
+check("F2: …and no team that existed before is left on a 6-character code", F2_SHORT == 0, f"{F2_SHORT} short codes")
+F2J = user("f2-joiner@review.test")
+check("F2: the long code still joins (limits on, Pro team with a free seat)",
+      su("update public.subscriptions set plan = 'pro', seats = 3 where team_id = %s", [F2T]) is None
+      and one(F2J, "select public.join_team(%s)", [F2_CODE.lower()]).get("status") == "joined")
+
+# F3 — "the address has to match" must not pass when the signed-in account has no address.
+print("\n— Review F3: an account with no email address cannot claim a report or accept an invitation")
+F3P = user("f3-provider@review.test")
+F3TP = one(F3P, "select id from public.create_organisation('F3 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [F3TP])   # unlimited seats and visits
+_, F3_L = add_site(F3P, F3TP, "F3 Rental")
+F3_V = start_visit(F3P, F3TP, F3_L, "vic_smoke_alarm", completed=True)
+F3_TOK = one(F3P, "select token from public.send_report(%s, 'owner@f3-landlord.test')", [F3_V])
+F3_INV = one(F3P, "select token from public.create_invite(%s, 'colleague@f3-sparks.test')", [F3TP])
+# Signed in, role authenticated, but auth.users.email is null: a phone or anonymous sign-in.
+F3_NOMAIL = uuid.uuid4()
+su("insert into auth.users (id, email) values (%s, null)", [F3_NOMAIL])
+F3_TL = one(F3_NOMAIL, "select id from public.create_organisation('F3 Grabber', 'landlord')")
+refused("F3: an account with no email address cannot save a report sent to someone else", F3_NOMAIL,
+        "select public.claim_report(%s, %s)", [F3_TOK, F3_TL], contains="was sent to")
+refused("F3: …nor accept an invitation sent to someone else", F3_NOMAIL,
+        "select public.accept_invite(%s)", [F3_INV], contains="was sent to")
+check("F3: …so the report is still waiting for its real recipient",
+      su("select recipient_team_id is null from public.report_deliveries where token = %s", [F3_TOK])[0][0])
+
+# F4 — a row hangs only off its own team's rows, for 0001's field data as well as 0007's tables.
+print("\n— Review F4: rows hang only off their own team's rows")
+F4A = user("f4-victim@review.test")
+F4TA = one(F4A, "select id from public.create_organisation('F4 Victim', 'provider', 'av')")
+F4_CA, F4_LA = add_site(F4A, F4TA, "F4 Victim", "Vic Client", "vic.client@f4.test")
+F4_VA = start_visit(F4A, F4TA, F4_LA, "commissioning")
+F4_FLOOR, F4_ROOM, F4_VR = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+act(F4A, "insert into public.floors (id, team_id, location_id, label) values (%s, %s, %s, 'Ground')", [F4_FLOOR, F4TA, F4_LA])
+act(F4A, "insert into public.rooms (id, team_id, floor_id, name) values (%s, %s, %s, 'Boardroom')", [F4_ROOM, F4TA, F4_FLOOR])
+act(F4A, "insert into public.visit_rooms (id, team_id, visit_id, room_id) values (%s, %s, %s, %s)",
+    [F4_VR, F4TA, F4_VA, F4_ROOM])
+
+F4X = user("f4-outsider@review.test")
+F4TX = one(F4X, "select id from public.create_organisation('F4 Outsider', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [F4TX])   # photos allowed
+refused("F4: a member cannot start a visit at another team's site", F4X,
+        "insert into public.visits (team_id, location_id, kind) values (%s, %s, 'maintenance')",
+        [F4TX, F4_LA], sqlstate="42501")
+refused("F4: …nor add a site under another team's client", F4X,
+        "insert into public.locations (client_id, team_id, address, suburb) values (%s, %s, 'Anywhere', 'Richmond')",
+        [F4_CA, F4TX], sqlstate="42501")
+refused("F4: …nor write results into another team's visit", F4X,
+        "insert into public.visit_rooms (team_id, visit_id) values (%s, %s)", [F4TX, F4_VA], sqlstate="42501")
+refused("F4: …nor hang a photo record off another team's visit room", F4X,
+        "insert into public.attachments (team_id, visit_room_id, storage_path) values (%s, %s, %s)",
+        [F4TX, F4_VR, f"{F4TX}/f4.jpg"], sqlstate="42501")
+check("F4: the victim's own writes are unaffected",
+      su("select count(*) from public.visit_rooms where visit_id = %s and team_id = %s", [F4_VA, F4TA])[0][0] == 1)
+
+# F5 — the import window takes old work, once: not open visits banked for later, not new dates.
+print("\n— Review F5: the import window takes old work, not banked open visits or new dates")
+F5U = user("f5-owner@review.test")
+F5T = one(F5U, "select id from public.create_organisation('F5 Import', 'provider', 'vic_rental')")   # Free: 1 a month
+F5_SITES = [add_site(F5U, F5T, f"F5 Bank {i}")[1] for i in range(3)]
+act(F5U, "select public.open_import_window(%s)", [F5T])
+F5_BANKED = [start_visit(F5U, F5T, lid, "vic_smoke_alarm", started_at=now - timedelta(days=40)) for lid in F5_SITES]
+su("update public.teams set import_open_until = now() - interval '1 second' where id = %s", [F5T])   # it closes
+act(F5U, "update public.visits set completed_at = now() where id = %s", [F5_BANKED[0]])
+check("F5: an open visit brought in through the window counts when it is finished after the window has closed",
+      usage(F5T)[1] == 1, str(usage(F5T)))
+refused("F5: …so open visits banked in the window cannot all be finished uncounted later", F5U,
+        "update public.visits set completed_at = now() where id = %s", [F5_BANKED[1]], sqlstate="PT402")
+
+F5W = user("f5-dates@review.test")
+F5TW = one(F5W, "select id from public.create_organisation('F5 Dates', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [F5TW])   # no allowance in the way
+_, F5W_L1 = add_site(F5W, F5TW, "F5 Future")
+_, F5W_L2 = add_site(F5W, F5TW, "F5 Today")
+F5W_TODAY = start_visit(F5W, F5TW, F5W_L2, "vic_smoke_alarm", completed=True)   # finished today, before the window
+act(F5W, "select public.open_import_window(%s)", [F5TW])
+refused("F5: even inside the window, a completion date in the future is refused", F5W,
+        """insert into public.visits (team_id, location_id, kind, started_at, completed_at)
+           values (%s, %s, 'vic_smoke_alarm', now() - interval '400 days', now() + interval '400 days')""",
+        [F5TW, F5W_L1], contains="in the future", sqlstate="23514")
+refused("F5: …and the window does not let anyone re-date a visit that was finished today", F5W,
+        "update public.visits set completed_at = now() - interval '300 days' where id = %s", [F5W_TODAY],
+        sqlstate="23514")
+act(F5W, "update public.visits set completed_at = null where id = %s", [F5W_TODAY])
+try:   # refused or ignored, either keeps today's date
+    act(F5W, "update public.visits set completed_at = now() - interval '300 days' where id = %s", [F5W_TODAY])
+except psycopg.Error:
+    pass
+check("F5: …not even by reopening it first: completing it again keeps today's date",
+      su("select local_day(completed_at) = local_day(now()) from public.visits where id = %s", [F5W_TODAY])[0][0])
+F5W_OLD = start_visit(F5W, F5TW, F5W_L1, "vic_electrical_safety", started_at=now - timedelta(days=400))
+act(F5W, "update public.visits set completed_at = %s where id = %s", [now - timedelta(days=399), F5W_OLD])
+check("F5: …while old work imported the way migrate.js does it (insert open, then complete) still goes in",
+      su("select local_day(completed_at) < local_day(now()) - 300 from public.visits where id = %s", [F5W_OLD])[0][0])
+
+# F6 and note 6 — a client's emailed opt-out sticks, and every click on the link works.
+print("\n— Review F6 and note 6: a client's emailed opt-out sticks")
+F6U = user("f6-owner@review.test")
+F6T = one(F6U, "select id from public.create_organisation('F6 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [F6T])   # two checks this month
+_, F6_L = add_site(F6U, F6T, "F6 Rental", "Lee", "lee@f6-landlord.test")
+start_visit(F6U, F6T, F6_L, "vic_smoke_alarm", completed=True)
+F6_ITEM, F6_TOK = su("select id, reminder_token from public.compliance_items where location_id = %s", [F6_L])[0]
+
+
+def f6_notices():
+    return su("select count(*) from public.team_notices where team_id = %s and kind = 'reminder_opt_out'", [F6T])[0][0]
+
+
+act(None, "select * from public.reminder_opt_out(%s)", [F6_TOK])
+refused("note 6: once the client opts out from the email, the team cannot switch the reminders back on", F6U,
+        "update public.compliance_items set reminders_enabled = true where id = %s", [F6_ITEM],
+        contains="turned these reminders off", sqlstate="23514")
+for _col, _val in (("opted_out_at", None), ("opted_out_via", None), ("reminder_token", uuid.uuid4()),
+                   ("last_reminded_at", None), ("last_visit_id", None)):
+    refused(f"note 6: …nor rewrite {_col}, which belongs to the opt-out and the reminder job", F6U,
+            f"update public.compliance_items set {_col} = %s where id = %s", [_val, F6_ITEM], sqlstate="42501")
+act(None, "select * from public.reminder_opt_out(%s)", [F6_TOK])
+check("F6: clicking again on reminders already off changes nothing and tells nobody twice", f6_notices() == 1,
+      f"{f6_notices()} notices")
+# Should the client opt back in, only the service role can clear the opt-out; after that the link works again.
+su("update public.compliance_items set reminders_enabled = true, opted_out_via = null where id = %s", [F6_ITEM])
+act(None, "select * from public.reminder_opt_out(%s)", [F6_TOK])
+check("F6: …and with reminders back on, the next click switches them off and tells the electrician again",
+      su("select reminders_enabled from public.compliance_items where id = %s", [F6_ITEM])[0][0] is False
+      and f6_notices() == 2, f"{f6_notices()} notices")
+_, F6_L2 = add_site(F6U, F6T, "F6 Second")
+start_visit(F6U, F6T, F6_L2, "vic_smoke_alarm", completed=True)
+F6_ITEM2 = su("select id from public.compliance_items where location_id = %s", [F6_L2])[0][0]
+act(F6U, "update public.compliance_items set reminders_enabled = false where id = %s", [F6_ITEM2])
+act(F6U, "update public.compliance_items set reminders_enabled = true where id = %s", [F6_ITEM2])
+check("note 6: a check the team switched off itself, from the Due page, can be switched back on",
+      su("select reminders_enabled from public.compliance_items where id = %s", [F6_ITEM2])[0][0] is True)
+
+
+def _as_user(conn, uid):
+    conn.execute("select set_config('request.jwt.claim.sub', %s, true)", [str(uid)])
+    conn.execute("set local role authenticated")
+
+
+# F7 — the invitation seat check has to queue on the plan row, like the membership one does.
+print("\n— Review F7: two invitations for the last seat at the same moment")
+F7U = user("f7-owner@review.test")
+F7T = one(F7U, "select id from public.create_organisation('F7 Race', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro', seats = 2 where team_id = %s", [F7T])   # the owner and one more
+F7_C1 = psycopg.connect(DSN, autocommit=True)
+F7_C2 = psycopg.connect(DSN, autocommit=True)
+with F7_C1.transaction():
+    _as_user(F7_C1, F7U)
+    F7_C1.execute("select public.create_invite(%s, 'first@f7.test')", [F7T])
+    # The first invitation is not committed yet when the second one arrives.
+    try:
+        with F7_C2.transaction():
+            _as_user(F7_C2, F7U)
+            F7_C2.execute("set local lock_timeout = '2s'")
+            F7_C2.execute("select public.create_invite(%s, 'second@f7.test')", [F7T])
+        F7_SECOND = "let through"
+    except psycopg.Error as e:
+        F7_SECOND = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+F7_C1.close()
+F7_C2.close()
+check("F7: the second invitation waits for the first instead of slipping past the seat count",
+      F7_SECOND != "let through", F7_SECOND)
+F7_PENDING = su("select count(*) from public.team_invites where team_id = %s and accepted_at is null", [F7T])[0][0]
+check("F7: …so a team with one free seat has one invitation out, not two", F7_PENDING == 1, f"{F7_PENDING} pending")
+
+# F8 — swapping the starter pack has to wait for a visit being started under it.
+print("\n— Review F8: swapping the starter pack while its first visit is being saved")
+F8U = user("f8-owner@review.test")
+F8T = one(F8U, "select id from public.create_organisation('F8 Race', 'provider', 'vic_rental')")
+_, F8_L = add_site(F8U, F8T, "F8 Rental")
+F8_C1 = psycopg.connect(DSN, autocommit=True)
+F8_C2 = psycopg.connect(DSN, autocommit=True)
+with F8_C1.transaction():
+    _as_user(F8_C1, F8U)
+    F8_C1.execute("insert into public.visits (team_id, location_id, kind) values (%s, %s, 'vic_smoke_alarm')",
+                  [F8T, F8_L])
+    # The first visit under vic_rental is not committed yet when the swap arrives.
+    try:
+        with F8_C2.transaction():
+            _as_user(F8_C2, F8U)
+            F8_C2.execute("set local lock_timeout = '2s'")
+            F8_C2.execute("select public.choose_starter_pack(%s, 'qld_electrical')", [F8T])
+        F8_SWAP = "let through"
+    except psycopg.Error as e:
+        F8_SWAP = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+F8_C1.close()
+F8_C2.close()
+check("F8: the swap waits for the visit being saved under the old pack instead of slipping past it",
+      F8_SWAP != "let through", F8_SWAP)
+F8_PACKS = [r[0] for r in su("select pack_id from public.team_packs where team_id = %s", [F8T])]
+check("F8: …so the team still holds the pack its visit was started under", F8_PACKS == ["vic_rental"], str(F8_PACKS))
+
+# F9 — the plan helpers answer for any team id they are given, so outsiders must not call them.
+print("\n— Review F9: another team's plan and packs are not for outsiders to read")
+F9A = user("f9-target@review.test")
+F9TA = one(F9A, "select id from public.create_organisation('F9 Target', 'provider', 'vic_rental')")
+F9X = user("f9-curious@review.test")
+one(F9X, "select id from public.create_organisation('F9 Curious', 'provider', 'av')")
+for _fn, _args in (("team_is_pro(%s)", [F9TA]), ("team_has_pack(%s, 'vic_rental')", [F9TA]),
+                   ("team_seat_limit(%s)", [F9TA]), ("team_visit_limit(%s)", [F9TA])):
+    refused(f"F9: an outsider cannot ask {_fn.split('(')[0]}() about another team", F9X,
+            f"select public.{_fn}", _args, sqlstate="42501")
+F9_EV = f"{F9TA}/{uuid.uuid4()}/p.jpg"
+refused("F9: (unchanged) a Free team still cannot upload evidence", F9A,
+        "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [F9_EV], sqlstate="42501")
+refused("F9: (unchanged) …nor record a photo", F9A,
+        "insert into public.attachments (team_id, storage_path) values (%s, %s)", [F9TA, F9_EV], sqlstate="PT402")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [F9TA])
+act(F9A, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [F9_EV])
+act(F9A, "insert into public.attachments (team_id, storage_path) values (%s, %s)", [F9TA, F9_EV])
+check("F9: (unchanged) …and a Pro team still uploads a photo and records it", True)
+
+# F10 — the reports folder is undeletable, so it takes report PDFs and nothing else.
+print("\n— Review F10: the reports folder takes report PDFs only")
+F10U = user("f10-owner@review.test")
+F10T = one(F10U, "select id from public.create_organisation('F10 Free', 'provider', 'vic_rental')")
+refused("F10: a Free team cannot use its undeletable reports folder for photos or other files", F10U,
+        "insert into storage.objects (bucket_id, name) values ('reports', %s)", [f"{F10T}/site-photo.jpg"],
+        sqlstate="42501")
+act(F10U, "insert into storage.objects (bucket_id, name) values ('reports', %s)", [f"{F10T}/{uuid.uuid4()}.pdf"])
+check("F10: …while a report PDF, named as step D2 names it, still uploads", True)
+
+# F11 — privileges are the second lock on every table, the 0001-0005 ones included.
+print("\n— Review F11: anon holds no table privileges, so RLS is never the only lock")
+F11_ANON = su("""select coalesce(string_agg(c.relname, ', ' order by c.relname), '')
+                   from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                  where n.nspname = 'public' and c.relkind = 'r'
+                    and (has_table_privilege('anon', c.oid, 'select') or has_table_privilege('anon', c.oid, 'insert')
+                         or has_table_privilege('anon', c.oid, 'update') or has_table_privilege('anon', c.oid, 'delete'))""")[0][0]
+check("F11: anon holds no privilege on any public table", F11_ANON == "", F11_ANON)
+F11_PROBE = su("""select has_table_privilege('authenticated', 'public.email_probe_log', 'select')
+                      or has_table_privilege('authenticated', 'public.email_probe_log', 'insert')""")[0][0]
+check("F11: …and authenticated holds none on the probe log that 0004 says it is never granted", F11_PROBE is False)
+
+# ── T. the review's notes, as decided ──────────────────────────────────────
+
+# Note 1 — reopening a finished visit is for corrections: completing it again keeps its first completion date.
+print("\n— Review note 1: a reopened visit keeps the date it was first completed")
+N1U = user("n1-owner@review.test")
+N1T = one(N1U, "select id from public.create_organisation('N1 Sparks', 'provider', 'vic_rental')")   # Free: 1 a month
+_, N1_L = add_site(N1U, N1T, "N1 Rental")
+N1_V = start_visit(N1U, N1T, N1_L, "vic_smoke_alarm", completed=True)   # this month's one inspection
+check("note 1: completing a visit records when it was first completed",
+      su("select first_completed_at = completed_at from public.visits where id = %s", [N1_V])[0][0])
+# Make it last year's check (the superuser, triggers off).
+su_raw("""update public.visits set started_at = now() - interval '370 days', completed_at = now() - interval '365 days',
+                 first_completed_at = now() - interval '365 days' where id = %s""", [N1_V])
+su_raw("""update public.compliance_items set last_done_on = (now() - interval '365 days')::date,
+                 next_due_on = (now() - interval '365 days' + interval '12 months')::date where location_id = %s""", [N1_L])
+
+
+def n1_state():
+    return su("""select v.completed_at, c.next_due_on from public.visits v
+                 join public.compliance_items c on c.location_id = v.location_id where v.id = %s""", [N1_V])[0]
+
+
+N1_BEFORE = n1_state()
+refused("note 1: (for contrast) with this month's inspection used, a new visit at the rental is refused", N1U,
+        "insert into public.visits (team_id, location_id, kind) values (%s, %s, 'vic_smoke_alarm')", [N1T, N1_L],
+        sqlstate="PT402")
+act(N1U, "update public.visits set completed_at = null where id = %s", [N1_V])
+act(N1U, "update public.visits set completed_at = now() where id = %s", [N1_V])
+N1_AFTER = n1_state()
+check("note 1: reopening last year's check and completing it again keeps last year's date",
+      N1_AFTER[0] == N1_BEFORE[0], f"{N1_BEFORE} -> {N1_AFTER}")
+check("note 1: …so the rental's due date does not move on", N1_AFTER[1] == N1_BEFORE[1], f"{N1_BEFORE} -> {N1_AFTER}")
+check("note 1: …and a report sent from it again carries last year's date",
+      one(N1U, "select completed_on from public.send_report(%s, 'owner@n1.test')", [N1_V])
+      == su("select public.local_day(%s)", [N1_BEFORE[0]])[0][0])
+refused("note 1: a completion date recorded more than 7 days ago cannot be changed directly", N1U,
+        "update public.visits set completed_at = now() where id = %s", [N1_V],
+        contains="can no longer be changed", sqlstate="23514")
+try:   # refused or ignored, either keeps the record
+    act(N1U, "update public.visits set first_completed_at = now() where id = %s", [N1_V])
+except psycopg.Error:
+    pass
+check("note 1: …and when it was first completed is the database's to keep, not the app's",
+      su("select first_completed_at from public.visits where id = %s", [N1_V])[0][0] == N1_BEFORE[0])
+
+# F5, tightened — inside the window, a visit started in the last 7 days is today's work.
+print("\n— Review F5, tightened: inside the import window only old work is old work")
+W5U = user("w5-owner@review.test")
+W5T = one(W5U, "select id from public.create_organisation('W5 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [W5T])
+_, W5_L1 = add_site(W5U, W5T, "W5 Today")
+_, W5_L2 = add_site(W5U, W5T, "W5 Old")
+act(W5U, "select public.open_import_window(%s)", [W5T])
+W5_V = start_visit(W5U, W5T, W5_L1, "vic_smoke_alarm")
+refused("F5: inside the window, a visit started today still cannot be completed months ago", W5U,
+        "update public.visits set completed_at = now() - interval '300 days' where id = %s", [W5_V], sqlstate="23514")
+refused("no visit ends before it began, old work in the window included", W5U,
+        """insert into public.visits (team_id, location_id, kind, started_at, completed_at)
+           values (%s, %s, 'vic_smoke_alarm', now() - interval '400 days', now() - interval '500 days')""",
+        [W5T, W5_L2], contains="before its start", sqlstate="23514")
+su("update public.teams set import_open_until = now() - interval '1 second' where id = %s", [W5T])
+refused("…nor today's work, by more than an hour's difference between two devices' clocks", W5U,
+        "update public.visits set completed_at = now() - interval '2 hours' where id = %s", [W5_V],
+        contains="before its start", sqlstate="23514")
+# A row from before 0006 whose dates are out of order (a device with a wrong clock, say).
+su_raw("update public.visits set completed_at = started_at - interval '1 day' where id = %s", [W5_V])
+act(W5U, "update public.visits set technician = 'Sam', started_at = started_at, completed_at = completed_at where id = %s",
+    [W5_V])
+check("…while a visit already out of order still takes every other edit, the app re-sending its dates",
+      su("select technician from public.visits where id = %s", [W5_V])[0][0] == "Sam")
+
+# Note 4 — the grace clock survives a webhook that writes every column.
+print("\n— Review note 4: the 7-day grace cannot be restarted or stretched by the webhook")
+N4U = user("n4-owner@review.test")
+N4T = one(N4U, "select id from public.create_organisation('N4 Billing', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro', status = 'past_due' where team_id = %s", [N4T])
+
+
+def n4_since():
+    return su("select past_due_since from public.subscriptions where team_id = %s", [N4T])[0][0]
+
+
+N4_FIRST = n4_since()
+su("update public.subscriptions set status = 'past_due', past_due_since = null where team_id = %s", [N4T])
+check("note 4: writing past_due_since empty while still past due keeps the first date", n4_since() == N4_FIRST)
+su("update public.subscriptions set past_due_since = now() + interval '3 days' where team_id = %s", [N4T])
+check("note 4: …and a later date cannot stretch the 7 days", n4_since() == N4_FIRST)
+su("update public.subscriptions set past_due_since = %s where team_id = %s", [N4_FIRST - timedelta(days=2), N4T])
+check("note 4: …while the webhook can still set an earlier one, from the failed invoice",
+      n4_since() == N4_FIRST - timedelta(days=2))
+
+# Note 5 — who signed off, and when it was saved, are the database's.
+print("\n— Review note 5: the database records who signed off, and when")
+N5U = user("n5-owner@review.test")
+N5T = one(N5U, "select id from public.create_organisation('N5 Sparks', 'provider', 'vic_rental')")
+_, N5_L = add_site(N5U, N5T, "N5 Rental")
+N5_V = start_visit(N5U, N5T, N5_L, "vic_electrical_safety")
+act(N5U, "update public.visits set signoff = %s where id = %s",
+    [json.dumps({"technician": "Sam", "signature": "M0 0", "signed_by": str(uuid.uuid4()),
+                 "recorded_at": "2020-01-01T00:00:00Z"}), N5_V])
+N5_SO = su("select signoff from public.visits where id = %s", [N5_V])[0][0]
+check("note 5: the sign-off records who was signed in, over anything the app sent",
+      N5_SO.get("signed_by") == str(N5U), str(N5_SO))
+check("note 5: …and when it was saved", "recorded_at" in N5_SO and datetime.fromisoformat(N5_SO["recorded_at"]) > now - timedelta(hours=1),
+      str(N5_SO))
+check("note 5: …and fills in the signing time if the app left it out", N5_SO.get("signed_at") is not None, str(N5_SO))
+refused("note 5: a sign-off dated before the visit started is refused", N5U,
+        "update public.visits set signoff = %s where id = %s",
+        [json.dumps({"technician": "Sam", "signed_at": (now - timedelta(days=3)).isoformat()}), N5_V],
+        contains="sign-off time", sqlstate="23514")
+refused("note 5: …as is one dated in the future", N5U,
+        "update public.visits set signoff = %s where id = %s",
+        [json.dumps({"technician": "Sam", "signed_at": (now + timedelta(days=1)).isoformat()}), N5_V],
+        contains="sign-off time", sqlstate="23514")
+
+# Note 8 — a sent report is work under the starter pack, even once its visit is deleted.
+print("\n— Review note 8: a sent report keeps the starter pack fixed")
+N8U = user("n8-owner@review.test")
+N8T = one(N8U, "select id from public.create_organisation('N8 Sparks', 'provider', 'vic_rental')")
+_, N8_L = add_site(N8U, N8T, "N8 Rental")
+N8_V = start_visit(N8U, N8T, N8_L, "vic_smoke_alarm", completed=True)
+act(N8U, "select public.send_report(%s, 'owner@n8.test')", [N8_V])
+act(N8U, "delete from public.visits where id = %s", [N8_V])
+refused("note 8: deleting the visit does not free the starter pack once its report has gone out", N8U,
+        "select public.choose_starter_pack(%s, 'qld_electrical')", [N8T], contains="cannot be swapped",
+        sqlstate="PT402")
+
+# Note 9 — a saved report stays saved if the account it was saved to is deleted.
+print("\n— Review note 9: deleting the landlord's account does not reopen the report's link")
+N9U = user("n9-provider@review.test")
+N9T = one(N9U, "select id from public.create_organisation('N9 Sparks', 'provider', 'vic_rental')")
+_, N9_L = add_site(N9U, N9T, "N9 Rental")
+N9_V = start_visit(N9U, N9T, N9_L, "vic_smoke_alarm", completed=True)
+N9_TOK = one(N9U, "select token from public.send_report(%s, 'pat@n9-landlord.test')", [N9_V])
+N9L = user("pat@n9-landlord.test")
+N9TL = one(N9L, "select id from public.create_organisation('Pat''s rentals', 'landlord')")
+act(N9L, "select public.claim_report(%s, %s)", [N9_TOK, N9TL])
+act(N9L, "delete from public.teams where id = %s", [N9TL])
+check("note 9: the link still says saved, with no content, after the landlord's account is deleted",
+      act(None, "select status, snapshot from public.report_preview(%s)", [N9_TOK]) == [("saved", None)])
+
+# Note 11 — a pack the team already holds cannot also become its starter.
+print("\n— Review note 11: choosing a pack the team already holds")
+N11U = user("n11-owner@review.test")
+N11T = one(N11U, "select id from public.create_organisation('N11 Sparks', 'provider', 'vic_rental')")
+su("insert into public.team_packs (team_id, pack_id, source) values (%s, 'av', 'addon')", [N11T])   # the webhook
+refused("note 11: a pack held as an add-on cannot also be chosen as the starter", N11U,
+        "select public.choose_starter_pack(%s, 'av')", [N11T], contains="already has")
+check("note 11: …so the team keeps its starter",
+      su("select pack_id from public.team_packs where team_id = %s and source = 'starter'", [N11T]) == [("vic_rental",)])
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

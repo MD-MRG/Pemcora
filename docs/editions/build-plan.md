@@ -139,6 +139,9 @@ database tables.
 - A visit is counted once, when it's first saved to the database. Continuing, editing or
   finishing it later is never counted or refused, even after the allowance is used up or
   the plan changes.
+- Reopening a finished visit is for corrections: completing it again keeps the date it was
+  first completed, so its report and due dates stay as they were. A new inspection of the
+  same site is a new visit, and counts. (Decided after the Phase A security review.)
 - Anything entered survives a dropped connection, a closed app or a reload. Unsaved
   changes are kept on the device and sent when the connection returns.
 - A visit started offline is checked when the device reconnects. If it's refused, it stays
@@ -320,6 +323,9 @@ next 3 months (adjustable), not just checks coming due.
 - Every email has a "No longer needed" link. Clicking it stops reminders for that check and
   tells the electrician, for example "Jane says the check at 10 Smith St is no longer
   needed." This covers a landlord who switches electricians.
+- Once a client has switched reminders off with that link, the team can't switch them back
+  on: an unsubscribe has to stick (Spam Act 2003). (Decided after the Phase A security
+  review.)
 
 ### 2.9 Equipment register
 
@@ -366,7 +372,8 @@ first opened, who saved it and which property it's filed under.
   Consumer Affairs Victoria requires the electrician's name and licence or registration
   number on the electrical safety check record.
 - **Sign-off.** The technician's name, licence number and signature are captured at
-  sign-off and stored with the visit, so later changes to settings don't rewrite it.
+  sign-off and stored with the visit, so later changes to settings don't rewrite it. The
+  database adds who was signed in and when it was saved.
 
 **Reading, saving and filing.**
 
@@ -777,8 +784,13 @@ Add checks to `docs/editions/test/run_tests.py` for:
 1. Move the drafts into `supabase/migrations/` as `0006_editions.sql` and
    `0007_compliance_and_reports.sql`.
 2. With M.D.'s go-ahead, run them in the Supabase SQL editor. Check each verification
-   result; the existing team should read `pro · comped · av`.
-3. Run `tests/rls.mjs` and the existing suites. Limits stay off.
+   result; the existing team should read `pro · comped · av`, and 0007's
+   `cross_team_rows` must be 0 (any other number is old data to look at by hand). 0006
+   replaces each team's 6-character join code with a 12-character one; nothing in the app
+   shows the code.
+3. In Dashboard → Storage, give the `evidence` bucket a size limit and image types only;
+   0007 sets the `reports` bucket's limits itself.
+4. Run `tests/rls.mjs` and the existing suites. Limits stay off.
 
 ### Phase B — App foundations
 
@@ -861,6 +873,8 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - An outcome declaration at sign-off (compliant or non-compliant).
 - Sign-off with the technician's name, their licence number filled in, and a signature
   pad; saved to `visits.signoff`.
+- After completing a reopened visit, show the completion date the database kept (its first
+  one), not the device's.
 
 #### C2. Equipment panel per site
 
@@ -905,6 +919,9 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - Upload the PDF to `reports/<team_id>/<uuid>.pdf`, call `send_report()`, and email the
   link `#/r/<token>` through Resend.
 - "Send again" calls `resend_report()`. "Withdraw" is available until the report is saved.
+- Before the function emails anything, cap how many reports a team can send a day:
+  `send_report()` has no limit yet, so any Free account could send unlimited email from
+  Pemcora's domain to any address. (From the Phase A security review.)
 
 #### D3. Report link page `#/r/<token>`
 
@@ -921,6 +938,8 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - Properties list with each property's due dates, received reports and PDFs.
 - Hand-entered checks, with a certificate upload on Pro (decision D6).
 - Remove a site link to stop automatic filing.
+- Read deliveries through a view that leaves out the provider-side ids
+  (`provider_team_id`, `provider_location_id`, `visit_id`, `sent_by`).
 
 ### Phase E — Billing and limits
 
@@ -984,7 +1003,8 @@ starter pack.
 #### F2. "No longer needed" page
 
 `#/stop/<token>` calls `reminder_opt_out()`, confirms "Reminders for [site] are off", and
-notifies the electrician.
+notifies the electrician. It calls it when the client presses a button on the page, not
+when the page loads: some mail scanners open every link in an email.
 
 #### F3. Switches
 
@@ -1040,15 +1060,19 @@ Northern Territory, and for Queensland's electrical check:
 | D8 | Reminders for landlords about their own tracker | not in the first release |
 | D9 | Who can upgrade and manage billing | owners and admins |
 | D10 | Store lease dates for Queensland rentals (due within 30 days before each lease) | not yet; the 12-month repeat stands in |
+| D11 | One person running several Free teams, each with its own inspection a month | allowed, since limits are per team; revisit before E6 |
 
 ## 6. Known limits
 
 - Each report goes to one email address, so an agency can't yet pass a report on to the
   owner inside Pemcora.
-- Reopening a completed visit doesn't roll back due dates.
+- Reopening a completed visit doesn't roll back due dates, and completing it again doesn't
+  move them on.
 - Your logo on reports is only a soft limit while PDFs are made in the browser.
-- A team that deletes every visit under its starter pack can swap it, but it loses that
-  work and the month's inspection isn't given back.
+- A team that deletes every visit under its starter pack, and has sent no report under it,
+  can swap it, but it loses that work and the month's inspection isn't given back.
+- A file uploaded to `reports/` that no delivery names stays there: nothing can delete
+  report files. A cleanup of unnamed ones would be a later step.
 
 ## 7. Sources for the pack lists
 

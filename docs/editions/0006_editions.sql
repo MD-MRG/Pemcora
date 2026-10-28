@@ -222,16 +222,27 @@ create trigger subscriptions_set_updated_at before update on public.subscription
   for each row execute function public.set_updated_at();
 
 -- The grace clock is the database's, not the webhook's to remember. It starts
--- the first time a plan goes past due, survives Stripe re-sending past_due on
--- every retry (an UPDATE that leaves the column alone keeps it), and stops
--- when the status moves on — a successful payment ends it. The webhook may set
--- an earlier date itself, from the failed invoice.
+-- the first time a plan goes past due and stops when the status moves on — a
+-- successful payment ends it. While the plan stays past due it only ever moves
+-- earlier: Stripe re-sending past_due on every retry, or a webhook that writes
+-- every column and sends past_due_since empty or later, cannot restart it or
+-- stretch the 7 days. The webhook may set an earlier date, from the failed
+-- invoice.
 create or replace function public.track_past_due()
 returns trigger language plpgsql set search_path = public as $$
 begin
   if new.status <> 'past_due' then
     new.past_due_since := null;
-  elsif new.past_due_since is null then
+    return new;
+  end if;
+
+  -- Nested, not `tg_op = 'UPDATE' and old.status ...` — see 0005.
+  if tg_op = 'UPDATE' then
+    if old.status = 'past_due' and old.past_due_since is not null then
+      new.past_due_since := least(old.past_due_since, coalesce(new.past_due_since, old.past_due_since));
+    end if;
+  end if;
+  if new.past_due_since is null then
     new.past_due_since := now();
   end if;
   return new;
@@ -362,11 +373,15 @@ $$;
 -- allowance left
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- Three triggers, because the order of the checks is the rule:
+-- Five triggers, because the order of the checks is the rule:
 --
---   visits_gate_pack        BEFORE INSERT: the pack, and the dates.
---   visits_gate_dates       BEFORE UPDATE OF started_at, completed_at: a changed date.
---   visits_count_start      AFTER INSERT: the monthly counter, and the allowance.
+--   visits_gate_pack      BEFORE INSERT: the pack, and the dates.
+--   visits_gate_dates     BEFORE UPDATE OF started_at, completed_at,
+--                         first_completed_at: what may change about the dates.
+--   visits_gate_identity  BEFORE UPDATE OF kind, location_id, team_id: nothing.
+--   visits_count_start    AFTER INSERT: the monthly counter, and the allowance.
+--   visits_count_import   AFTER UPDATE OF completed_at: an imported visit that
+--                         was still open counts when it is finished later.
 --
 -- The counter runs AFTER the row is in, so the one-open-visit index
 -- (visits_one_open_per_kind_idx, 0001) answers first. A second device starting
@@ -384,12 +399,27 @@ $$;
 -- compliance report. Each date is checked whenever it is written — on insert,
 -- and on any UPDATE that changes it — never the other one alongside it: a
 -- visit started a fortnight ago can be finished today, but neither date can
--- later be moved into the past through the API.
+-- later be moved into the past through the API. A visit never ends before it
+-- began.
+--
+-- Reopening a finished visit is for corrections, so completing it again keeps
+-- the date it was first completed (first_completed_at): the report, the due
+-- date and the month's count all stay as they were. A new inspection of the
+-- same site is a new visit, and that one counts. Without this, last year's
+-- visit could be reopened and done again, uncounted, as this year's check.
 --
 -- The one exception is the import window: a team's owner may open it once,
--- for 15 minutes, to bring in work from before the account existed. Inside it
--- the dates are not checked and visits started before this month are history,
--- not this month's use. See open_import_window() below.
+-- for 15 minutes, to bring in work from before the account existed. A visit
+-- started more than 7 days ago that comes in while it is open may carry any
+-- past date (never a future one), and one started before this month is
+-- history, not this month's use. See open_import_window() below.
+
+-- When a visit was first completed: the triggers below keep it, and never take
+-- it from the client. Visits completed before this file get it from their
+-- completed_at; a re-run finds none left to fill.
+alter table public.visits add column if not exists first_completed_at timestamptz;
+update public.visits set first_completed_at = completed_at
+ where first_completed_at is null and completed_at is not null;
 
 -- True while the team's one-time import window is open.
 create or replace function public.import_window_open(_team_id uuid)
@@ -414,6 +444,66 @@ begin
 end;
 $$;
 
+-- Refuses a date in the future: the one date check the import window keeps.
+create or replace function public.check_visit_not_future(_what text, _at timestamptz)
+returns void language plpgsql stable set search_path = public as $$
+begin
+  if _at > now() + interval '1 hour' then
+    raise exception '% is in the future. Check the date and time on this device.', _what
+      using errcode = 'check_violation', hint = 'visit_date';
+  end if;
+end;
+$$;
+
+-- Refuses a completion before the start, with an hour's leeway for two
+-- devices' clocks. Imports included: old work cannot end before it began either.
+create or replace function public.check_visit_order(_started_at timestamptz, _completed_at timestamptz)
+returns void language plpgsql immutable set search_path = public as $$
+begin
+  if _completed_at is not null and _completed_at < _started_at - interval '1 hour' then
+    raise exception 'The visit''s completion date is before its start date'
+      using errcode = 'check_violation', hint = 'visit_date';
+  end if;
+end;
+$$;
+
+-- The visits that came in through the import window: started more than 7
+-- days ago and inserted while it was open. Only the triggers below write or
+-- read it. pending is true for one that started before the month it came in
+-- and was still open: history while the window is open, but this month's
+-- inspection if it is finished after the window has closed.
+create table if not exists public.visit_imports (
+  visit_id uuid primary key references public.visits(id) on delete cascade,
+  pending  boolean not null
+);
+alter table public.visit_imports enable row level security;
+revoke all on table public.visit_imports from anon, authenticated;
+
+-- One more inspection this month, refused past the plan's allowance.
+create or replace function public.count_inspection(_team_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_limit  int;
+  v_used   int;
+  v_period date := date_trunc('month', public.local_day(now()))::date;
+begin
+  -- Counted with the switch off too, so there is real usage to price against.
+  insert into public.team_usage as u (team_id, period, visits_started)
+    values (_team_id, v_period, 1)
+    on conflict (team_id, period) do update set visits_started = u.visits_started + 1
+    returning u.visits_started into v_used;
+
+  v_limit := public.team_visit_limit(_team_id);
+  if public.limits_enforced() and v_limit is not null and v_used > v_limit then
+    raise exception 'This plan includes % inspection% a month, and this month''s % been used',
+      v_limit,
+      case when v_limit = 1 then '' else 's' end,
+      case when v_limit = 1 then 'has' else 'have' end
+      using errcode = 'PT402', hint = 'upgrade';
+  end if;
+end;
+$$;
+
 create or replace function public.gate_visit_pack()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -429,37 +519,95 @@ begin
     raise exception 'There is no workflow called "%"', new.kind;
   end if;
 
-  if public.limits_enforced() and not public.team_has_pack(new.team_id, v_pack) then
-    raise exception 'This team does not have the % pack', v_label
-      using errcode = 'PT402', hint = 'upgrade';
+  -- Read under a share lock on the pack row this visit relies on.
+  -- choose_starter_pack() locks the same row before it looks for visits, and
+  -- the webhook's delete of an add-on waits for it too, so neither can pass a
+  -- visit that is being saved under the pack it is taking away.
+  if v_pack <> 'core' then
+    perform 1 from public.team_packs p
+     where p.team_id = new.team_id and p.pack_id = v_pack
+       for share;
+    if not found and public.limits_enforced() then
+      raise exception 'This team does not have the % pack', v_label
+        using errcode = 'PT402', hint = 'upgrade';
+    end if;
   end if;
 
   -- Not behind the switch: an honest date matters on a compliance report
-  -- whether or not anybody is paying.
-  if not public.import_window_open(new.team_id) then
+  -- whether or not anybody is paying. Old work coming in through the import
+  -- window may carry any past date, never a future one. A visit started in the
+  -- last 7 days is today's work, window or not, and is held to the last 7 days.
+  if public.import_window_open(new.team_id) and new.started_at < now() - interval '7 days' then
+    if new.completed_at is not null then
+      perform public.check_visit_not_future('The visit''s completion date', new.completed_at);
+    end if;
+  else
     perform public.check_visit_date('The visit''s start date', new.started_at);
     if new.completed_at is not null then
       perform public.check_visit_date('The visit''s completion date', new.completed_at);
     end if;
   end if;
+  perform public.check_visit_order(new.started_at, new.completed_at);
 
+  -- The database's record of when the visit was first completed, never the
+  -- client's.
+  new.first_completed_at := new.completed_at;
   return new;
 end;
 $$;
 
--- Only a date that actually changes. Completing (or completing again after
--- reopenVisit()) changes completed_at; clearing it to reopen is not a date.
--- Rewriting other fields of a visit finished months ago (the technician's
--- name, say) sends the same completed_at back unchanged, and passes.
+-- What may change about a visit's dates once it exists:
+--
+--   started_at          checked like any new date, whenever it changes.
+--   completed_at        set for the first time: checked like any new date (an
+--                       imported visit, inside the window, may take an old
+--                       one). Changed while set: only within 7 days of when it
+--                       was recorded, and only to a date in the last 7 days.
+--                       Cleared: that is reopenVisit(), and allowed.
+--   completing a reopened visit: it keeps the date it was first completed,
+--                       whatever date the app sends (see the section header).
+--   first_completed_at  the database's, never the client's: kept as it was.
+--
+-- Sending the same values back is not a change, and passes: the app re-sends
+-- completed_at with every other change to a visit, finished months ago or not.
 create or replace function public.gate_visit_dates()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  -- Only the import's own visits, and only while its window is open, may be
+  -- completed with an old date: the app inserts each one open and then
+  -- completes it.
+  v_import boolean := public.import_window_open(new.team_id)
+                      and exists (select 1 from public.visit_imports i where i.visit_id = new.id);
 begin
-  if public.import_window_open(new.team_id) then return new; end if;
+  new.first_completed_at := old.first_completed_at;
+
   if new.started_at is distinct from old.started_at then
     perform public.check_visit_date('The visit''s start date', new.started_at);
   end if;
+
+  if new.completed_at is not null and old.completed_at is null and old.first_completed_at is not null then
+    -- The date it was first completed, checked when it was first set.
+    new.completed_at := old.first_completed_at;
+    return new;
+  end if;
+
   if new.completed_at is not null and new.completed_at is distinct from old.completed_at then
-    perform public.check_visit_date('The visit''s completion date', new.completed_at);
+    if old.completed_at is not null and old.completed_at < now() - interval '7 days' then
+      raise exception 'This visit was completed more than 7 days ago, so its completion date can no longer be changed'
+        using errcode = 'check_violation', hint = 'visit_date';
+    end if;
+    if v_import and old.completed_at is null then
+      perform public.check_visit_not_future('The visit''s completion date', new.completed_at);
+    else
+      perform public.check_visit_date('The visit''s completion date', new.completed_at);
+    end if;
+    new.first_completed_at := new.completed_at;
+  end if;
+
+  -- Only when a date moved: a row from before this file whose dates are out of
+  -- order still takes every other edit.
+  if new.started_at is distinct from old.started_at or new.completed_at is distinct from old.completed_at then
+    perform public.check_visit_order(new.started_at, new.completed_at);
   end if;
   return new;
 end;
@@ -468,32 +616,22 @@ $$;
 create or replace function public.count_visit_start()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
-  v_limit  int;
-  v_used   int;
   v_period date := date_trunc('month', public.local_day(now()))::date;
 begin
-  -- Last year's visits, brought in through the import window, are history.
-  -- This month's still count, window or not.
-  if public.import_window_open(new.team_id)
-     and public.local_day(new.started_at) < v_period then
-    return new;
+  -- Old work brought in through the import window — started more than 7 days
+  -- ago — is remembered as the import's. Started before this month, it is
+  -- history, not this month's use; still open, it stays pending until it is
+  -- finished. Everything else counts, window or not.
+  if public.import_window_open(new.team_id) and new.started_at < now() - interval '7 days' then
+    insert into public.visit_imports (visit_id, pending)
+      values (new.id, public.local_day(new.started_at) < v_period and new.completed_at is null)
+      on conflict (visit_id) do nothing;
+    if public.local_day(new.started_at) < v_period then
+      return new;
+    end if;
   end if;
 
-  -- Counted with the switch off too, so there is real usage to price against.
-  insert into public.team_usage as u (team_id, period, visits_started)
-    values (new.team_id, v_period, 1)
-    on conflict (team_id, period) do update set visits_started = u.visits_started + 1
-    returning u.visits_started into v_used;
-
-  v_limit := public.team_visit_limit(new.team_id);
-  if public.limits_enforced() and v_limit is not null and v_used > v_limit then
-    raise exception 'This plan includes % inspection% a month, and this month''s % been used',
-      v_limit,
-      case when v_limit = 1 then '' else 's' end,
-      case when v_limit = 1 then 'has' else 'have' end
-      using errcode = 'PT402', hint = 'upgrade';
-  end if;
-
+  perform public.count_inspection(new.team_id);
   return new;
 end;
 $$;
@@ -503,12 +641,52 @@ create trigger visits_gate_pack before insert on public.visits
   for each row execute function public.gate_visit_pack();
 
 drop trigger if exists visits_gate_dates on public.visits;
-create trigger visits_gate_dates before update of started_at, completed_at on public.visits
+create trigger visits_gate_dates before update of started_at, completed_at, first_completed_at on public.visits
   for each row execute function public.gate_visit_dates();
 
 drop trigger if exists visits_count_start on public.visits;
 create trigger visits_count_start after insert on public.visits
   for each row execute function public.count_visit_start();
+
+-- An old visit the import brought in still open is history only while the
+-- window is open. Finished after it has closed, it is this month's
+-- inspection, counted (and refused past the allowance) like any other start.
+create or replace function public.count_imported_visit()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.completed_at is null or old.completed_at is not null then return new; end if;
+  update public.visit_imports set pending = false where visit_id = new.id and pending;
+  if found and not public.import_window_open(new.team_id) then
+    perform public.count_inspection(new.team_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists visits_count_import on public.visits;
+create trigger visits_count_import after update of completed_at on public.visits
+  for each row execute function public.count_imported_visit();
+
+-- A visit's check, site and team are what the insert gates above checked, so
+-- they never change afterwards. Otherwise one counted visit could be pointed
+-- at site after site, or an AV visit turned into a VIC check without the pack.
+-- Sending the same values back (an upsert, say) is not a change and passes.
+create or replace function public.gate_visit_identity()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.kind is distinct from old.kind
+     or new.location_id is distinct from old.location_id
+     or new.team_id is distinct from old.team_id then
+    raise exception 'A visit''s check, site and team are fixed once it has started. Start a new visit instead.'
+      using errcode = 'check_violation', hint = 'visit_identity';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists visits_gate_identity on public.visits;
+create trigger visits_gate_identity before update of kind, location_id, team_id on public.visits
+  for each row execute function public.gate_visit_identity();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Gate 2: seats
@@ -574,6 +752,9 @@ declare
   v_used  int;
 begin
   if not public.limits_enforced() then return new; end if;
+  -- The lock gate_team_seats and claim_seat take, so two invitations for the
+  -- last seat queue here and the second one counts the first.
+  perform 1 from public.subscriptions where team_id = new.team_id for update;
   v_limit := public.team_seat_limit(new.team_id);
   if v_limit is null then return new; end if;
 
@@ -761,7 +942,9 @@ begin
   if v_invite.expires_at <= now() then
     raise exception 'That invitation has expired. Ask for a new one.';
   end if;
-  if lower(v_invite.email) <> v_email then
+  -- An account with no address (a phone or anonymous sign-in) matches nothing:
+  -- without the first test the comparison is NULL and the check passes.
+  if v_email is null or lower(v_invite.email) <> v_email then
     raise exception 'That invitation was sent to %, not to you', v_invite.email;
   end if;
 
@@ -854,7 +1037,7 @@ begin
     if v_invite.id is null then return new; end if;
     -- The token is not proof by itself. Whoever confirms has to be the address
     -- that was invited, so a leaked link cannot be redeemed by somebody else.
-    if lower(v_invite.email) <> lower(new.email) then return new; end if;
+    if new.email is null or lower(v_invite.email) <> lower(new.email) then return new; end if;
 
     if not exists (
       select 1 from public.team_members where team_id = v_invite.team_id and user_id = new.id
@@ -884,11 +1067,85 @@ $$;
 -- ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * A team's join code. It is the whole credential for joining the team, so it
+ * has to be too long to guess: 12 characters from 32 that cannot be mistaken
+ * for one another (no I, O, 0 or 1) is 60 bits. 0001's six hex digits were 24.
+ * Bytes 0-5 and 9-14 of a v4 uuid are random, and 256 is a multiple of 32, so
+ * every character is equally likely.
+ */
+create or replace function public.new_join_code()
+returns text language plpgsql volatile set search_path = public as $$
+declare
+  v_alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_raw  bytea;
+  v_code text;
+begin
+  loop
+    v_raw  := decode(replace(gen_random_uuid()::text, '-', ''), 'hex');
+    v_code := '';
+    for i in 0..11 loop
+      v_code := v_code || substr(v_alphabet,
+                  get_byte(v_raw, case when i < 6 then i else i + 3 end) % 32 + 1, 1);
+    end loop;
+    exit when not exists (select 1 from public.teams where invite_code = v_code);
+  end loop;
+  return v_code;
+end;
+$$;
+
+-- 0005's create_team(), unchanged except for the code.
+create or replace function public.create_team(p_name text, p_description text default '')
+returns public.teams language plpgsql security definer set search_path = public as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_team public.teams;
+begin
+  if v_uid is null then raise exception 'Not authenticated'; end if;
+
+  insert into public.teams (name, description, invite_code)
+    values (coalesce(nullif(trim(p_name), ''), 'My Team'), coalesce(trim(p_description), ''),
+            public.new_join_code())
+    returning * into v_team;
+
+  -- The creator is the owner, not merely an admin.
+  insert into public.team_members (team_id, user_id, role) values (v_team.id, v_uid, 'owner');
+  insert into public.member_prefs  (team_id, user_id)       values (v_team.id, v_uid);
+  insert into public.team_settings (team_id)                values (v_team.id);
+  insert into public.team_templates (team_id, kind)
+    values (v_team.id, 'maintenance'), (v_team.id, 'commissioning'), (v_team.id, 'custom');
+
+  return v_team;
+end;
+$$;
+
+-- Codes made before this file are six hex digits: replace them. Nothing in the
+-- app shows or uses a code today (only tests/rls.mjs joins with one, and it
+-- reads the code create_team() returns), so nobody has to be told. A re-run
+-- finds none left to replace.
+update public.teams set invite_code = public.new_join_code() where length(invite_code) < 12;
+
+-- Whether a team has done work under a pack: a visit of one of its workflows.
+-- 0007 adds sent reports, which outlive their visits. Internal: it answers for
+-- any team id, so only choose_starter_pack() calls it.
+create or replace function public.pack_in_use(_team_id uuid, _pack_id text)
+returns boolean language sql stable set search_path = public as $$
+  select exists (
+    select 1 from public.visits v
+    join public.workflows w on w.id = v.kind
+    where v.team_id = _team_id and w.pack_id = _pack_id
+  );
+$$;
+
+/**
  * Pick the team's one starter pack. Owner or admin, providers only.
  *
  * Swapping is allowed until the team has done any work under the old pack.
  * After that the old pack stays and the other one is an add-on — otherwise a
  * free team could rotate through every pack, a month at a time.
+ *
+ * A pack the team already holds another way (an add-on, or granted free)
+ * cannot also become the starter: there is one row per team and pack, so the
+ * swap would delete the old starter and leave the team with none.
  */
 create or replace function public.choose_starter_pack(p_team_id uuid, p_pack_id text)
 returns void language plpgsql security definer set search_path = public as $$
@@ -904,18 +1161,20 @@ begin
     raise exception 'Packs are for teams that carry out inspections';
   end if;
 
+  -- Locked before the visits are looked at; see gate_visit_pack().
   select pack_id into v_old
     from public.team_packs
-   where team_id = p_team_id and source = 'starter';
+   where team_id = p_team_id and source = 'starter'
+     for update;
 
   if v_old = p_pack_id then return; end if;
 
+  if exists (select 1 from public.team_packs where team_id = p_team_id and pack_id = p_pack_id) then
+    raise exception 'This team already has the % pack', (select label from public.packs where id = p_pack_id);
+  end if;
+
   if v_old is not null then
-    if exists (
-      select 1 from public.visits v
-      join public.workflows w on w.id = v.kind
-      where v.team_id = p_team_id and w.pack_id = v_old
-    ) then
+    if public.pack_in_use(p_team_id, v_old) then
       raise exception 'This team already has work under its current pack, so it cannot be swapped. Add the other pack instead.'
         using errcode = 'PT402', hint = 'upgrade';
     end if;
@@ -924,8 +1183,7 @@ begin
   end if;
 
   insert into public.team_packs (team_id, pack_id, source)
-    values (p_team_id, p_pack_id, 'starter')
-    on conflict (team_id, pack_id) do nothing;
+    values (p_team_id, p_pack_id, 'starter');
 
   -- Empty rows, exactly as create_team leaves its three: the app seeds each one
   -- from src/data/ on first read, and only an admin's write persists it.
@@ -1121,6 +1379,18 @@ revoke all on table public.team_notices from anon, authenticated;
 grant select on table public.team_notices to authenticated;
 grant update (read_at) on table public.team_notices to authenticated;
 
+-- The tables from before this file get their second lock too. Supabase's
+-- default privileges grant anon everything on every new table: 0002 meant
+-- to give it nothing, and 0004 meant authenticated to have nothing on the
+-- probe log, but neither revoked. Signed-out pages only call SECURITY DEFINER
+-- functions, which need no table privilege.
+revoke all on table
+  public.teams, public.team_members, public.member_prefs, public.team_settings,
+  public.team_templates, public.clients, public.locations, public.floors, public.rooms,
+  public.visits, public.visit_rooms, public.visit_exports, public.email_probe_log
+from anon;
+revoke all on table public.email_probe_log from authenticated;
+
 -- An earlier draft had one visit trigger doing what the three in Gate 1 do.
 -- Gone, so a database that ran that draft does not count every visit twice.
 drop trigger  if exists visits_gate_start on public.visits;
@@ -1137,21 +1407,27 @@ revoke execute on function public.gate_team_invites()                 from publi
 revoke execute on function public.import_window_open(uuid)            from public, anon, authenticated;
 revoke execute on function public.check_visit_date(text, timestamptz) from public, anon, authenticated;
 revoke execute on function public.claim_seat(uuid, uuid)              from public, anon, authenticated;
+revoke execute on function public.count_inspection(uuid)              from public, anon, authenticated;
+revoke execute on function public.count_imported_visit()              from public, anon, authenticated;
+revoke execute on function public.check_visit_not_future(text, timestamptz) from public, anon, authenticated;
+revoke execute on function public.new_join_code()                     from public, anon, authenticated;
+revoke execute on function public.gate_visit_identity()               from public, anon, authenticated;
+revoke execute on function public.check_visit_order(timestamptz, timestamptz) from public, anon, authenticated;
+revoke execute on function public.pack_in_use(uuid, text)             from public, anon, authenticated;
 
--- Helpers. Policies in 0007 call these as the signed-in user, so they stay
--- executable for `authenticated`; `anon` has no use for them.
+-- Helpers that answer the same for everybody, so policies and SECURITY INVOKER
+-- code in 0007 can call them as the signed-in user; `anon` has no use for them.
 revoke execute on function public.local_day(timestamptz)        from public, anon;
 revoke execute on function public.limits_enforced()             from public, anon;
 grant  execute on function public.limits_enforced()             to authenticated;
-revoke execute on function public.team_is_pro(uuid)             from public, anon;
-revoke execute on function public.team_seat_limit(uuid)         from public, anon;
-revoke execute on function public.team_visit_limit(uuid)        from public, anon;
-revoke execute on function public.team_has_pack(uuid, text)     from public, anon;
+-- The plan helpers answer for any team id they are given, so only the
+-- database's own functions call them; 0007's evidence policy asks
+-- can_add_evidence(), which answers for the caller's own teams only.
+revoke execute on function public.team_is_pro(uuid)             from public, anon, authenticated;
+revoke execute on function public.team_seat_limit(uuid)         from public, anon, authenticated;
+revoke execute on function public.team_visit_limit(uuid)        from public, anon, authenticated;
+revoke execute on function public.team_has_pack(uuid, text)     from public, anon, authenticated;
 grant  execute on function public.local_day(timestamptz)        to authenticated;
-grant  execute on function public.team_is_pro(uuid)             to authenticated;
-grant  execute on function public.team_seat_limit(uuid)         to authenticated;
-grant  execute on function public.team_visit_limit(uuid)        to authenticated;
-grant  execute on function public.team_has_pack(uuid, text)     to authenticated;
 
 revoke execute on function public.choose_starter_pack(uuid, text)               from public, anon;
 revoke execute on function public.create_organisation(text, text, text, text)   from public, anon;
@@ -1176,7 +1452,7 @@ notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Verification. Expected: packs 5, workflows 9, fixed_intervals 3,
--- teams_without_plan 0, kind_fkeys 2, gates 6, notices_locked 1, and enforced
+-- teams_without_plan 0, kind_fkeys 2, gates 8, notices_locked 1, and enforced
 -- false until you turn it on. The second result lists every team with its
 -- plan — the ones that existed before this file should read pro / comped / av.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1194,7 +1470,8 @@ select
   (select count(*) from pg_trigger
     where not tgisinternal and tgname in ('teams_provision', 'visits_gate_pack',
                                           'visits_gate_dates', 'visits_count_start',
-                                          'team_members_gate_seats', 'team_invites_gate_seats'))
+                                          'team_members_gate_seats', 'team_invites_gate_seats',
+                                          'visits_gate_identity', 'visits_count_import'))
                                                                              as gates,
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relname = 'team_notices'

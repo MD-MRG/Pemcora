@@ -133,6 +133,39 @@ begin
   end if;
 end $$;
 
+-- The sign-off is the app's, but who and when are the database's: whenever it
+-- is written, signed_by becomes whoever is signed in and recorded_at the
+-- moment it was saved, over anything the app sent under those keys. signed_at
+-- stays the app's — the moment of signing, which may have been offline — but
+-- it cannot be in the future or before the visit started, and the database
+-- fills it in if the app left it out. Sending the same sign-off back is not a
+-- change, and keeps both stamps.
+create or replace function public.stamp_signoff()
+returns trigger language plpgsql set search_path = public as $$
+declare v_signed timestamptz;
+begin
+  if new.signoff is null then return new; end if;
+  -- Nested, not `tg_op = 'UPDATE' and old.signoff ...` — see 0005.
+  if tg_op = 'UPDATE' then
+    if new.signoff is not distinct from old.signoff then return new; end if;
+  end if;
+
+  v_signed := coalesce((new.signoff ->> 'signed_at')::timestamptz, now());
+  if v_signed > now() + interval '1 hour' or v_signed < new.started_at - interval '1 hour' then
+    raise exception 'The sign-off time has to fall between the start of the visit and now'
+      using errcode = 'check_violation', hint = 'signoff_date';
+  end if;
+
+  new.signoff := new.signoff || jsonb_build_object(
+    'signed_at', v_signed, 'signed_by', auth.uid(), 'recorded_at', now());
+  return new;
+end;
+$$;
+
+drop trigger if exists visits_stamp_signoff on public.visits;
+create trigger visits_stamp_signoff before insert or update of signoff on public.visits
+  for each row execute function public.stamp_signoff();
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Equipment register
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -408,6 +441,28 @@ drop trigger if exists compliance_items_next_due on public.compliance_items;
 create trigger compliance_items_next_due before insert or update on public.compliance_items
   for each row execute function public.compliance_next_due();
 
+-- A client who switched a check's reminders off from the email stays switched
+-- off: the team cannot turn them back on. A working unsubscribe is the law for
+-- emails like these (Spam Act 2003), and the record of it is not the team's to
+-- edit either — opted_out_at and opted_out_via have no client grant (see the
+-- privileges below). A check the team switched off itself, from the Due page,
+-- can be switched back on.
+create or replace function public.keep_opt_out()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.reminders_enabled and new.opted_out_via = 'email_link' then
+    raise exception 'The client turned these reminders off from the email, so they cannot be turned back on here'
+      using errcode = 'check_violation', hint = 'opted_out';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists compliance_items_keep_opt_out on public.compliance_items;
+create trigger compliance_items_keep_opt_out before update of reminders_enabled, opted_out_via
+  on public.compliance_items
+  for each row execute function public.keep_opt_out();
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- A completed visit moves its site's due dates on
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -421,13 +476,18 @@ create trigger compliance_items_next_due before insert or update on public.compl
 --
 -- AFTER INSERT as well as UPDATE, so visits imported already completed build
 -- the schedule too. Never backwards: completing an older visit late does not
--- pull a newer due date back. Reopening a visit does not undo anything.
+-- pull a newer due date back. Reopening a visit does not undo anything, and
+-- completing it again moves nothing on: it keeps the date it was first
+-- completed (0006), so it is a correction, not another inspection.
 --
--- SECURITY INVOKER on purpose. The person completing the visit can already
--- write their own team's items, and RLS keeps this to their own team's rows.
+-- SECURITY DEFINER because the reminder bookkeeping it resets
+-- (last_reminded_at, last_visit_id) is not the client's to write; see the
+-- column grants on compliance_items below. It touches only the items of the
+-- visit's own team at the visit's own site, and the visit row has already
+-- passed the parent check that keeps that site in the same team.
 
 create or replace function public.advance_compliance()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_done     date;
   v_interval int;
@@ -437,6 +497,7 @@ begin
   -- Nested, not `tg_op = 'UPDATE' and old.completed_at ...` — see 0005.
   if tg_op = 'UPDATE' then
     if old.completed_at is not null then return new; end if;
+    if old.first_completed_at is not null then return new; end if;
   end if;
 
   v_done     := public.local_day(new.completed_at);
@@ -456,6 +517,7 @@ begin
          last_visit_id    = new.id,
          last_reminded_at = null
    where c.location_id = new.location_id
+     and c.team_id = new.team_id
      and c.satisfied_by = new.kind
      and c.active
      and (c.last_done_on is null or c.last_done_on <= v_done);
@@ -544,7 +606,8 @@ begin
 
     select v.id, public.local_day(v.completed_at) into v_last_visit, v_last_day
       from public.visits v
-     where v.location_id = v_loc.id and v.kind = p_workflow_id and v.completed_at is not null
+     where v.location_id = v_loc.id and v.team_id = p_team_id
+       and v.kind = p_workflow_id and v.completed_at is not null
      order by v.completed_at desc
      limit 1;
 
@@ -578,7 +641,7 @@ $$;
 -- the storage policies), so neither can be had without the other. Like every
 -- limit in 0006, only once app_settings.enforce_limits is on.
 create or replace function public.gate_attachment()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if public.limits_enforced() and not public.team_is_pro(new.team_id) then
     raise exception 'Photo evidence is part of Pro'
@@ -699,7 +762,11 @@ begin
     raise exception 'A report file has to be in your own team''s folder';
   end if;
 
-  select * into v_loc  from public.locations where id = v_visit.location_id;
+  -- The visit's own team's site, never another team's (rows written before
+  -- the parent checks in the RLS section existed are not trusted either).
+  select * into v_loc  from public.locations
+   where id = v_visit.location_id and team_id = v_visit.team_id;
+  if v_loc.id is null then raise exception 'That visit''s site is not in your team'; end if;
   select * into v_team from public.teams     where id = v_visit.team_id;
   select company into v_co from public.team_settings where team_id = v_visit.team_id;
 
@@ -760,6 +827,21 @@ begin
 end;
 $$;
 
+-- 0006's pack_in_use(), plus sent reports. A report stays the team's record
+-- after its visit is deleted, so it is work under the pack as much as the
+-- visit was: deleting visits no longer frees the starter pack for a swap.
+create or replace function public.pack_in_use(_team_id uuid, _pack_id text)
+returns boolean language sql stable set search_path = public as $$
+  select exists (
+           select 1 from public.visits v
+           join public.workflows w on w.id = v.kind
+           where v.team_id = _team_id and w.pack_id = _pack_id)
+      or exists (
+           select 1 from public.report_deliveries d
+           join public.workflows w on w.id = d.workflow_id
+           where d.provider_team_id = _team_id and w.pack_id = _pack_id);
+$$;
+
 /**
  * What a report link shows, to anyone holding it — signed in or not. The link
  * is the credential, as an emailed PDF would be. Marks the report opened.
@@ -767,13 +849,15 @@ $$;
  * status says which page to show:
  *   ok      — the report itself. The only status that returns its content.
  *   expired — the 90 days are up: just the provider's name, to ask for a new link.
- *   saved   — it is in somebody's account now: just the provider's name, and
- *             the page asks them to sign in.
+ *   saved   — somebody saved it to their account: just the provider's name, and
+ *             the page asks them to sign in. It stays saved if that account is
+ *             later deleted, rather than opening to the link again.
  * The Edge Function that signs the file's short-lived URL for a visitor without
  * an account gives one only for 'ok'.
  *
- * Never returns the recipient's address or any provider-side id. The return
- * type gains status, which create or replace cannot do, hence the drop.
+ * Never returns the recipient's address or any provider-side id (the team in
+ * the provider block, the account in the sign-off). The return type gains
+ * status, which create or replace cannot do, hence the drop.
  */
 drop function if exists public.report_preview(uuid);
 
@@ -802,14 +886,14 @@ begin
            case when s.status = 'ok' then d.completed_on end,
            case when s.status = 'ok' then d.outcome end,
            case when s.status = 'ok' then d.site end,
-           case when s.status = 'ok' then d.snapshot #- '{provider,team_id}' end,
+           case when s.status = 'ok' then d.snapshot #- '{provider,team_id}' #- '{signoff,signed_by}' end,
            case when s.status = 'ok' then d.file_path is not null end,
-           d.recipient_team_id is not null
+           d.recipient_team_id is not null or d.claimed_at is not null
       from public.report_deliveries d
       join public.workflows w on w.id = d.workflow_id
       cross join lateral (
         select case
-                 when d.recipient_team_id is not null then 'saved'
+                 when d.recipient_team_id is not null or d.claimed_at is not null then 'saved'
                  when d.link_expires_at <= now()      then 'expired'
                  else 'ok'
                end as status
@@ -865,8 +949,10 @@ begin
 
   select * into v_row from public.report_deliveries where token = p_token for update;
   if v_row.id is null then raise exception 'That report link is not valid'; end if;
-  if lower(v_row.recipient_email) <> v_email then
-    raise exception 'That report was sent to %, not to you', v_row.recipient_email;
+  -- No address matches nothing (see accept_invite), and the refusal does not
+  -- name the address it went to, which report_preview() never reveals either.
+  if v_email is null or lower(v_row.recipient_email) <> v_email then
+    raise exception 'That report was sent to someone else, not to you';
   end if;
 
   if v_row.recipient_team_id is not null then
@@ -1040,14 +1126,19 @@ begin
   select * into v_item from public.compliance_items ci where ci.reminder_token = p_token for update;
   if v_item.id is null then return; end if;
 
-  select * into v_loc    from public.locations l where l.id = v_item.location_id;
-  select * into v_client from public.clients   c where c.id = v_loc.client_id;
+  select * into v_loc    from public.locations l
+   where l.id = v_item.location_id and l.team_id = v_item.team_id;
+  select * into v_client from public.clients   c
+   where c.id = v_loc.client_id and c.team_id = v_item.team_id;
   select coalesce(nullif(btrim(s.company ->> 'name'), ''), t.name) into v_provider
     from public.teams t
     left join public.team_settings s on s.team_id = t.id
    where t.id = v_item.team_id;
 
-  if v_item.opted_out_at is null then
+  -- Every click works: reminders a member switched back on go off again, and
+  -- the provider is told each time. A click on reminders already off changes
+  -- nothing and tells nobody twice.
+  if v_item.reminders_enabled or v_item.opted_out_at is null then
     update public.compliance_items ci
        set reminders_enabled = false, opted_out_at = now(), opted_out_via = 'email_link'
      where ci.id = v_item.id;
@@ -1104,24 +1195,50 @@ create policy pemcora_evidence_select on storage.objects
   for select to authenticated
   using (bucket_id = 'evidence' and public.is_team_member(public.path_team(name)));
 
+-- Whether the caller may add photos to a team's folder: a member, and Pro once
+-- limits are on. Unlike team_is_pro() it answers only for the caller's own
+-- teams, so the policy can call it as the signed-in user.
+create or replace function public.can_add_evidence(_team_id uuid)
+returns boolean language sql security definer stable set search_path = public as $$
+  select public.is_team_member(_team_id)
+     and (not public.limits_enforced() or public.team_is_pro(_team_id));
+$$;
+revoke execute on function public.can_add_evidence(uuid) from public, anon;
+grant  execute on function public.can_add_evidence(uuid) to authenticated;
+
 drop policy if exists pemcora_evidence_insert on storage.objects;
 create policy pemcora_evidence_insert on storage.objects
   for insert to authenticated
-  with check (
-    bucket_id = 'evidence'
-    and public.is_team_member(public.path_team(name))
-    and (not public.limits_enforced() or public.team_is_pro(public.path_team(name)))
-  );
+  with check (bucket_id = 'evidence' and public.can_add_evidence(public.path_team(name)));
 
 drop policy if exists pemcora_evidence_delete on storage.objects;
 create policy pemcora_evidence_delete on storage.objects
   for delete to authenticated
   using (bucket_id = 'evidence' and public.is_team_member(public.path_team(name)));
 
+-- Nothing in reports/ can ever be deleted, so it takes what step D2 puts
+-- there and nothing else: <team_id>/<name>.pdf.
 drop policy if exists pemcora_reports_insert on storage.objects;
 create policy pemcora_reports_insert on storage.objects
   for insert to authenticated
-  with check (bucket_id = 'reports' and public.is_team_member(public.path_team(name)));
+  with check (
+    bucket_id = 'reports'
+    and public.is_team_member(public.path_team(name))
+    and name ~* '^[^/]+/[^/]+\.pdf$'
+  );
+
+-- And Storage itself refuses anything else, or anything large, on Supabase.
+-- The test stub's storage.buckets has neither column, hence the test.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'storage' and table_name = 'buckets'
+                and column_name = 'allowed_mime_types') then
+    update storage.buckets
+       set allowed_mime_types = array['application/pdf'], file_size_limit = 10485760
+     where id = 'reports';
+  end if;
+end $$;
 
 drop policy if exists pemcora_reports_select on storage.objects;
 create policy pemcora_reports_select on storage.objects
@@ -1149,6 +1266,75 @@ alter table public.report_deliveries enable row level security;
 alter table public.site_links        enable row level security;
 alter table public.workflow_intervals enable row level security;
 
+-- 0001's field data gets the same parent check as the tables below. Its
+-- policies only ask whether the caller is in the row's own team, so a member
+-- could hang a visit off another team's site or a site off another team's
+-- client — and send_report(), reminder_opt_out() and set_workflow_interval()
+-- read through those parents as their owner. Report recipients see provider
+-- site and visit ids, so the ids are not secret enough to rely on.
+drop policy if exists locations_all on public.locations;
+create policy locations_all on public.locations
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.clients c
+                 where c.id = locations.client_id and c.team_id = locations.team_id)
+  );
+
+drop policy if exists floors_all on public.floors;
+create policy floors_all on public.floors
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.locations l
+                 where l.id = floors.location_id and l.team_id = floors.team_id)
+  );
+
+drop policy if exists rooms_all on public.rooms;
+create policy rooms_all on public.rooms
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.floors f
+                 where f.id = rooms.floor_id and f.team_id = rooms.team_id)
+  );
+
+drop policy if exists visits_all on public.visits;
+create policy visits_all on public.visits
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.locations l
+                 where l.id = visits.location_id and l.team_id = visits.team_id)
+  );
+
+drop policy if exists visit_rooms_all on public.visit_rooms;
+create policy visit_rooms_all on public.visit_rooms
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.visits v
+                 where v.id = visit_rooms.visit_id and v.team_id = visit_rooms.team_id)
+    and (visit_rooms.room_id is null
+         or exists (select 1 from public.rooms r
+                     where r.id = visit_rooms.room_id and r.team_id = visit_rooms.team_id))
+  );
+
+drop policy if exists visit_exports_all on public.visit_exports;
+create policy visit_exports_all on public.visit_exports
+  for all to authenticated
+  using (public.is_team_member(team_id))
+  with check (
+    public.is_team_member(team_id)
+    and exists (select 1 from public.visits v
+                 where v.id = visit_exports.visit_id and v.team_id = visit_exports.team_id)
+  );
+
 -- Field data: any member, full CRUD, as in 0001 — plus a check 0001 does not
 -- make: the parent row has to be in the same team. Without it a member could
 -- hang their own rows off another team's location id.
@@ -1173,6 +1359,11 @@ create policy compliance_items_all on public.compliance_items
     public.is_team_member(team_id)
     and exists (select 1 from public.locations l
                  where l.id = compliance_items.location_id and l.team_id = compliance_items.team_id)
+    and (compliance_items.last_visit_id is null
+         or exists (select 1 from public.visits v
+                     where v.id = compliance_items.last_visit_id and v.team_id = compliance_items.team_id))
+    and (compliance_items.evidence_path is null
+         or public.path_team(compliance_items.evidence_path) = compliance_items.team_id)
   );
 
 drop policy if exists attachments_all on public.attachments;
@@ -1185,6 +1376,12 @@ create policy attachments_all on public.attachments
     and (attachments.visit_id is null
          or exists (select 1 from public.visits v
                      where v.id = attachments.visit_id and v.team_id = attachments.team_id))
+    and (attachments.visit_room_id is null
+         or exists (select 1 from public.visit_rooms vr
+                     where vr.id = attachments.visit_room_id and vr.team_id = attachments.team_id))
+    and (attachments.asset_id is null
+         or exists (select 1 from public.assets a
+                     where a.id = attachments.asset_id and a.team_id = attachments.team_id))
   );
 
 -- Deliveries: both ends read; nobody writes except through the functions above.
@@ -1216,14 +1413,28 @@ revoke all on table
 from anon, authenticated;
 
 grant select, insert, update, delete on table
-  public.assets, public.compliance_items, public.attachments
+  public.assets, public.attachments
 to authenticated;
 grant select         on table public.report_deliveries  to authenticated;
 grant select, delete on table public.site_links         to authenticated;
 grant select         on table public.workflow_intervals to authenticated;
 
+-- Compliance items: members keep their team's checks — the dates, the
+-- interval, the evidence, the reminder switch, whether the check still
+-- applies — but not the reminder bookkeeping. The token in the emailed link,
+-- when and how a client opted out, when the last reminder went and which visit
+-- or report last did the check are written by the functions above and the
+-- reminder job, so a client opt-out cannot be erased or a reminder re-sent.
+grant select, insert, delete on table public.compliance_items to authenticated;
+grant update (label, interval_months, last_done_on, next_due_on, evidence_path,
+              remind_days_before, reminders_enabled, active)
+  on table public.compliance_items to authenticated;
+
 revoke execute on function public.advance_compliance()                 from public, anon, authenticated;
 revoke execute on function public.compliance_next_due()                from public, anon, authenticated;
+revoke execute on function public.keep_opt_out()                       from public, anon, authenticated;
+revoke execute on function public.stamp_signoff()                      from public, anon, authenticated;
+revoke execute on function public.pack_in_use(uuid, text)              from public, anon, authenticated;
 revoke execute on function public.gate_attachment()                    from public, anon, authenticated;
 revoke execute on function public._file_delivery(uuid, uuid, uuid, uuid) from public, anon, authenticated;
 
@@ -1260,8 +1471,8 @@ notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Verification — every number below should be 1 except tables (6), buckets (2),
--- storage_policies (5), and file_delivery_exposed and interval_writes_exposed,
--- which must be 0.
+-- storage_policies (5), and file_delivery_exposed, interval_writes_exposed and
+-- opt_out_writable, which must be 0.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 select
@@ -1269,6 +1480,15 @@ select
     where schemaname = 'public'
       and tablename in ('assets', 'compliance_items', 'attachments',
                         'report_deliveries', 'site_links', 'workflow_intervals')) as tables,
+  (select count(*) from pg_trigger
+    where tgname = 'visits_stamp_signoff' and not tgisinternal)            as trg_stamp_signoff,
+  (select count(*) from pg_trigger
+    where tgname = 'compliance_items_keep_opt_out' and not tgisinternal)   as trg_keep_opt_out,
+  (select count(*) from information_schema.column_privileges
+    where table_schema = 'public' and table_name = 'compliance_items'
+      and grantee in ('anon', 'authenticated') and privilege_type = 'UPDATE'
+      and column_name in ('reminder_token', 'opted_out_at', 'opted_out_via',
+                          'last_reminded_at', 'last_visit_id', 'last_delivery_id')) as opt_out_writable,
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relname = 'workflow_intervals'
       and c.relrowsecurity)                                                as intervals_rls_on,
@@ -1303,3 +1523,14 @@ select
   (select count(*) from information_schema.role_routine_grants
     where routine_schema = 'public' and routine_name = '_file_delivery'
       and grantee in ('anon', 'authenticated', 'PUBLIC'))                  as file_delivery_exposed;
+
+-- Rows whose parent is in another team. Must be 0; any that turn up were
+-- written before the parent checks and need looking at by hand.
+select
+  (select count(*) from public.locations x join public.clients   p on p.id = x.client_id   where p.team_id <> x.team_id)
++ (select count(*) from public.floors    x join public.locations p on p.id = x.location_id where p.team_id <> x.team_id)
++ (select count(*) from public.rooms     x join public.floors    p on p.id = x.floor_id    where p.team_id <> x.team_id)
++ (select count(*) from public.visits    x join public.locations p on p.id = x.location_id where p.team_id <> x.team_id)
++ (select count(*) from public.visit_rooms   x join public.visits p on p.id = x.visit_id   where p.team_id <> x.team_id)
++ (select count(*) from public.visit_exports x join public.visits p on p.id = x.visit_id   where p.team_id <> x.team_id)
+    as cross_team_rows;
