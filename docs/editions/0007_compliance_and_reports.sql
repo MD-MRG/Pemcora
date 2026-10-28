@@ -148,6 +148,18 @@ begin
   -- Nested, not `tg_op = 'UPDATE' and old.signoff ...` — see 0005.
   if tg_op = 'UPDATE' then
     if new.signoff is not distinct from old.signoff then return new; end if;
+    -- The app sends back the sign-off it holds: without the stamps below, and
+    -- with signed_at in its own format, or left out if the database filled it
+    -- in. Nothing else changed, it is the same sign-off, and the stored one
+    -- stays, stamps and all.
+    if old.signoff is not null
+       and (new.signoff - 'signed_by' - 'recorded_at' - 'signed_at')
+           = (old.signoff - 'signed_by' - 'recorded_at' - 'signed_at')
+       and (new.signoff ->> 'signed_at' is null
+            or (new.signoff ->> 'signed_at')::timestamptz = (old.signoff ->> 'signed_at')::timestamptz) then
+      new.signoff := old.signoff;
+      return new;
+    end if;
   end if;
 
   v_signed := coalesce((new.signoff ->> 'signed_at')::timestamptz, now());
@@ -447,9 +459,70 @@ create trigger compliance_items_next_due before insert or update on public.compl
 -- edit either — opted_out_at and opted_out_via have no client grant (see the
 -- privileges below). A check the team switched off itself, from the Due page,
 -- can be switched back on.
+--
+-- The opt-out is also kept apart from the check's row, so it survives the row
+-- and the site's row both: a check deleted and added again, added again by the
+-- next completed visit, or a site deleted and added back at the same address
+-- all come back opted out. It is the recipient's choice, so it is kept by who
+-- they are and where: the team that emailed them, their address, the site's
+-- address, and the check. A new contact at the same site has not opted out.
+-- Written only by reminder_opt_out(); daily-reminders (F1) checks it too.
+-- M.D. lifts one by hand by deleting its row here and clearing opted_out_via
+-- on the check.
+create table if not exists public.reminder_opt_outs (
+  team_id      uuid not null references public.teams(id) on delete cascade,
+  email        text not null,   -- opt_out_key(), as compared below
+  address      text not null,
+  suburb       text not null,
+  obligation   text not null,
+  opted_out_at timestamptz not null default now(),
+  primary key (team_id, email, address, suburb, obligation)
+);
+alter table public.reminder_opt_outs enable row level security;
+revoke all on table public.reminder_opt_outs from anon, authenticated;
+
+-- How an email or an address is compared for an opt-out: case, and spaces at
+-- the ends or doubled inside, do not matter, so an address typed again with a
+-- stray space still matches. Both sides of the key go through it.
+create or replace function public.opt_out_key(_text text)
+returns text language sql immutable set search_path = public as $$
+  select btrim(regexp_replace(lower(coalesce(_text, '')), '\s+', ' ', 'g'));
+$$;
+
+-- When the client at a team's site opted out of reminders for a check there,
+-- matched by the client contact's email and the site's address; NULL if they
+-- did not. Internal: it answers for any team, so only the trigger below and
+-- the reminder job (service role) call it.
+create or replace function public.reminder_opted_out(_team_id uuid, _location_id uuid, _obligation text)
+returns timestamptz language sql stable set search_path = public as $$
+  select o.opted_out_at
+    from public.locations l
+    join public.clients c on c.id = l.client_id
+    join public.reminder_opt_outs o
+      on o.team_id    = _team_id
+     and o.email      = public.opt_out_key(c.contact_email)
+     and o.address    = public.opt_out_key(l.address)
+     and o.suburb     = public.opt_out_key(l.suburb)
+     and o.obligation = _obligation
+   where l.id = _location_id;
+$$;
+
 create or replace function public.keep_opt_out()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_at timestamptz;
 begin
+  if tg_op = 'INSERT' then
+    -- Quietly, not with an error: advance_compliance() makes checks too, and a
+    -- visit must not fail to save over a reminder switch.
+    v_at := public.reminder_opted_out(new.team_id, new.location_id, new.obligation);
+    if v_at is not null then
+      new.reminders_enabled := false;
+      new.opted_out_at      := v_at;
+      new.opted_out_via     := 'email_link';
+    end if;
+    return new;
+  end if;
+
   if new.reminders_enabled and new.opted_out_via = 'email_link' then
     raise exception 'The client turned these reminders off from the email, so they cannot be turned back on here'
       using errcode = 'check_violation', hint = 'opted_out';
@@ -459,7 +532,7 @@ end;
 $$;
 
 drop trigger if exists compliance_items_keep_opt_out on public.compliance_items;
-create trigger compliance_items_keep_opt_out before update of reminders_enabled, opted_out_via
+create trigger compliance_items_keep_opt_out before insert or update of reminders_enabled, opted_out_via
   on public.compliance_items
   for each row execute function public.keep_opt_out();
 
@@ -1143,6 +1216,15 @@ begin
        set reminders_enabled = false, opted_out_at = now(), opted_out_via = 'email_link'
      where ci.id = v_item.id;
 
+    insert into public.reminder_opt_outs (team_id, email, address, suburb, obligation)
+      values (v_item.team_id,
+              public.opt_out_key(v_client.contact_email),
+              public.opt_out_key(v_loc.address),
+              public.opt_out_key(v_loc.suburb),
+              v_item.obligation)
+      on conflict (team_id, email, address, suburb, obligation)
+      do update set opted_out_at = excluded.opted_out_at;
+
     insert into public.team_notices (team_id, kind, payload)
       values (v_item.team_id, 'reminder_opt_out', jsonb_build_object(
         'compliance_item_id', v_item.id,
@@ -1335,6 +1417,36 @@ create policy visit_exports_all on public.visit_exports
                  where v.id = visit_exports.visit_id and v.team_id = visit_exports.team_id)
   );
 
+-- And a row's team never changes. The parent checks stop a row being made
+-- under another team's parent, but a member of two teams could still move a
+-- client into the other team — or a site, floor or room together with a new
+-- parent there — and leave its children behind in the old one. Nothing in the
+-- app moves rows between teams. Visits (0006) and compliance items (below)
+-- have locks of their own.
+create or replace function public.keep_team()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.team_id is distinct from old.team_id then
+    raise exception 'This stays in the team it was made in. Make a new one in the other team instead.'
+      using errcode = 'check_violation', hint = 'team_fixed';
+  end if;
+  return new;
+end;
+$$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'clients', 'locations', 'floors', 'rooms', 'visit_rooms', 'visit_exports', 'assets', 'attachments'
+  ] loop
+    execute format('drop trigger if exists %I_keep_team on public.%I', t, t);
+    execute format(
+      'create trigger %I_keep_team before update of team_id on public.%I
+         for each row execute function public.keep_team()', t, t);
+  end loop;
+end $$;
+
 -- Field data: any member, full CRUD, as in 0001 — plus a check 0001 does not
 -- make: the parent row has to be in the same team. Without it a member could
 -- hang their own rows off another team's location id.
@@ -1426,13 +1538,62 @@ grant select         on table public.workflow_intervals to authenticated;
 -- or report last did the check are written by the functions above and the
 -- reminder job, so a client opt-out cannot be erased or a reminder re-sent.
 grant select, insert, delete on table public.compliance_items to authenticated;
-grant update (label, interval_months, last_done_on, next_due_on, evidence_path,
-              remind_days_before, reminders_enabled, active)
+-- team_id, location_id and obligation too, because an upsert from the app
+-- (PostgREST's, the way saveVisitRoom() saves rooms) writes every column of
+-- the row back, and Postgres asks for UPDATE on all of them before it knows
+-- whether there is a conflict. Sending the same values back is not a change;
+-- changing them is refused below, as it is for a visit.
+grant update (team_id, location_id, obligation, satisfied_by, label, interval_months, last_done_on,
+              next_due_on, evidence_path, remind_days_before, reminders_enabled, active)
   on table public.compliance_items to authenticated;
+
+-- satisfied_by says which visit kind moves the check on, so a check is made
+-- with it empty or set to its own workflow, and may only be cleared or set to
+-- that workflow later, as set_workflow_interval() sets it: otherwise a cheap
+-- custom visit could keep a legal check up to date. Every insert the database
+-- makes itself already follows the rule. A future pack whose obligations are
+-- met by a workflow of another name would have to relax it.
+create or replace function public.gate_item_identity()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  -- A check added with a visit kind of its own is moved on only by that kind,
+  -- just as an UPDATE below may set it to nothing else.
+  if tg_op = 'INSERT' then
+    if new.satisfied_by is not null and new.satisfied_by <> new.obligation then
+      raise exception 'A check can only be moved on by its own kind of visit'
+        using errcode = 'check_violation', hint = 'item_identity';
+    end if;
+    return new;
+  end if;
+
+  if new.team_id is distinct from old.team_id
+     or new.location_id is distinct from old.location_id
+     or new.obligation is distinct from old.obligation then
+    raise exception 'A check''s site, team and obligation are fixed. Add a new check instead.'
+      using errcode = 'check_violation', hint = 'item_identity';
+  end if;
+  if new.satisfied_by is distinct from old.satisfied_by
+     and new.satisfied_by is not null and new.satisfied_by <> new.obligation then
+    raise exception 'A check can only be moved on by its own kind of visit'
+      using errcode = 'check_violation', hint = 'item_identity';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists compliance_items_gate_identity on public.compliance_items;
+create trigger compliance_items_gate_identity
+  before insert or update of team_id, location_id, obligation, satisfied_by
+  on public.compliance_items
+  for each row execute function public.gate_item_identity();
+revoke execute on function public.gate_item_identity() from public, anon, authenticated;
 
 revoke execute on function public.advance_compliance()                 from public, anon, authenticated;
 revoke execute on function public.compliance_next_due()                from public, anon, authenticated;
 revoke execute on function public.keep_opt_out()                       from public, anon, authenticated;
+revoke execute on function public.reminder_opted_out(uuid, uuid, text)  from public, anon, authenticated;
+revoke execute on function public.opt_out_key(text)                    from public, anon, authenticated;
+revoke execute on function public.keep_team()                          from public, anon, authenticated;
 revoke execute on function public.stamp_signoff()                      from public, anon, authenticated;
 revoke execute on function public.pack_in_use(uuid, text)              from public, anon, authenticated;
 revoke execute on function public.gate_attachment()                    from public, anon, authenticated;
@@ -1470,16 +1631,22 @@ grant  execute on function public.reminder_opt_out(uuid)                   to an
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Verification — every number below should be 1 except tables (6), buckets (2),
--- storage_policies (5), and file_delivery_exposed, interval_writes_exposed and
--- opt_out_writable, which must be 0.
+-- Verification — every number below should be 1 except tables (7), buckets (2),
+-- storage_policies (5), team_locks (8), and file_delivery_exposed,
+-- interval_writes_exposed, opt_out_writable and opt_outs_exposed, which must
+-- be 0.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 select
   (select count(*) from pg_tables
     where schemaname = 'public'
-      and tablename in ('assets', 'compliance_items', 'attachments',
-                        'report_deliveries', 'site_links', 'workflow_intervals')) as tables,
+      and tablename in ('assets', 'compliance_items', 'attachments', 'report_deliveries',
+                        'site_links', 'workflow_intervals', 'reminder_opt_outs'))  as tables,
+  (select count(*) from pg_trigger
+    where tgname like '%\_keep\_team' and not tgisinternal)                as team_locks,
+  (select count(*) from information_schema.role_table_grants
+    where table_schema = 'public' and table_name = 'reminder_opt_outs'
+      and grantee in ('anon', 'authenticated'))                           as opt_outs_exposed,
   (select count(*) from pg_trigger
     where tgname = 'visits_stamp_signoff' and not tgisinternal)            as trg_stamp_signoff,
   (select count(*) from pg_trigger

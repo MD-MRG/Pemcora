@@ -1263,5 +1263,336 @@ refused("note 11: a pack held as an add-on cannot also be chosen as the starter"
 check("note 11: …so the team keeps its starter",
       su("select pack_id from public.team_packs where team_id = %s and source = 'starter'", [N11T]) == [("vic_rental",)])
 
+# ── U. step A3b: the re-check of 41f7cc7 (R1–R7) and the cases found checking it ──
+# R6 re-runs both drafts and R7 re-runs 0006 on its own, so they come last.
+
+
+def r_age_visit(vid, days):
+    """As if `days` had passed for this visit: every timestamp on its row moves back by that much
+    (the superuser, triggers off). Every timestamptz column but updated_at, so whatever a fix adds
+    to record when something happened moves with the rest."""
+    cols = [r[0] for r in su("""select column_name from information_schema.columns
+                                 where table_schema = 'public' and table_name = 'visits'
+                                   and data_type = 'timestamp with time zone' and column_name <> 'updated_at'
+                                 order by column_name""")]
+    su_raw("update public.visits set " + ", ".join(f"{c} = {c} - make_interval(days => %s)" for c in cols)
+           + " where id = %s", [days] * len(cols) + [vid])
+
+
+# R1 — a completion date can be corrected for 7 days from when it was first recorded, not from its latest correction.
+print("\n— Re-check R1: the 7-day correction window does not slide")
+R1U = user("r1-owner@recheck.test")
+R1T = one(R1U, "select id from public.create_organisation('R1 Sparks', 'provider', 'vic_rental')")   # Free: 1 a month
+_, R1_L = add_site(R1U, R1T, "R1 Rental")
+R1_V = start_visit(R1U, R1T, R1_L, "vic_smoke_alarm", completed=True)   # this month's one inspection
+r_age_visit(R1_V, 6)
+act(R1U, "update public.visits set completed_at = now() where id = %s", [R1_V])
+check("R1: (for contrast) six days after it was first completed, the completion date can still be corrected",
+      su("select completed_at > now() - interval '1 minute' from public.visits where id = %s", [R1_V])[0][0])
+r_age_visit(R1_V, 6)   # twelve days after the first completion, six after the correction
+refused("R1: twelve days after it was first completed, it cannot be moved again by correcting it every few days", R1U,
+        "update public.visits set completed_at = now() where id = %s", [R1_V], sqlstate="23514")
+
+# R2 — a client's emailed opt-out survives the check being deleted and made again.
+print("\n— Re-check R2: an emailed opt-out survives deleting and re-adding the check")
+R2U = user("r2-owner@recheck.test")
+R2T = one(R2U, "select id from public.create_organisation('R2 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [R2T])   # no allowance in the way
+R2_CID, R2_L = add_site(R2U, R2T, "R2 Rental", "Robin", "robin@r2-landlord.test")
+start_visit(R2U, R2T, R2_L, "vic_smoke_alarm", completed=True)
+R2_ITEM, R2_TOK = su("select id, reminder_token from public.compliance_items where location_id = %s", [R2_L])[0]
+act(None, "select * from public.reminder_opt_out(%s)", [R2_TOK])
+
+
+def r2_reminders(lid=None):
+    return su("""select reminders_enabled from public.compliance_items
+                  where location_id = %s and obligation = 'vic_smoke_alarm'""", [lid or R2_L])
+
+
+refused("R2: (for contrast) the team cannot switch the client's reminders back on", R2U,
+        "update public.compliance_items set reminders_enabled = true where id = %s", [R2_ITEM], sqlstate="23514")
+act(R2U, "delete from public.compliance_items where id = %s", [R2_ITEM])
+act(R2U, """insert into public.compliance_items (team_id, location_id, obligation, label, satisfied_by, interval_months)
+            values (%s, %s, 'vic_smoke_alarm', 'Smoke alarm safety check', 'vic_smoke_alarm', 12)""", [R2T, R2_L])
+check("R2: deleted and added again after the client opted out, the check comes back with its reminders off",
+      r2_reminders() == [(False,)], str(r2_reminders()))
+act(R2U, "delete from public.compliance_items where location_id = %s", [R2_L])
+start_visit(R2U, R2T, R2_L, "vic_smoke_alarm", completed=True)   # the next visit makes the check again
+check("R2: …and so does the one the next completed visit makes", r2_reminders() == [(False,)], str(r2_reminders()))
+# Further than the re-check's own fix: the opt-out belongs to the person, not to the site's row.
+act(R2U, "delete from public.locations where id = %s", [R2_L])
+R2_L2 = add_location(R2U, R2T, R2_CID, "R2 Rental St")   # the same address again
+start_visit(R2U, R2T, R2_L2, "vic_smoke_alarm", completed=True)
+check("A3b: a site deleted and added back at the same address keeps the client's opt-out",
+      r2_reminders(R2_L2) == [(False,)], str(r2_reminders(R2_L2)))
+act(R2U, "update public.clients set contact_email = 'new.owner@r2-landlord.test' where id = %s", [R2_CID])
+act(R2U, "delete from public.compliance_items where location_id = %s", [R2_L2])
+start_visit(R2U, R2T, R2_L2, "vic_smoke_alarm", completed=True)
+check("A3b: …while a new contact there, who has not opted out, gets reminders",
+      r2_reminders(R2_L2) == [(True,)], str(r2_reminders(R2_L2)))
+
+# R3 — sending back the sign-off the app holds is not a new sign-off.
+print("\n— Re-check R3: re-sending the sign-off the app holds keeps who signed it")
+R3A = user("r3-sam@recheck.test")
+R3T, R3_CODE = act(R3A, "select id, invite_code from public.create_organisation('R3 Sparks', 'provider', 'vic_rental')")[0]
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [R3T])   # room for a second member
+R3B = user("r3-pat@recheck.test")
+act(R3B, "select public.join_team(%s)", [R3_CODE])
+_, R3_L = add_site(R3A, R3T, "R3 Rental")
+R3_V = start_visit(R3A, R3T, R3_L, "vic_electrical_safety")
+# As the browser writes it: toISOString() ends in Z.
+R3_SO = {"technician": "Sam Sparks", "licence_number": "REC-1",
+         "signed_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+         "signature": "M0 0 L1 1"}
+act(R3A, "update public.visits set signoff = %s, completed_at = now() where id = %s", [json.dumps(R3_SO), R3_V])
+R3_FIRST = su("select signoff from public.visits where id = %s", [R3_V])[0][0]
+# Pat, in the office, fixes the technician's name; the app sends the visit's fields back as it holds them.
+act(R3B, "update public.visits set technician = 'Sam S.', signoff = %s where id = %s", [json.dumps(R3_SO), R3_V])
+R3_AFTER = su("select signoff from public.visits where id = %s", [R3_V])[0][0]
+check("R3: the sign-off still says Sam signed it, recorded when Sam saved it",
+      R3_AFTER.get("signed_by") == str(R3A) and R3_AFTER.get("recorded_at") == R3_FIRST.get("recorded_at"),
+      f"signed_by {'Pat' if R3_AFTER.get('signed_by') == str(R3B) else R3_AFTER.get('signed_by')}, "
+      f"recorded_at {R3_FIRST.get('recorded_at')} -> {R3_AFTER.get('recorded_at')}")
+R3_NEW = dict(R3_SO, technician="Pat Jones", signature="M2 2 L3 3")
+act(R3B, "update public.visits set signoff = %s where id = %s", [json.dumps(R3_NEW), R3_V])
+check("R3: …while a sign-off that really changes is stamped as whoever saved it",
+      su("select signoff ->> 'signed_by' from public.visits where id = %s", [R3_V])[0][0] == str(R3B))
+
+# R4 — a visit never ends before it began, completing a reopened visit included.
+print("\n— Re-check R4: completing a reopened visit cannot end it before it began")
+R4U = user("r4-owner@recheck.test")
+R4T = one(R4U, "select id from public.create_organisation('R4 Sparks', 'provider', 'vic_rental')")
+_, R4_L = add_site(R4U, R4T, "R4 Rental")
+R4_V = start_visit(R4U, R4T, R4_L, "vic_smoke_alarm", completed=True)
+r_age_visit(R4_V, 3)   # finished three days ago
+act(R4U, "update public.visits set completed_at = null where id = %s", [R4_V])   # reopened
+try:   # either step may be the one refused
+    act(R4U, "update public.visits set started_at = now() where id = %s", [R4_V])
+    act(R4U, "update public.visits set completed_at = now() where id = %s", [R4_V])
+    R4_STEPS = "both saved"
+except psycopg.Error as e:
+    R4_STEPS = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+R4_ROW = su("""select started_at, completed_at,
+                      completed_at is null or completed_at >= started_at - interval '1 hour'
+                 from public.visits where id = %s""", [R4_V])[0]
+check("R4: a reopened visit given today's start cannot be completed back on its old date, before that start",
+      R4_ROW[2], f"{R4_STEPS}; started {R4_ROW[0]}, completed {R4_ROW[1]}")
+# A visit from before 0006 whose dates were out of order all along (a device with a wrong clock).
+L4U = user("l4-owner@recheck.test")
+L4T = one(L4U, "select id from public.create_organisation('L4 AV', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [L4T])
+_, L4_L = add_site(L4U, L4T, "L4 Office")
+L4_V = start_visit(L4U, L4T, L4_L, "maintenance")
+su_raw("""update public.visits set completed_at = started_at - interval '1 day',
+                 first_completed_at = started_at - interval '1 day',
+                 completion_recorded_at = started_at - interval '1 day' where id = %s""", [L4_V])
+act(L4U, "update public.visits set completed_at = null where id = %s", [L4_V])
+try:
+    act(L4U, "update public.visits set completed_at = now() where id = %s", [L4_V])
+    L4_CLOSE = "closed"
+except psycopg.Error as e:
+    L4_CLOSE = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+check("A3b: …while a visit out of order from before 0006, once reopened, can still be closed again",
+      L4_CLOSE == "closed"
+      and su("select completed_at = first_completed_at from public.visits where id = %s", [L4_V])[0][0], L4_CLOSE)
+
+# R5 — the column grant on compliance_items still lets the app save a check the way it saves rooms: with an upsert.
+print("\n— Re-check R5: a hand-entered check saves with an upsert, as visit rooms do")
+R5U = user("r5-landlord@recheck.test")
+R5T = one(R5U, "select id from public.create_organisation('R5 Rentals', 'landlord')")
+_, R5_L = add_site(R5U, R5T, "R5 House")
+_, R5_L2 = add_site(R5U, R5T, "R5 Other House")
+# What PostgREST sends for .upsert(row, { onConflict: 'location_id,obligation' }): every column of the row in the SET.
+R5_SQL = """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on)
+            values (%s, %s, 'gas_safety', 'Gas safety check', 24, %s)
+            on conflict (location_id, obligation) do update
+               set team_id = excluded.team_id, location_id = excluded.location_id, obligation = excluded.obligation,
+                   label = excluded.label, interval_months = excluded.interval_months,
+                   last_done_on = excluded.last_done_on"""
+
+
+def r5_save(done_on):
+    try:
+        act(R5U, R5_SQL, [R5T, R5_L, done_on])
+        return "saved"
+    except psycopg.Error as e:
+        return f"{e.sqlstate}: {str(e).splitlines()[0]}"
+
+
+R5_FIRST = r5_save("2026-03-01")    # nothing there yet: it inserts
+R5_SECOND = r5_save("2026-09-01")   # there now: it updates
+check("R5: saving a new check with an upsert works", R5_FIRST == "saved", R5_FIRST)
+check("R5: …and saving it again does too", R5_SECOND == "saved"
+      and su("select last_done_on from public.compliance_items where location_id = %s and obligation = 'gas_safety'",
+             [R5_L]) == [(date(2026, 9, 1),)], R5_SECOND)
+act(R5U, """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months)
+            values (%s, %s, 'electrical', 'Electrical check', 24) on conflict do nothing""", [R5T, R5_L])
+refused("R5: (unchanged) …while a check still cannot be moved to another property", R5U,
+        "update public.compliance_items set location_id = %s where location_id = %s and obligation = 'electrical'",
+        [R5_L2, R5_L])
+S5U = user("s5-owner@recheck.test")
+S5T = one(S5U, "select id from public.create_organisation('S5 Sparks', 'provider', 'vic_rental')")
+_, S5_L = add_site(S5U, S5T, "S5 Rental")
+start_visit(S5U, S5T, S5_L, "vic_electrical_safety", completed=True)
+S5_ITEM = su("select id from public.compliance_items where location_id = %s", [S5_L])[0][0]
+refused("A3b: a legal check cannot be set to move on with another kind of visit, a cheap custom one say", S5U,
+        "update public.compliance_items set satisfied_by = 'custom' where id = %s", [S5_ITEM],
+        contains="its own kind", sqlstate="23514")
+try:
+    act(S5U, "update public.compliance_items set satisfied_by = null where id = %s", [S5_ITEM])
+    act(S5U, "update public.compliance_items set satisfied_by = 'vic_electrical_safety' where id = %s", [S5_ITEM])
+    S5_BACK = "saved"
+except psycopg.Error as e:
+    S5_BACK = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+check("A3b: …while clearing it, or setting it back to its own kind, is allowed",
+      S5_BACK == "saved"
+      and su("select satisfied_by from public.compliance_items where id = %s", [S5_ITEM])[0][0] == "vic_electrical_safety",
+      S5_BACK)
+
+# Item 8 — inside the import window, today's work still counts.
+print("\n— A3b item 8: inside the import window, today's work still counts")
+I8U = user("i8-owner@recheck.test")
+I8T = one(I8U, "select id from public.create_organisation('I8 Sparks', 'provider', 'vic_rental')")   # Free: 1 a month
+I8_SITES = [add_site(I8U, I8T, f"I8 Site {i}")[1] for i in range(3)]
+act(I8U, "select public.open_import_window(%s)", [I8T])
+I8_LAST_MONTH = now - timedelta(days=40)
+I8_OLD = start_visit(I8U, I8T, I8_SITES[0], "vic_smoke_alarm", started_at=I8_LAST_MONTH)
+act(I8U, "update public.visits set completed_at = %s where id = %s", [I8_LAST_MONTH + timedelta(hours=2), I8_OLD])
+check("A3b: old work imported the way migrate.js does it (open, then completed with its old date) is history",
+      usage(I8T)[1] == 0, str(usage(I8T)))
+I8_NOW = start_visit(I8U, I8T, I8_SITES[1], "vic_smoke_alarm", started_at=I8_LAST_MONTH)
+act(I8U, "update public.visits set completed_at = now() where id = %s", [I8_NOW])
+check("A3b: a visit said to have started last month but finished today counts, window open or not",
+      usage(I8T)[1] == 1, str(usage(I8T)))
+refused("A3b: …so on Free the window cannot bring in a second one like it this month", I8U,
+        """insert into public.visits (team_id, location_id, kind, started_at, completed_at)
+           values (%s, %s, 'vic_smoke_alarm', %s, now())""", [I8T, I8_SITES[2], I8_LAST_MONTH], sqlstate="PT402")
+
+# Item 9 — clients, sites, floors and rooms stay in their team.
+print("\n— A3b item 9: clients, sites, floors and rooms stay in the team they were made in")
+T9U = user("t9-owner@recheck.test")
+T9A = one(T9U, "select id from public.create_organisation('T9 One', 'provider', 'av')")
+T9B = one(T9U, "select id from public.create_organisation('T9 Two', 'provider', 'av')")
+T9_C, T9_L = add_site(T9U, T9A, "T9 Client")
+T9_C2, _ = add_site(T9U, T9B, "T9 Other")
+T9_F, T9_R = uuid.uuid4(), uuid.uuid4()
+act(T9U, "insert into public.floors (id, team_id, location_id, label) values (%s, %s, %s, 'Ground')", [T9_F, T9A, T9_L])
+act(T9U, "insert into public.rooms (id, team_id, floor_id, name) values (%s, %s, %s, 'Boardroom')", [T9_R, T9A, T9_F])
+refused("A3b: a member of two teams cannot move a client into the other team", T9U,
+        "update public.clients set team_id = %s where id = %s", [T9B, T9_C], contains="stays in the team", sqlstate="23514")
+refused("A3b: …nor a site, even with a client of the other team as its new parent", T9U,
+        "update public.locations set team_id = %s, client_id = %s where id = %s", [T9B, T9_C2, T9_L],
+        contains="stays in the team", sqlstate="23514")
+for _table, _row in (("floors", T9_F), ("rooms", T9_R)):
+    refused(f"A3b: …nor one of its {_table}", T9U, f"update public.{_table} set team_id = %s where id = %s",
+            [T9B, _row], contains="stays in the team", sqlstate="23514")
+
+# S1–S3, from the re-check of f755155.
+
+# S1 — a reopened visit cannot be given a new start and completed in the same write, ending before it began.
+print("\n— Re-check S1: moving the start and completing a reopened visit in one write keeps it in order")
+S1U = user("s1-owner@recheck2.test")
+S1T = one(S1U, "select id from public.create_organisation('S1 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [S1T])   # two visits this month
+_, S1_L = add_site(S1U, S1T, "S1 Rental")
+S1_V = start_visit(S1U, S1T, S1_L, "vic_smoke_alarm", completed=True)
+r_age_visit(S1_V, 3)   # finished three days ago
+act(S1U, "update public.visits set completed_at = null where id = %s", [S1_V])   # reopened
+try:
+    act(S1U, "update public.visits set started_at = now(), completed_at = now() where id = %s", [S1_V])
+    S1_STEP = "saved"
+except psycopg.Error as e:
+    S1_STEP = f"{e.sqlstate}: {str(e).splitlines()[0]}"
+S1_ROW = su("""select started_at, completed_at,
+                      completed_at is null or completed_at >= started_at - interval '1 hour'
+                 from public.visits where id = %s""", [S1_V])[0]
+check("S1: one write that gives a reopened visit today's start and completes it does not leave it ending before it began",
+      S1_ROW[2], f"{S1_STEP}; started {S1_ROW[0]}, completed {S1_ROW[1]}")
+# A visit from before 0006 whose dates were out of order all along still closes once reopened (the reason A3b
+# dropped the restore path's own order check).
+S1_OLD = start_visit(S1U, S1T, add_site(S1U, S1T, "S1 Legacy")[1], "vic_smoke_alarm")
+su_raw("""update public.visits set completed_at = started_at - interval '1 day', first_completed_at = started_at - interval '1 day'
+           where id = %s""", [S1_OLD])
+act(S1U, "update public.visits set completed_at = null where id = %s", [S1_OLD])
+act(S1U, "update public.visits set completed_at = now() where id = %s", [S1_OLD])
+check("S1: (unchanged) …while a visit out of order since before 0006 still closes once reopened",
+      su("select completed_at is not null from public.visits where id = %s", [S1_OLD])[0][0])
+
+# S2 — a check moves on only with its own kind of visit, however the check was made.
+print("\n— Re-check S2: a check added by hand cannot be set to move on with another kind of visit")
+S2U = user("s2-owner@recheck2.test")
+S2T = one(S2U, "select id from public.create_organisation('S2 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [S2T])   # no allowance in the way
+_, S2_L = add_site(S2U, S2T, "S2 Rental")
+refused("S2: a legal check cannot be added already set to move on with a cheap custom visit", S2U,
+        """insert into public.compliance_items (team_id, location_id, obligation, label, satisfied_by, interval_months)
+           values (%s, %s, 'vic_electrical_safety', 'Electrical safety check', 'custom', 24)""", [S2T, S2_L],
+        contains="its own kind", sqlstate="23514")
+S2_DUE = su("""select next_due_on from public.compliance_items
+                where location_id = %s and obligation = 'vic_electrical_safety'""", [S2_L])
+start_visit(S2U, S2T, S2_L, "custom", completed=True)
+check("S2: …so a custom visit does not move the legal check on",
+      su("""select next_due_on from public.compliance_items
+             where location_id = %s and obligation = 'vic_electrical_safety'""", [S2_L]) == S2_DUE,
+      str(su("select obligation, satisfied_by, last_done_on, next_due_on from public.compliance_items where location_id = %s",
+             [S2_L])))
+act(S2U, """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on)
+            values (%s, %s, 'gas_safety', 'Gas safety check', 24, '2026-03-01')""", [S2T, S2_L])
+check("S2: (unchanged) …while a check added by hand with no visit kind still goes in",
+      su("select count(*) from public.compliance_items where location_id = %s and obligation = 'gas_safety'", [S2_L])[0][0] == 1)
+
+# S3 — "the same address", for an opt-out, is the same however its spaces are typed.
+print("\n— Re-check S3: a site added back at the same address keeps the opt-out, however the spaces are typed")
+S3U = user("s3-owner@recheck2.test")
+S3T = one(S3U, "select id from public.create_organisation('S3 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [S3T])   # no allowance in the way
+S3_C, S3_L = add_site(S3U, S3T, "S3 Rental", "Sky", "sky@s3-landlord.test")   # at 'S3 Rental St', Richmond
+start_visit(S3U, S3T, S3_L, "vic_smoke_alarm", completed=True)
+S3_TOK = su("select reminder_token from public.compliance_items where location_id = %s", [S3_L])[0][0]
+act(None, "select * from public.reminder_opt_out(%s)", [S3_TOK])
+act(S3U, "delete from public.locations where id = %s", [S3_L])
+S3_L2 = add_location(S3U, S3T, S3_C, "S3  Rental St")   # the same address, typed again with a double space
+start_visit(S3U, S3T, S3_L2, "vic_smoke_alarm", completed=True)
+S3_ON = su("select reminders_enabled from public.compliance_items where location_id = %s", [S3_L2])
+check("S3: the check made there again comes back with the client's reminders off", S3_ON == [(False,)], str(S3_ON))
+check("S3: …and the reminder job's own test says opted out",
+      su("select public.reminder_opted_out(%s, %s, 'vic_smoke_alarm') is not null", [S3T, S3_L2])[0][0])
+
+# R6 — a completed visit with no first completion on record still keeps its date when it is reopened.
+print("\n— Re-check R6: a visit completed without the triggers still keeps its first completion date")
+R6U = user("r6-owner@recheck.test")
+R6T = one(R6U, "select id from public.create_organisation('R6 Sparks', 'provider', 'vic_rental')")
+su("update public.subscriptions set plan = 'pro' where team_id = %s", [R6T])
+_, R6_L = add_site(R6U, R6T, "R6 Rental")
+R6_V = start_visit(R6U, R6T, R6_L, "vic_smoke_alarm")
+# Completed the way a write with the triggers off leaves it: a restore, or an app write that lands between
+# 0006's backfill and the triggers it creates further down.
+su_raw("""update public.visits set started_at = now() - interval '370 days', completed_at = now() - interval '365 days',
+                 first_completed_at = null where id = %s""", [R6_V])
+for _f in ("0006_editions.sql", "0007_compliance_and_reports.sql"):
+    run_file(NEW / _f)   # a re-run, which 0006's backfill is there to cover
+check("R6: re-running 0006 fills in when such a visit was first completed",
+      su("select first_completed_at is not distinct from completed_at from public.visits where id = %s", [R6_V])[0][0])
+su_raw("update public.visits set first_completed_at = null where id = %s", [R6_V])   # and if it still has none…
+act(R6U, "update public.visits set completed_at = null where id = %s", [R6_V])
+act(R6U, "update public.visits set completed_at = now() where id = %s", [R6_V])
+check("R6: …reopening it and completing it again still keeps last year's date",
+      su("select completed_at < now() - interval '300 days' from public.visits where id = %s", [R6_V])[0][0],
+      str(su("select completed_at from public.visits where id = %s", [R6_V])[0][0]))
+
+# R7 — re-running 0006 on its own, after 0007, keeps 0007's pack_in_use().
+print("\n— Re-check R7: re-running 0006 on its own keeps sent reports counting as work under the pack")
+run_file(NEW / "0006_editions.sql")   # 0006 alone, after 0007: a fix to 0006 re-run by itself
+R7U = user("r7-owner@recheck.test")
+R7T = one(R7U, "select id from public.create_organisation('R7 Sparks', 'provider', 'vic_rental')")
+_, R7_L = add_site(R7U, R7T, "R7 Rental")
+R7_V = start_visit(R7U, R7T, R7_L, "vic_smoke_alarm", completed=True)
+act(R7U, "select public.send_report(%s, 'owner@r7.test')", [R7_V])
+act(R7U, "delete from public.visits where id = %s", [R7_V])
+refused("R7: with 0006 re-run by itself, a sent report still keeps the starter pack fixed", R7U,
+        "select public.choose_starter_pack(%s, 'qld_electrical')", [R7T], contains="cannot be swapped",
+        sqlstate="PT402")
+run_file(NEW / "0007_compliance_and_reports.sql")   # leave the database as both files make it
+
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

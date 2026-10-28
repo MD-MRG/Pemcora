@@ -2,7 +2,7 @@
 
 **Status: draft for review.** Nothing here has been applied to Supabase. The two
 migrations in this folder have been run on a local Postgres on top of the real
-0001–0005, twice each, and pass 255 checks (`test/`), the fixes from the pre-A4 security review included.
+0001–0005, twice each, and pass 288 checks (`test/`), the fixes from the pre-A4 security review and its two re-checks included.
 
 They live in `docs/editions/`, not `supabase/migrations/`, on purpose: the folder
 is linked to the Supabase CLI, and `supabase db push` would apply anything placed
@@ -91,7 +91,7 @@ All additive, all with defaults, so every existing row reads exactly as before.
 | `member_prefs` | `licence_number` | each technician's licence, printed on reports |
 | `locations` | `site_type` commercial · residential, `is_rental` | which rules apply |
 | `rooms` | `room_type` (`bedroom`, `hallway`, `meter_box`, …) | switch on the right sections; check alarm coverage |
-| `visits` | `site_results`, `outcome` compliant · non_compliant, `signoff`, `first_completed_at` | once-per-visit sections; the certificate's verdict, declared at sign-off; who signed, their licence and signature, kept with the visit and stamped by the database with who saved it and when; when the visit was first completed, which a reopened visit keeps |
+| `visits` | `site_results`, `outcome` compliant · non_compliant, `signoff`, `first_completed_at`, `completion_recorded_at` | once-per-visit sections; the certificate's verdict, declared at sign-off; who signed, their licence and signature, kept with the visit and stamped by the database with who saved it and when; when the visit was first completed, which a reopened visit keeps, and when the database first saw it completed, from which the 7 days for correcting the date run |
 | `visit_rooms` | `readings` | measured values beside PASS/FAIL, keyed like `results` |
 
 **Where results live** (no column changes, all jsonb): an ordinary section is
@@ -126,6 +126,7 @@ so a reader knows which shape it is.
 | `attachments` | photo evidence against a test (Pro) |
 | `report_deliveries` | a sent report: frozen snapshot (with the sign-off), file, recipient email, link token and its 90-day expiry, where it was filed |
 | `site_links` | "provider's site X is landlord's property Y", so later reports file themselves |
+| `reminder_opt_outs` | each client's emailed opt-out, kept by team, recipient email, site address and check, so it outlives the check's row and the site's | `reminder_opt_out()` only; no client access at all |
 
 Storage: two private buckets, one folder per team — `evidence/<team_id>/…` and
 `reports/<team_id>/…`. Delivered report files cannot be overwritten or deleted.
@@ -150,15 +151,19 @@ must be within the last 7 days (and no more than an hour ahead), and visits are
 counted in the server's month, not the device's. Older work comes
 in once, through the owner's 15-minute import window (`open_import_window()`).
 
-Also on from the start, from the pre-A4 security review:
+Also on from the start, from the pre-A4 security review and its re-check:
 
 - A visit's check, site and team are fixed once it has started, and it never ends
-  before it began. A completion date can be corrected only within 7 days, and
-  completing a reopened visit again keeps the date it was first completed.
+  before it began. A completion date can be corrected only within 7 days of when
+  the database first saw the visit completed, and completing a reopened visit
+  again keeps the date it was first completed. Inside the import window, work
+  completed in the last 7 days still counts.
 - Every row hangs only off its own team's rows (a visit off its own team's site,
-  a site off its own team's client, and so on), on 0001's tables as well.
+  a site off its own team's client, and so on), on 0001's tables as well, and no
+  row ever moves to another team.
 - A client's emailed opt-out sticks: the team can't switch those reminders back
-  on, and the opt-out record and reminder bookkeeping aren't client-writable.
+  on, the opt-out record and reminder bookkeeping aren't client-writable, and the
+  opt-out outlives the check's row and the site's (`reminder_opt_outs`).
 - `anon` holds no table privilege anywhere, so RLS is never the only lock; signed-out
   pages call SECURITY DEFINER functions only.
 

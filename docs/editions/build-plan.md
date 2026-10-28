@@ -51,7 +51,7 @@ use more tokens. `max` can overthink, so keep it for review passes.
 
 | Step | Effort | Why |
 |---|---|---|
-| A1–A3 database drafts and their tests | `xhigh` | security rules, races and billing state; mistakes are hard to undo once applied |
+| A1–A3b database drafts and their tests | `xhigh` | security rules, races and billing state; mistakes are hard to undo once applied |
 | Before A4 and before E6 | `max`, in a fresh session | a separate review that looks only for security holes, before the migrations go live and before the limits are switched on |
 | B1 pack files, B5 sign-up | `medium` | clear scope: moving lists and building one screen |
 | B2 template schema, B4 entitlements | `high` | existing AV data and every error path must keep working |
@@ -448,7 +448,8 @@ plan, which the database checks regardless of dates.
 - Refuse start and completion dates more than 7 days in the past (long enough for a device
   that was offline) or in the future.
 - Allow old work to be imported only through a one-time import window: owner-only, once per
-  team, 15 minutes long.
+  team, 15 minutes long. Work completed in the last 7 days still counts inside the window,
+  whatever start date it claims. (Decided after the Phase A security re-check.)
 
 ---
 
@@ -779,6 +780,65 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - link expiry states, `resend_report()` switching off the old token, saving after expiry
 - `signoff` reaching the delivered report
 
+#### A3b. Fixes from the security re-check
+
+The pre-A4 security review's findings, and the review notes M.D. decided, are fixed in commit
+`41f7cc7`. A re-check of that commit found seven defects in what it added (R1–R7), and
+checking the re-check turned up two more cases (items 8 and 9 below, and the second half of
+item 2). Fix them all in the two drafts.
+
+1. **The 7-day window for correcting a completion date must not slide** (R1). It runs from the
+   current completion date, so correcting the date every six days keeps it open for good, and
+   one visit can be sent again as a fresh inspection without being counted. Add
+   `visits.completion_recorded_at`, set by the database when the visit is first completed and
+   never by the client. Measure the 7 days from it, or from the completion date if that is
+   earlier.
+2. **A client's emailed opt-out must outlive the check's row** (R2). Deleting the check and
+   adding it back, or the next completed visit adding it back, turns reminders on again. Keep
+   opt-outs in a table only `reminder_opt_out()` writes, and have every new check row take its
+   opt-out from there. Key that table on the team, the recipient's email address, the site's
+   address and the check, not on the site's row. Deleting the site and adding it back at the
+   same address must not erase the opt-out either, and the re-check's own fix doesn't cover
+   that case. `daily-reminders` (F1) checks the same table before it sends.
+3. **Sending back the sign-off the app holds is not a new sign-off** (R3). `stamp_signoff()`
+   compares the sign-off without its stamps, and compares `signed_at` as a time. If nothing
+   changed it keeps the stored one, so `signed_by` keeps saying who signed, not who saved last.
+4. **A reopened visit's start can't move past the completion date it will get back** (R4).
+   When the start changes, check it against `coalesce(completed_at, first_completed_at)`. Don't
+   also run the order check where a reopened visit gets its date back: a visit from before 0006
+   whose dates are already out of order could then never be completed again once reopened.
+5. **The app's usual upsert of a check must work** (R5). An upsert writes every column back,
+   and Postgres asks for UPDATE on all of them, so grant UPDATE on `team_id`, `location_id`,
+   `obligation` and `satisfied_by` too. Refuse changing the first three in a trigger, as
+   visits do. `satisfied_by` may only be cleared or set to the check's own workflow, which
+   is what `set_workflow_interval()` does; otherwise a cheap custom visit could keep a legal
+   check up to date.
+6. **A completed visit with no first completion on record still keeps its date** (R6), for
+   rows written with the triggers off or between 0006's backfill and its triggers.
+   `gate_visit_dates()` takes `coalesce(old.first_completed_at, old.completed_at)`, which also
+   lets the backfill work on a re-run.
+7. **Re-running 0006 on its own must keep 0007's `pack_in_use()`** (R7). Create it in 0006 only
+   if it isn't there yet.
+8. **Inside the import window, today's work still counts** (M.D. confirmed). A visit
+   "started" before this month but completed in the last 7 days is current work, not
+   history, so count it whether or not the window is open. Without this, one window lets a
+   team bring in any number of such visits, uncounted and dated today.
+9. **Clients, sites, floors and rooms keep their team** (from 0001). A member of two teams can
+   move one of them into the other team and leave its children behind in the old one. Lock
+   `team_id` on them, as visits now are.
+
+Done when every item has a check in `run_tests.py` that fails on `41f7cc7` and passes with its
+fix, both drafts apply twice, and the 255 existing checks still pass.
+
+A second re-check, of the step's own commit, found three more gaps (S1–S3), fixed in the same
+step:
+
+- One write that moves a reopened visit's start and completes it is checked against the
+  date it will end with, the first completion date, not the one the app sent.
+- The `satisfied_by` rule applies when a check is added, not only when it is edited.
+- Opt-out keys ignore doubled and surrounding spaces as well as case (`opt_out_key()`), so an
+  address typed again with a stray space still matches.
+
 #### A4. Apply
 
 1. Move the drafts into `supabase/migrations/` as `0006_editions.sql` and
@@ -832,6 +892,9 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - **Starting a visit offline** is allowed, and it's checked when the device reconnects.
 - **Same visit started on another device** (duplicate error 23505): take the server's open
   visit id, merge anything entered locally room by room (newest edit wins), and carry on.
+  But if that open visit is a reopened one (it has a `first_completed_at`), don't join it:
+  it keeps its first completion date, so this inspection would be recorded under last
+  year's. Say a correction to an earlier visit is still open, and finish that first.
 - **Refused start** (402): move the visit out of the save queue into a "Not saved" area on
   the device, keep everything else saving, and retry it after an upgrade.
 - Done when tests cover: a reload with unsaved changes, a dropped connection mid-visit, a
@@ -897,7 +960,9 @@ Add checks to `docs/editions/test/run_tests.py` for:
   alarms expiring in the next 3 months.
 - Filter by client.
 - Each check has its own reminders switch, and the page shows checks a client has marked
-  "no longer needed".
+  "no longer needed". It takes that from `reminder_opted_out()`, not from the check's own
+  switch, which a team can make read "on" again by re-creating the check while the
+  contact's email is blank.
 
 ### Phase D — Reports and landlords
 
@@ -939,7 +1004,8 @@ Add checks to `docs/editions/test/run_tests.py` for:
 - Hand-entered checks, with a certificate upload on Pro (decision D6).
 - Remove a site link to stop automatic filing.
 - Read deliveries through a view that leaves out the provider-side ids
-  (`provider_team_id`, `provider_location_id`, `visit_id`, `sent_by`).
+  (`provider_team_id`, `provider_location_id`, `visit_id`, `sent_by`, and the sign-off's
+  `signed_by` inside the snapshot).
 
 ### Phase E — Billing and limits
 
@@ -993,7 +1059,11 @@ starter pack.
 - A `daily-reminders` Edge Function, run each morning Sydney time by Supabase Cron.
 - It picks items where all of these hold: the team is Pro with reminders on, the client has
   reminders on, the item is active with reminders on, `next_due_on` is within
-  `remind_days_before`, and `last_reminded_at` is empty.
+  `remind_days_before`, and `last_reminded_at` is empty. It skips any check on the opt-out
+  list from step A3b (asking `reminder_opted_out()`), whatever the item's own switch says.
+- It records on the check the address each reminder went to (a `last_reminded_to`, say),
+  and `reminder_opt_out()` keys the opt-out on that address, so a click counts for the
+  person who was emailed, even if the client's contact has changed since.
 - It also picks alarms entering the expiry window with no `expiry_reminded_at`.
 - It sends one email per client contact per site, listing the checks due and the alarms
   expiring, with "Book your re-check" (the electrician's contact details) and a "No longer
@@ -1034,7 +1104,11 @@ Northern Territory, and for Queensland's electrical check:
 3. Have a licensed electrician check it.
 4. Add the pack and workflows to the catalogue, fixing intervals where the law sets them.
 5. Add the pack file to the app.
-6. Release it, and give it free to that state's teams on `electrical_general`.
+6. Release it, and give it free to that state's teams on `electrical_general`. The locks
+   from step A3b bind the SQL editor too: a check's site, team and obligation can't be
+   changed, and its `satisfied_by` must match its obligation. So moving those teams' existing
+   checks onto the new pack's workflows needs new checks made alongside, or a migration that
+   sets the triggers aside deliberately.
 
 ### Phase H — Tests and docs
 

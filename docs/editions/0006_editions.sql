@@ -411,8 +411,10 @@ $$;
 -- The one exception is the import window: a team's owner may open it once,
 -- for 15 minutes, to bring in work from before the account existed. A visit
 -- started more than 7 days ago that comes in while it is open may carry any
--- past date (never a future one), and one started before this month is
--- history, not this month's use. See open_import_window() below.
+-- past date (never a future one), and one started before this month and
+-- finished more than 7 days ago is history, not this month's use. Finished in
+-- the last 7 days, it is this month's work and counts, whatever start it
+-- claims. See open_import_window() below.
 
 -- When a visit was first completed: the triggers below keep it, and never take
 -- it from the client. Visits completed before this file get it from their
@@ -420,6 +422,15 @@ $$;
 alter table public.visits add column if not exists first_completed_at timestamptz;
 update public.visits set first_completed_at = completed_at
  where first_completed_at is null and completed_at is not null;
+
+-- When the server first saw the visit completed. The 7 days in which a
+-- completion date may still be corrected run from here, or from the date
+-- itself if that is earlier, so correcting it every few days cannot keep the
+-- window open. Kept from the client like first_completed_at; a visit completed
+-- before this file counts from its completion date.
+alter table public.visits add column if not exists completion_recorded_at timestamptz;
+update public.visits set completion_recorded_at = completed_at
+ where completion_recorded_at is null and completed_at is not null;
 
 -- True while the team's one-time import window is open.
 create or replace function public.import_window_open(_team_id uuid)
@@ -552,6 +563,7 @@ begin
   -- The database's record of when the visit was first completed, never the
   -- client's.
   new.first_completed_at := new.completed_at;
+  new.completion_recorded_at := case when new.completed_at is not null then now() end;
   return new;
 end;
 $$;
@@ -579,20 +591,35 @@ declare
   v_import boolean := public.import_window_open(new.team_id)
                       and exists (select 1 from public.visit_imports i where i.visit_id = new.id);
 begin
-  new.first_completed_at := old.first_completed_at;
+  -- The database's to keep. A completed visit with none on record (written
+  -- with the triggers off, say) takes its own completion date, so any write
+  -- heals it and the backfill above works on a re-run too.
+  new.first_completed_at := coalesce(old.first_completed_at, old.completed_at);
+  new.completion_recorded_at := coalesce(old.completion_recorded_at, old.completed_at);
 
   if new.started_at is distinct from old.started_at then
     perform public.check_visit_date('The visit''s start date', new.started_at);
+    -- A reopened visit gets its first completion date back, so its start
+    -- cannot move past that date either, nor when this same write completes it
+    -- again: that date, not the one the app sent, is the one it will end with.
+    perform public.check_visit_order(new.started_at,
+      case when new.completed_at is not null and old.completed_at is null and old.first_completed_at is not null
+           then old.first_completed_at
+           else coalesce(new.completed_at, new.first_completed_at) end);
   end if;
 
   if new.completed_at is not null and old.completed_at is null and old.first_completed_at is not null then
-    -- The date it was first completed, checked when it was first set.
+    -- The date it was first completed, checked when it was first set. Not
+    -- checked against the start again: the start check above already holds it
+    -- if the start moved, and a visit from before this file whose dates were
+    -- out of order all along must still be able to close once reopened.
     new.completed_at := old.first_completed_at;
     return new;
   end if;
 
   if new.completed_at is not null and new.completed_at is distinct from old.completed_at then
-    if old.completed_at is not null and old.completed_at < now() - interval '7 days' then
+    if old.completed_at is not null
+       and least(old.completion_recorded_at, old.completed_at) < now() - interval '7 days' then
       raise exception 'This visit was completed more than 7 days ago, so its completion date can no longer be changed'
         using errcode = 'check_violation', hint = 'visit_date';
     end if;
@@ -602,6 +629,10 @@ begin
       perform public.check_visit_date('The visit''s completion date', new.completed_at);
     end if;
     new.first_completed_at := new.completed_at;
+    -- The first completion is when the server saw it; a correction keeps that.
+    if old.completed_at is null then
+      new.completion_recorded_at := now();
+    end if;
   end if;
 
   -- Only when a date moved: a row from before this file whose dates are out of
@@ -619,14 +650,16 @@ declare
   v_period date := date_trunc('month', public.local_day(now()))::date;
 begin
   -- Old work brought in through the import window — started more than 7 days
-  -- ago — is remembered as the import's. Started before this month, it is
-  -- history, not this month's use; still open, it stays pending until it is
-  -- finished. Everything else counts, window or not.
+  -- ago — is remembered as the import's. Started before this month and
+  -- finished more than 7 days ago, it is history, not this month's use; still
+  -- open, it stays pending until it is finished. Anything finished in the last
+  -- 7 days is this month's work, whenever it says it started, and counts.
   if public.import_window_open(new.team_id) and new.started_at < now() - interval '7 days' then
     insert into public.visit_imports (visit_id, pending)
       values (new.id, public.local_day(new.started_at) < v_period and new.completed_at is null)
       on conflict (visit_id) do nothing;
-    if public.local_day(new.started_at) < v_period then
+    if public.local_day(new.started_at) < v_period
+       and (new.completed_at is null or new.completed_at < now() - interval '7 days') then
       return new;
     end if;
   end if;
@@ -641,22 +674,26 @@ create trigger visits_gate_pack before insert on public.visits
   for each row execute function public.gate_visit_pack();
 
 drop trigger if exists visits_gate_dates on public.visits;
-create trigger visits_gate_dates before update of started_at, completed_at, first_completed_at on public.visits
+create trigger visits_gate_dates
+  before update of started_at, completed_at, first_completed_at, completion_recorded_at on public.visits
   for each row execute function public.gate_visit_dates();
 
 drop trigger if exists visits_count_start on public.visits;
 create trigger visits_count_start after insert on public.visits
   for each row execute function public.count_visit_start();
 
--- An old visit the import brought in still open is history only while the
--- window is open. Finished after it has closed, it is this month's
--- inspection, counted (and refused past the allowance) like any other start.
+-- An old visit the import brought in still open is history only if it is
+-- finished with an old date while the window is open: that is how migrate.js
+-- brings in past work. Finished after the window has closed, or with a date in
+-- the last 7 days, it is this month's inspection, counted (and refused past the
+-- allowance) like any other start.
 create or replace function public.count_imported_visit()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if new.completed_at is null or old.completed_at is not null then return new; end if;
   update public.visit_imports set pending = false where visit_id = new.id and pending;
-  if found and not public.import_window_open(new.team_id) then
+  if found and (not public.import_window_open(new.team_id)
+                or new.completed_at >= now() - interval '7 days') then
     perform public.count_inspection(new.team_id);
   end if;
   return new;
@@ -1127,14 +1164,23 @@ update public.teams set invite_code = public.new_join_code() where length(invite
 -- Whether a team has done work under a pack: a visit of one of its workflows.
 -- 0007 adds sent reports, which outlive their visits. Internal: it answers for
 -- any team id, so only choose_starter_pack() calls it.
-create or replace function public.pack_in_use(_team_id uuid, _pack_id text)
-returns boolean language sql stable set search_path = public as $$
-  select exists (
-    select 1 from public.visits v
-    join public.workflows w on w.id = v.kind
-    where v.team_id = _team_id and w.pack_id = _pack_id
-  );
-$$;
+-- Made here only if it is not there yet: 0007 gives it its final form, and
+-- re-running this file on its own must not take that back.
+do $$
+begin
+  if to_regprocedure('public.pack_in_use(uuid, text)') is null then
+    execute $fn$
+      create function public.pack_in_use(_team_id uuid, _pack_id text)
+      returns boolean language sql stable set search_path = public as $body$
+        select exists (
+          select 1 from public.visits v
+          join public.workflows w on w.id = v.kind
+          where v.team_id = _team_id and w.pack_id = _pack_id
+        );
+      $body$
+    $fn$;
+  end if;
+end $$;
 
 /**
  * Pick the team's one starter pack. Owner or admin, providers only.
