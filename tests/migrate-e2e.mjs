@@ -175,7 +175,6 @@ page.on('console', m => {
 })
 page.on('pageerror', e => errs.push(e.message))
 
-const TEAM = `Migrate ${TAG}`
 const body = async () => (await page.textContent('body')).replace(/\s+/g, ' ')
 
 try {
@@ -195,9 +194,8 @@ try {
   await page.getByRole('button', { name: /^sign in$/i }).click()
   await page.waitForTimeout(2500)
 
-  await page.getByLabel('Team name').fill(TEAM)
-  await page.getByRole('button', { name: /create team/i }).click()
-  await page.waitForTimeout(3000)
+  // No team yet, so TeamSetup creates one without asking and the app opens.
+  await page.locator('nav a').nth(6).waitFor({ timeout: 15000 }).catch(() => {})
 
   const team = (await sb.rpc('my_teams')).data?.[0]
   log(!!team, 'team created', team?.name)

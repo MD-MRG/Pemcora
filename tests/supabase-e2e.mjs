@@ -71,7 +71,6 @@ page.on('console', m => {
 page.on('pageerror', e => errs.push(e.message))
 
 const body = async () => (await page.textContent('body')).replace(/\s+/g, ' ')
-const TEAM = `E2E ${Date.now()}`
 const CLIENT = `Adapter Test ${Date.now()}`
 
 try {
@@ -87,13 +86,9 @@ try {
   await page.getByRole('button', { name: /^sign in$/i }).click()
   await page.waitForTimeout(2500)
 
-  log(/name your team/i.test(await body()), 'no team yet, so onboarding appears')
-
-  await page.getByLabel('Team name').fill(TEAM)
-  await page.getByRole('button', { name: /create team/i }).click()
-  await page.waitForTimeout(3000)
-
-  log((await page.locator('nav a').count()) >= 7, 'app renders after the team is created')
+  // No team yet, so TeamSetup creates one without asking and the app opens.
+  await page.locator('nav a').nth(6).waitFor({ timeout: 15000 }).catch(() => {})
+  log((await page.locator('nav a').count()) >= 7, 'app opens with a team made without asking')
 
   // ── Create a client with a location, floor and room ──────────────────────
   await page.goto(BASE + '#/new-client', { waitUntil: 'networkidle' })
@@ -123,7 +118,7 @@ try {
 
   // ── Verify from outside the browser ──────────────────────────────────────
   const teamRow = (await sb.rpc('my_teams')).data?.[0]
-  log(!!teamRow && teamRow.name === TEAM, 'team row exists', teamRow?.name)
+  log(!!teamRow && /team$/i.test(teamRow.name), 'team row exists', teamRow?.name)
 
   const { data: clients } = await sb
     .from('clients')

@@ -851,6 +851,9 @@ step:
 3. In Dashboard → Storage, give the `evidence` bucket a size limit and image types only;
    0007 sets the `reports` bucket's limits itself.
 4. Run `tests/rls.mjs` and the existing suites. Limits stay off.
+5. Run the security advisor. Signed out, only `email_is_registered`, `invite_preview`,
+   `report_preview` and `reminder_opt_out` should be callable. It also lists 11 older
+   functions; step B5 deals with them.
 
 ### Phase B — App foundations
 
@@ -921,8 +924,20 @@ step:
   selected by default, and "You can add packs any time."
 - Until billing exists (Phase E), the add-on choices are shown but only noted. Step E1
   connects them to checkout.
-- Done when: each row of the starter mapping table in 2.3 produces the right pack, and a
-  landlord gets no pack.
+- Close the older `SECURITY DEFINER` functions to signed-out callers, in a new migration on
+  top of 0007. The A4 security advisor found `anon` can still call `all_members_overview`,
+  `create_team`, `is_team_admin`, `is_team_member`, `is_team_owner`, `move_member`,
+  `my_teams`, `set_member_role`, `team_members_list` and `transfer_ownership`. Each one
+  already refuses a signed-out caller inside, so this adds the second lock: revoke `anon`'s
+  `EXECUTE` on those, and everyone's on the trigger function `consume_invite_on_confirm`.
+  `email_is_registered`, `invite_preview`, `report_preview` and `reminder_opt_out` stay
+  public for the sign-in, invite, report link and opt-out pages. Every policy is
+  `to authenticated`, and those four run as their owner, so no signed-out page starts
+  failing. M.D. applies it.
+- Done when: each row of the starter mapping table in 2.3 produces the right pack, a
+  landlord gets no pack, the SQL suite shows the older functions refuse `anon` while the
+  four public ones still answer, and the security advisor lists only those four as callable
+  signed out.
 
 ### Phase C — Field work
 
