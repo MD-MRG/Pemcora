@@ -117,7 +117,7 @@ export function supabaseAdapter(teamId, userId) {
           technician: prefs.defaultTechnician ?? '',
         },
         // Empty rows read back as {}; templateStore treats that as "not seeded
-        // yet" and fills them from testLists.js on first read.
+        // yet" and fills them from the pack files on first read.
         templates: Object.fromEntries(
           Object.entries(templates).filter(([, t]) => t && Object.keys(t).length > 0),
         ),

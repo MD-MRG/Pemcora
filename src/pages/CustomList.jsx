@@ -1,23 +1,16 @@
 import { Link } from 'react-router-dom'
 import WorkflowPage from '../workflows/WorkflowPage.jsx'
 import { getTemplate } from '../lib/templateStore.js'
+import { pageConfig } from '../data/packs/index.js'
 
 // A one-off list the technician builds themselves — a site with equipment the
 // standard lists do not cover, a commissioning against a client's own
 // checklist, a fault-finding sweep.
 //
 // The same workflow as Preventative Maintenance and Commissioning, with its own
-// `kind` so its visits never mix with theirs, and its own template.
-const config = {
-  kind: 'custom',
-  templateKind: 'custom',
-  title: 'Custom List',
-  progressNoun: 'Custom list',
-  startLabel: 'Start custom list',
-  newLabel: 'Start new custom list',
-  emptyLine: 'No custom list recorded for this location',
-  reportTitle: 'Custom List',
-}
+// `kind` so its visits never mix with theirs, and its own template. The wording
+// is in src/data/packs/core.js.
+const config = pageConfig('custom')
 
 // The one way this workflow genuinely differs: its template seeds EMPTY, where
 // Maintenance and Commissioning arrive with ~60 tests from the spreadsheets. So

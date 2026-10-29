@@ -28,11 +28,13 @@ Everything persists to `localStorage` behind three store modules, which are the 
 place a backend swaps in:
 
 - `src/lib/clientStore.js` — clients → locations → floors → rooms, and visits
-- `src/lib/templateStore.js` — the maintenance, commissioning and custom test lists
+- `src/lib/templateStore.js` — each team's test lists, seeded from the pack files in
+  `src/data/packs/` (one per pack, with its workflows, page wording and starting lists)
 - `src/lib/settingsStore.js` — company details, logos, brand colour, default technician
 
 Preventative Maintenance and Commissioning are **the same page**. The whole workflow
-lives in `src/workflows/WorkflowPage.jsx`; each page is about fifteen lines of config.
+lives in `src/workflows/WorkflowPage.jsx`; each page passes it its workflow's config
+from `src/data/packs/`.
 Change the workflow there, never by copying it.
 
 Each room stores its own snapshot of the test list when first opened, so editing a list

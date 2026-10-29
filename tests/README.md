@@ -33,6 +33,16 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 | `pm-export.mjs` | Excel export, revisions, remembered choice | 26 |
 | `custom-list.mjs` | the unbuilt gate, own template, own visit history | 18 |
 
+`packs.mjs` is not a browser suite and needs no dev server: it imports the pack
+registry (`src/data/packs/`) and `templateStore.js` straight into Node and holds
+them to the catalogue in `supabase/migrations/` — every pack and workflow there
+has an entry, the AV lists are the ones Pemcora shipped with, and every seed
+becomes a template with only the fields step B2 defines (31 checks).
+
+```
+node tests/packs.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

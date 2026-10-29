@@ -240,8 +240,8 @@ export async function saveTemplate(teamId, kind, template) {
   return data[0].template
 }
 
-// create_team leaves the three template rows empty on purpose — src/data/
-// testLists.js is the single source of truth, and the app seeds from it on
+// create_team leaves the three template rows empty on purpose — the pack files
+// in src/data/packs/ are the single source of truth, and the app seeds from them on
 // first load. Anything already filled in is left alone, so this is safe to call
 // on every boot and two technicians starting at once cannot clobber each other.
 export async function seedTemplatesIfEmpty(teamId, seedByKind) {
