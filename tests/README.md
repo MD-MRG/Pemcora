@@ -43,6 +43,17 @@ becomes a template with only the fields step B2 defines (31 checks).
 node tests/packs.mjs
 ```
 
+`template-types.mjs` is the same kind of suite, for step B2's test and section
+types (`src/lib/testTypes.js`): what each answer type keeps and when it is a
+fail, a template using every type round-tripping through the store, coverage
+gaps, the report snapshot (`src/lib/reportSnapshot.js`) for a whole-site visit
+with items and readings, and the Excel export — including an AV visit, which
+must export exactly as before (36 checks).
+
+```
+node tests/template-types.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

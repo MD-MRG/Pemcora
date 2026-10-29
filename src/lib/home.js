@@ -5,6 +5,7 @@
 // picking them out of JSX, and so the page stays presentational.
 
 import { normalise } from './clientStore.js'
+import { roomFails } from './testTypes.js'
 
 // Visits stored before Commissioning existed carry no kind; they were all PM.
 // Same fallback as clientStore.js — if that one changes, this must too.
@@ -104,23 +105,14 @@ export function openWork(clients) {
 /* ── Section 2 · what needs attention ─────────────────────────────────────── */
 
 /**
- * FAILs that nobody has written a note against. Deliberately mirrors
- * `countFails` in clientStore.js: a switched-off section keeps its results but
+ * FAILs that nobody has written a note against. Built on the same `roomFails`
+ * as `countFails` in clientStore.js: a switched-off section keeps its results but
  * they must not raise a flag here, or the technician is chased about a section
  * they consciously excluded from the report.
  */
 function unnotedFails(entry) {
-  if (!entry?.results) return 0
-  const notes = entry.troubleshooting ?? {}
-  const bare = id => String(notes[id] ?? '').trim() === ''
-  const count = group =>
-    Object.entries(group ?? {}).filter(([id, v]) => v === 'FAIL' && bare(id)).length
-
-  let n = count(entry.results.main)
-  for (const [sectionId, on] of Object.entries(entry.sections ?? {})) {
-    if (on) n += count(entry.results[sectionId])
-  }
-  return n
+  const notes = entry?.troubleshooting ?? {}
+  return roomFails(entry).filter(f => String(notes[f.testId] ?? '').trim() === '').length
 }
 
 /**

@@ -881,6 +881,29 @@ step:
 - The Excel export and the report snapshot handle every type.
 - Done when: existing AV templates load and export exactly as before, and a test template
   using every type round-trips through the store.
+- Decided with M.D. before building it (`src/lib/testTypes.js` holds the rules):
+  - Answers: `check` keeps PASS/FAIL/N/A; `choice` the option's text, never a fail;
+    `yesno` YES/NO/N/A, and a **No is a fail** that opens the note box, as FAIL does in the
+    AV checks; `measure` keeps `{ value, unit }` under `readings`, plus PASS/FAIL when the
+    test has a min or max; `text` what was typed.
+  - Whole-site and per-item sections live in `visits.site_results`, one whole-site step.
+    An item may be pinned to a room, and coverage uses those pins with the rooms' types.
+    A2's per-room item path stays unused until a pack needs it.
+  - B2 adds a pure `buildReportSnapshot()` (`src/lib/reportSnapshot.js`); the Excel export
+    is built from it, and D2 sends it.
+  - B2 stops at the template, the helpers, the export and the snapshot. Loading and saving
+    readings and whole-site results, and room types, are in C1.
+
+> **M.D.'s note (fail notes on electrical checks):** a failed test's note box on an
+> electrical check offers suggested answers, and the electrician can change the wording:
+> "Test fail – does not comply, repair/replacement mandatory", "Test fail – still
+> complies, repair/replacement recommended within X days/months", and "Minor defect –
+> still complies, repair/replacement requires major work" (for a repair that needs other
+> trades such as renderers, painters or cabinet makers).
+
+- The suggestions are the template's `failNotes`, seeded on the electrical safety checks
+  (`ELECTRICAL_FAIL_NOTES`), so each team's copy can be reworded. Choosing one fills the
+  note, which the electrician then edits (C1).
 
 #### B3. Offline and multiple devices (M.D.'s note in 2.2)
 
@@ -949,6 +972,14 @@ step:
 - Inputs for readings, with units.
 - Coverage warnings, such as "Bedroom 3 has no smoke alarm".
 - An outcome declaration at sign-off (compliant or non-compliant).
+- Load and save `visit_rooms.readings` and `visits.site_results` through the cache and
+  the Supabase adapter (B2 left them out on purpose).
+- A room type on each room in the client and room editors, saved to `rooms.room_type`,
+  so `section.roomTypes` and the coverage warnings have something to read (B2).
+- A No, or a reading outside its limits, opens the note box as FAIL does. Where the
+  template has `failNotes`, the box offers them: choosing one fills the note, which stays
+  editable. The Settings list editor lets an admin reword the suggestions (M.D.'s note in
+  B2).
 - Sign-off with the technician's name, their licence number filled in, and a signature
   pad; saved to `visits.signoff`.
 - After completing a reopened visit, show the completion date the database kept (its first

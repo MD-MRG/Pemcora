@@ -144,13 +144,27 @@ const SECTIONS = [
   },
 ]
 
+// Suggested wording for the note a failed test takes (M.D.'s note in step B2).
+// The electrician picks one and edits it — the timeframe in the second is
+// theirs to fill in. The third is for a defect whose repair needs other trades.
+export const ELECTRICAL_FAIL_NOTES = [
+  'Fail – does not comply. Repair or replacement is mandatory.',
+  'Fail – still complies. Repair or replacement recommended within [timeframe].',
+  'Minor defect – still complies. Repair or replacement needs major work by other trades (such as a renderer, painter or cabinet maker).',
+]
+
 const withoutRef = ({ ref: _ref, ...section }) => section
 
 // The whole check is one list for the property, so the room-by-room main list
 // stays empty.
-export const ELECTRICAL_SAFETY = { main: [], sections: SECTIONS.map(withoutRef) }
+export const ELECTRICAL_SAFETY = {
+  main: [],
+  sections: SECTIONS.map(withoutRef),
+  failNotes: ELECTRICAL_FAIL_NOTES,
+}
 
 export const VIC_ELECTRICAL_SAFETY = {
   main: [],
   sections: SECTIONS.map(({ ref, label, ...section }) => ({ label: `${ref}. ${label}`, ...section })),
+  failNotes: ELECTRICAL_FAIL_NOTES,
 }

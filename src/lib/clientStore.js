@@ -18,6 +18,7 @@
 
 import { readClients, writeClients, hydrateSync, hasAdapter } from './cache.js'
 import { localAdapter } from './adapters/local.js'
+import { roomFails } from './testTypes.js'
 
 export const uid = () => crypto.randomUUID()
 
@@ -394,16 +395,9 @@ export function lastSectionToggles(clientId, locationId, visitId) {
 }
 
 // FAILs count only where the section is switched on — a hidden section's
-// results are kept but must not reach the chip or the report.
-function countFails(entry) {
-  if (!entry?.results) return 0
-  let n = Object.values(entry.results.main ?? {}).filter(v => v === 'FAIL').length
-  for (const [sectionId, on] of Object.entries(entry.sections ?? {})) {
-    if (!on) continue
-    n += Object.values(entry.results[sectionId] ?? {}).filter(v => v === 'FAIL').length
-  }
-  return n
-}
+// results are kept but must not reach the chip or the report. What counts as a
+// fail depends on the test's type (testTypes.js).
+const countFails = entry => roomFails(entry).length
 
 const hasAnyResult = entry =>
   Object.values(entry?.results ?? {}).some(group => Object.values(group ?? {}).some(Boolean)) ||

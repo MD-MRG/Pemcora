@@ -27,6 +27,7 @@ import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
+import { isFail, MAIN } from '../lib/testTypes.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 
 const fmt = iso => (iso ? new Date(iso).toLocaleDateString() : '')
@@ -598,12 +599,14 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const [complete, setComplete] = useState(() => stored?.status === 'complete')
   const [pending, setPending] = useState(null)
 
-  const labelFor = useCallback(
-    testId =>
-      [...snapshot.tests, ...snapshot.sections.flatMap(s => s.tests)].find(t => t.id === testId)
-        ?.label ?? 'this test',
+  const testFor = useCallback(
+    testId => [...snapshot.tests, ...snapshot.sections.flatMap(s => s.tests)].find(t => t.id === testId),
     [snapshot],
   )
+  const labelFor = testId => testFor(testId)?.label ?? 'this test'
+  // Leaving a fail for an answer that isn't one — what a fail is depends on
+  // the test's type.
+  const leavesFail = (testId, was, value) => isFail(testFor(testId), was) && !isFail(testFor(testId), value)
 
   // Persist on every change — a technician walking away must not lose a room.
   const persist = useCallback(
@@ -627,7 +630,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
     const was = results[groupId]?.[testId]
     const nextResults = { ...results, [groupId]: { ...(results[groupId] ?? {}), [testId]: value } }
     let nextNotes = troubleshooting
-    if (was === 'FAIL' && value !== 'FAIL' && testId in troubleshooting) {
+    if (leavesFail(testId, was, value) && testId in troubleshooting) {
       nextNotes = { ...troubleshooting }
       delete nextNotes[testId]
     }
@@ -641,7 +644,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
     const was = results[groupId]?.[testId]
     const note = troubleshooting[testId]
     // Leaving FAIL discards the note it generated — confirm first (v1 §8.2).
-    if (was === 'FAIL' && value !== 'FAIL' && note && note.trim()) {
+    if (leavesFail(testId, was, value) && note && note.trim()) {
       setPending({ groupId, testId, value, label: labelFor(testId) })
       return
     }
@@ -665,10 +668,10 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   // FAILs from visible groups only — a switched-off section keeps its results
   // but must not raise troubleshooting rows.
   const failed = [
-    ...snapshot.tests.filter(t => results.main?.[t.id] === 'FAIL'),
+    ...snapshot.tests.filter(t => isFail(t, results[MAIN]?.[t.id])),
     ...snapshot.sections
       .filter(s => sections[s.id])
-      .flatMap(s => s.tests.filter(t => results[s.id]?.[t.id] === 'FAIL')),
+      .flatMap(s => s.tests.filter(t => isFail(t, results[s.id]?.[t.id]))),
   ]
 
   return (
