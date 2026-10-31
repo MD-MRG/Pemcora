@@ -417,6 +417,34 @@ try {
     await ctx.close()
   }
 
+  // ── Deleting a report record ──────────────────────────────────────────────
+  {
+    const server = new FakeServer()
+    server.seedClient()
+    const ctx = await newDevice(server)
+    const page = await open(ctx)
+    await goToSite(page)
+    await startButton(page).click()
+    await until(() => server.visits.size === 1)
+    const id = [...server.visits.keys()][0]
+
+    let download = page.waitForEvent('download', { timeout: 15000 })
+    await page.getByRole('button', { name: 'Export report' }).click()
+    await download
+    log('an exported report is recorded on the database', await until(() => server.visits.get(id).exports.length === 1))
+
+    await page.getByRole('button', { name: 'Delete revision 1' }).click()
+    await page.getByRole('button', { name: 'Delete record' }).click()
+    log('deleting the record deletes it on the database', await until(() => server.visits.get(id).exports.length === 0))
+
+    await page.reload({ waitUntil: 'networkidle' })
+    await connect(page)
+    await goToSite(page)
+    log('and it doesn\'t come back on the next load', (await page.getByRole('button', { name: 'Delete revision 1' }).count()) === 0)
+    await page.close()
+    await ctx.close()
+  }
+
   // ── Signing out ───────────────────────────────────────────────────────────
   {
     const ctx = await testContext(browser, { viewport: { width: 1280, height: 900 } })
@@ -495,7 +523,7 @@ try {
       const request = route.request()
       const url = new URL(request.url())
       if (url.hostname === localhost) return route.continue()
-      requests.push(`${request.method()} ${url.pathname.replace('/rest/v1', '')}`)
+      requests.push(`${request.method()} ${url.pathname.replace('/rest/v1', '')}${request.method() === 'DELETE' ? url.search : ''}`)
       const next = script.shift()
       if (!next) return route.abort()
       return route.fulfill({
@@ -586,6 +614,12 @@ try {
       script = [duplicate]
       out = await call('addRoom', ['t', 'f1', { id: 'r1', name: 'Lobby' }, 0])
       log('so is a room', out.data?.id === 'r1', JSON.stringify(out.error))
+
+      requests.length = 0
+      script = [{ status: 204, body: null }]
+      out = await call('deleteExport', ['v1', 2])
+      log('deleting a report record asks for just that one',
+        !out.error && requests.join() === 'DELETE /visit_exports?visit_id=eq.v1&revision=eq.2', requests.join() + JSON.stringify(out.error))
 
       script = [{ status: 200, body: [] }]
       out = await call('saveTemplate', ['t', 'maintenance', {}])

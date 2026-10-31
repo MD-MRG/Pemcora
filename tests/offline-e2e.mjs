@@ -242,6 +242,21 @@ try {
   await a.page.getByRole('dialog').getByRole('button', { name: /finish/i }).click()
   await until(async () => !(await openRow()))
 
+  // ── Deleting a report record ─────────────────────────────────────────────
+  const exportsOf = async () =>
+    (await sb.from('visit_exports').select('revision').eq('team_id', team.id)).data ?? []
+  const exportsBefore = (await exportsOf()).length
+  const saved = a.page.waitForEvent('download', { timeout: 30000 })
+  await a.page.getByRole('button', { name: 'Export report' }).click()
+  await saved
+  log(await until(async () => (await exportsOf()).length === exportsBefore + 1), 'an exported report is recorded on the database')
+  await a.page.getByRole('button', { name: 'Delete revision 1' }).click()
+  await a.page.getByRole('button', { name: 'Delete record' }).click()
+  log(await until(async () => (await exportsOf()).length === exportsBefore), 'deleting the record deletes it on the database')
+  await a.page.reload({ waitUntil: 'networkidle' })
+  await goToSite(a.page)
+  log((await a.page.getByRole('button', { name: 'Delete revision 1' }).count()) === 0, 'and it stays deleted after a reload')
+
   // ── A refused start ───────────────────────────────────────────────────────
   const refuse = route =>
     route.request().method() === 'POST'

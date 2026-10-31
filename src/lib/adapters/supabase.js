@@ -605,6 +605,15 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
     settledRooms[roomId] = await pushRoom(ctx, location, visit, roomId, entry, roomBefore, brandNew)
   }
 
+  // Deletes first: a deleted revision's number is the next one to be used again.
+  // Only with a list to go by, as having no list isn't the same as deleting them all.
+  if (Array.isArray(visit.exports)) {
+    const kept = new Set(visit.exports.map(e => e.revision))
+    for (const record of base.exports ?? []) {
+      if (!kept.has(record.revision)) await db.deleteExport(visit.id, record.revision)
+    }
+  }
+
   const revsBefore = new Map((base.exports ?? []).map(e => [e.revision, e]))
   for (const record of visit.exports ?? []) {
     const was = revsBefore.get(record.revision)

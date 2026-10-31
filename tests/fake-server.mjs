@@ -422,6 +422,11 @@ export class FakeServer {
         delete this.visits.get(visitId)?.rooms[roomId]
       },
 
+      deleteExport: async (visitId, revision) => {
+        const visit = this.visits.get(visitId)
+        if (visit) visit.exports = visit.exports.filter(e => e.revision !== revision)
+      },
+
       recordExport: async (_team, visitId, revision, filename) => {
         const visit = this.visits.get(visitId)
         if (!visit) throw pg('23503', 'insert or update on table "visit_exports" violates foreign key constraint')

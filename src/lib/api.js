@@ -917,6 +917,16 @@ export async function saveRoomlessVisitRoom(teamId, visitId, entry) {
   if (error) throw error
 }
 
+// No row to delete is fine: another device got there first.
+export async function deleteExport(visitId, revision) {
+  const { error } = await supabase
+    .from('visit_exports')
+    .delete()
+    .eq('visit_id', visitId)
+    .eq('revision', revision)
+  if (error) throw error
+}
+
 export async function recordExport(teamId, visitId, revision, filename, userId) {
   const { data, error } = await supabase
     .from('visit_exports')

@@ -689,6 +689,78 @@ for (const step of ['createClient', 'addLocation', 'addFloor', 'addRoom', 'start
   log('and it is not counted again', server.counted === counted)
 }
 
+// ── Report records ──────────────────────────────────────────────────────────
+{
+  const server = setup()
+  const device = await boot(server)
+  const { visit } = await start()
+  store.recordExport('c1', 'l1', visit.id, { mode: 'revision', filename: 'Rev 1.xlsx' })
+  store.recordExport('c1', 'l1', visit.id, { mode: 'revision', filename: 'Rev 2.xlsx' })
+  await flush()
+  const revisions = () => server.visits.get(visit.id).exports.map(e => e.revision).join()
+  log('report records reach the database', revisions() === '1,2', revisions())
+
+  store.deleteExport('c1', 'l1', visit.id, 2)
+  await flush()
+  log('deleting one deletes it on the database', revisions() === '1', revisions())
+  log('and leaves nothing to send', !cache.hasUnsavedWork() && saveStatus() === 'saved')
+
+  await boot(server, device)
+  log('it stays deleted after a reload', localVisit(visit.id).exports.map(e => e.revision).join() === '1')
+
+  store.recordExport('c1', 'l1', visit.id, { mode: 'revision', filename: 'Rev 2 again.xlsx' })
+  await flush()
+  const reused = server.visits.get(visit.id).exports.find(e => e.revision === 2)
+  log('the next report reuses the number', reused?.filename === 'Rev 2 again.xlsx', JSON.stringify(reused))
+
+  // Deleted and made again in one save: the new record is the one that's left.
+  store.deleteExport('c1', 'l1', visit.id, 2)
+  store.recordExport('c1', 'l1', visit.id, { mode: 'revision', filename: 'Rev 2 third.xlsx' })
+  await flush()
+  log('deleted and made again in one save, the new one stands',
+    server.visits.get(visit.id).exports.find(e => e.revision === 2)?.filename === 'Rev 2 third.xlsx')
+
+  // With no connection.
+  server.down = true
+  store.deleteExport('c1', 'l1', visit.id, 2)
+  await flush()
+  log('deleted with no connection, it waits', revisions() === '1,2' && saveStatus() === 'offline')
+  await boot(server, device)
+  log('through a reload', localVisit(visit.id).exports.map(e => e.revision).join() === '1')
+  server.down = false
+  await flush()
+  log('and goes when the connection returns', revisions() === '1', revisions())
+
+  // The answer lost on the way back: sent again, with nothing left to delete.
+  store.recordExport('c1', 'l1', visit.id, { mode: 'revision', filename: 'Rev 2.xlsx' })
+  await flush()
+  store.deleteExport('c1', 'l1', visit.id, 2)
+  server.loseAnswer('deleteExport')
+  const first = await flush()
+  const second = await flush()
+  log('a delete whose answer is lost can safely be sent again', first === false && second === true && revisions() === '1', revisions())
+
+  // Another device, which hasn't heard, doesn't bring it back.
+  const stale = setup()
+  stale.seedVisit({ id: 'v1', exports: [{ id: 'x1', revision: 1, filename: 'Rev 1.xlsx' }, { id: 'x2', revision: 2, filename: 'Rev 2.xlsx' }] })
+  await boot(stale)
+  stale.visits.get('v1').exports = stale.visits.get('v1').exports.filter(e => e.revision !== 2) // deleted elsewhere
+  saveRoom('v1', 'r1', answers({ t1: 'PASS' }))
+  await flush()
+  log('another device\'s unrelated save doesn\'t bring a deleted record back',
+    stale.visits.get('v1').exports.map(e => e.revision).join() === '1')
+
+  // A visit somehow holding no list says nothing about its records.
+  const missing = setup()
+  missing.seedVisit({ id: 'v1', exports: [{ id: 'x1', revision: 1, filename: 'Rev 1.xlsx' }] })
+  await boot(missing)
+  const clients = readClients()
+  delete clients[0].locations[0].visits[0].exports
+  writeClients(clients)
+  await flush()
+  log('a visit with no list of records doesn\'t delete them all', missing.visits.get('v1').exports.length === 1)
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()
