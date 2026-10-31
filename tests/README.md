@@ -66,6 +66,17 @@ visit continued the next day, two devices on the same visit, a refused offline s
 | `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 85 |
 | `offline-e2e.mjs` | The live project. Not in `npm test` | |
 
+`offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
+service worker, so it builds one under `node_modules/.cache` (not `dist/`) and serves it
+itself, with a backend address that doesn't exist, so nothing can reach the live project.
+It covers an expired login, working a whole visit and exporting its report with no
+connection, a network that goes nowhere, signing out offline, and a deploy getting through
+(34 checks). The suite runs in `npm test`, or on its own with no dev server:
+
+```
+node tests/offline-open.mjs
+```
+
 `fake-server.mjs` is the stand-in. It keeps the database rules that matter to saving;
 the rules themselves are proved against real Postgres in `docs/editions/test/`.
 

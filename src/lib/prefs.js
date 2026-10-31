@@ -4,6 +4,8 @@ const KEY = {
   collapsed: 'fc.nav.collapsed',
   plate: 'fc.brand.plate',
   activeTeam: 'fc.team.active',
+  lastUser: 'fc.session.user',
+  lastTeams: 'fc.session.teams',
 }
 
 function read(key, fallback) {
@@ -35,4 +37,14 @@ export const prefs = {
   // and syncing the choice would mean one of them silently changing under you.
   getActiveTeam: () => read(KEY.activeTeam, null),
   setActiveTeam: v => write(KEY.activeTeam, v),
+  // Who was last signed in here and which teams they were in, to open with no
+  // signal. No token: the database still decides everything once back online, and
+  // this only opens what the device already holds. Cleared on signing out.
+  getLastUser: () => read(KEY.lastUser, null),
+  setLastUser: v => write(KEY.lastUser, v),
+  getLastTeams: userId => {
+    const last = read(KEY.lastTeams, null)
+    return last?.userId === userId ? last.teams : null
+  },
+  setLastTeams: (userId, teams) => write(KEY.lastTeams, teams ? { userId, teams } : null),
 }

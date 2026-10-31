@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { isTestMode, inviteTokenInUrl } from '../lib/supabase.js'
+import { isNetworkFailure } from '../lib/saveErrors.js'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
@@ -75,6 +76,17 @@ export default function Gate({ children }) {
   // session, so every stage below this one would happily let it past — into an
   // app whose password its owner still cannot remember.
   if (recovering) return <NewPasswordScreen />
+
+  if (teamError && isNetworkFailure(teamError)) {
+    return (
+      <GateLayout title="No connection">
+        <Notice blocked title="This device doesn't have your team yet">
+          It needs a connection the first time. Once it has loaded here, it will open without one.
+          This page will carry on by itself when the connection returns.
+        </Notice>
+      </GateLayout>
+    )
+  }
 
   if (teamError) {
     return (

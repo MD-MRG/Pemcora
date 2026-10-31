@@ -1,0 +1,358 @@
+/**
+ * Opening the app with no signal (build plan B3b).
+ *
+ * Only a production build has a service worker, so this builds one and serves it. It
+ * builds with a backend address that doesn't exist, so nothing here can reach the
+ * live project, and every request to the database simply fails, as it does on a site
+ * with no signal. The build goes under node_modules/.cache and doesn't touch dist/.
+ *
+ * What it holds the app to:
+ *   - with no connection, a device that has been here before opens, at any time,
+ *     even with its login token expired
+ *   - it runs on what the device holds, and a visit can be worked and reported on
+ *   - a reload changes nothing
+ *   - the service worker keeps the app's own files and nothing else
+ *   - with a connection, the main page comes from the network, so a deploy gets through
+ */
+import { spawn, spawnSync } from 'node:child_process'
+import { readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { chromium } from 'playwright-core'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const OUT = join(ROOT, 'node_modules', '.cache', 'pemcora-offline-open')
+const PORT = 4179
+// Under a sub-path, as GitHub Pages serves it, since a service worker's scope and
+// file list depend on where it lives.
+const BASE = `http://localhost:${PORT}/Pemcora/`
+const BACKEND = 'https://pemcora-test.invalid'
+const AUTH_KEY = 'sb-pemcora-test-auth-token'
+
+const log = (k, v, extra = '') =>
+  console.log(`${v ? 'PASS' : 'FAIL'}  ${k}${extra ? ' — ' + extra : ''}`)
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+async function until(check, timeout = 15000) {
+  const end = Date.now() + timeout
+  while (Date.now() < end) {
+    if (await check()) return true
+    await sleep(100)
+  }
+  return false
+}
+
+const vite = join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
+const env = { ...process.env, VITE_SUPABASE_URL: BACKEND, VITE_SUPABASE_ANON_KEY: 'test-key' }
+
+rmSync(OUT, { recursive: true, force: true })
+const built = spawnSync(process.execPath, [vite, 'build', '--outDir', OUT, '--emptyOutDir', '--logLevel', 'error'], {
+  cwd: ROOT,
+  env,
+  encoding: 'utf8',
+})
+log('the app builds', built.status === 0, built.stderr?.slice(0, 300))
+
+const sw = readFileSync(join(OUT, 'sw.js'), 'utf8')
+const files = JSON.parse(sw.match(/const FILES = (\[.*\])/)[1])
+log('the service worker is told which files make up this build',
+  files.includes('index.html') && files.some(f => /^assets\/index-.*\.js$/.test(f)) && files.some(f => /exceljs/.test(f)) && files.includes('favicon.svg'),
+  files.join(', ').slice(0, 200))
+log('with nothing left unfilled', !/__FILES__|__BUILD__/.test(sw))
+log('and no secrets or addresses in it', !/supabase|test-key|invalid/i.test(sw.replace(/^\/\/.*$/gm, '')))
+
+const server = spawn(process.execPath, [vite, 'preview', '--outDir', OUT, '--base', '/Pemcora/', '--port', String(PORT), '--strictPort'], {
+  cwd: ROOT,
+  env,
+  stdio: 'ignore',
+})
+const reachable = await until(async () => {
+  try {
+    return (await fetch(BASE)).ok
+  } catch {
+    return false
+  }
+})
+log('the build is being served', reachable)
+
+async function launch() {
+  for (const channel of ['chrome', 'msedge']) {
+    try {
+      return await chromium.launch({ channel, headless: true })
+    } catch {}
+  }
+  return await chromium.launch({ headless: true })
+}
+const browser = await launch()
+
+const USER = { id: '11111111-1111-4111-8111-111111111111', email: 'sam@example.com' }
+const TEAM = {
+  id: '22222222-2222-4222-8222-222222222222',
+  name: 'Northpoint',
+  description: '',
+  inviteCode: 'x',
+  role: 'member',
+  memberCount: 1,
+  adminCount: 1,
+}
+const CLIENTS = [
+  {
+    id: 'c1',
+    name: 'Equinix',
+    locations: [
+      {
+        id: 'l1',
+        address: '8 Grand Avenue',
+        suburb: 'Rosehill',
+        floors: [{ id: 'f1', label: 'Ground', position: 0, rooms: [{ id: 'r1', name: 'Reception', position: 0 }] }],
+        visits: [],
+      },
+    ],
+  },
+]
+
+// A device that has been here before: an expired login, the last team, a device copy.
+async function hasBeenHere(page, { copy = true } = {}) {
+  await page.evaluate(
+    async ({ AUTH_KEY, USER, TEAM, CLIENTS, copy }) => {
+      localStorage.setItem(
+        AUTH_KEY,
+        JSON.stringify({
+          access_token: 'expired',
+          refresh_token: 'refresh',
+          token_type: 'bearer',
+          expires_in: 3600,
+          expires_at: Math.floor(Date.now() / 1000) - 7200,
+          user: USER,
+        }),
+      )
+      localStorage.setItem('fc.session.user', JSON.stringify(USER))
+      localStorage.setItem('fc.session.teams', JSON.stringify({ userId: USER.id, teams: [TEAM] }))
+      if (!copy) return
+      const db = await new Promise((resolve, reject) => {
+        const open = indexedDB.open('pemcora-offline', 1)
+        open.onupgradeneeded = () => open.result.createObjectStore('copies', { keyPath: 'id' })
+        open.onsuccess = () => resolve(open.result)
+        open.onerror = () => reject(open.error)
+      })
+      await new Promise(resolve => {
+        const tx = db.transaction('copies', 'readwrite')
+        const data = { clients: CLIENTS, settings: null, templates: {} }
+        tx.objectStore('copies').put({
+          id: `${USER.id}:${TEAM.id}:old-tab`,
+          userId: USER.id,
+          teamId: TEAM.id,
+          data,
+          snapshot: data,
+          held: {},
+          unsaved: false,
+          savedAt: new Date().toISOString(),
+        })
+        tx.oncomplete = resolve
+      })
+      db.close()
+    },
+    { AUTH_KEY, USER, TEAM, CLIENTS, copy },
+  )
+}
+
+const pageErrors = []
+async function newDevice() {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true })
+  const page = await ctx.newPage()
+  page.on('pageerror', e => pageErrors.push(e.message))
+  await page.goto(BASE, { waitUntil: 'load' })
+  const ready = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) {
+      await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }))
+    }
+    return !!registration.active
+  })
+  return { ctx, page, ready }
+}
+
+try {
+  // ── A first visit ─────────────────────────────────────────────────────────
+  {
+    const { ctx, page, ready } = await newDevice()
+    log('a first visit installs the service worker', ready)
+    const cached = await page.evaluate(async () => {
+      const keys = await caches.keys()
+      const urls = []
+      for (const key of keys) {
+        for (const request of await (await caches.open(key)).keys()) urls.push(request.url)
+      }
+      return { keys, urls }
+    })
+    log('it holds every file of the build',
+      files.every(f => cached.urls.some(u => u.endsWith(`/${f}`))), `${cached.urls.length} of ${files.length}`)
+    log('and only the app\'s own files', cached.urls.every(u => u.startsWith(BASE)), cached.urls.find(u => !u.startsWith(BASE)) ?? '')
+
+    // ── Never been signed in here ───────────────────────────────────────────
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+    log('with no connection the app still opens', await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1))
+    log('and with nobody remembered, it asks for a sign-in', (await page.locator('nav a').count()) === 0)
+    await ctx.close()
+  }
+
+  // ── A device that has been here before ────────────────────────────────────
+  {
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page)
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+
+    log('with no connection and an expired login, it opens anyway', await until(async () => (await page.locator('nav a').count()) >= 7))
+    log('with no sign-in screen in the way', (await page.getByRole('heading', { name: /sign in/i }).count()) === 0)
+    log('showing what the device holds', await until(async () => /Equinix/.test(await page.textContent('main')) || /Clients1/.test(await page.textContent('main'))))
+    const statusLine = () => page.locator('div.text-right[role="status"]').textContent()
+    log('and saying it is offline', /^Offline: changes are kept on this device$/.test((await statusLine()).trim()), await statusLine())
+
+    // A visit, start to report, with no connection at any point.
+    await page.locator('nav a').filter({ hasText: 'Preventative Maintenance' }).click()
+    await page.locator('tbody tr').filter({ hasText: 'Equinix' }).click()
+    await page.locator('tbody tr').filter({ hasText: '8 Grand Avenue' }).click()
+    await page.getByRole('button', { name: /^Start PM$/ }).click()
+    log('a visit can be started', await until(async () => (await page.getByRole('button', { name: /^Continue$/ }).count()) === 1))
+    await page.getByRole('button', { name: /^Reception/ }).click()
+    await page.getByRole('button', { name: 'Correct Time and Date: PASS', exact: true }).click()
+    await sleep(300)
+    log('and answered', (await page.getByRole('button', { name: 'Correct Time and Date: PASS', exact: true }).getAttribute('aria-pressed')) === 'true')
+
+    await page.reload({ waitUntil: 'load' })
+    await until(async () => (await page.locator('nav a').count()) >= 7)
+    await page.locator('nav a').filter({ hasText: 'Preventative Maintenance' }).click()
+    await page.locator('tbody tr').filter({ hasText: 'Equinix' }).click()
+    await page.locator('tbody tr').filter({ hasText: '8 Grand Avenue' }).click()
+    await page.getByRole('button', { name: /^Reception/ }).click()
+    log('a reload with no connection keeps it',
+      (await page.getByRole('button', { name: 'Correct Time and Date: PASS', exact: true }).getAttribute('aria-pressed')) === 'true')
+
+    await page.getByRole('button', { name: /← ?Back|^Back/ }).first().click()
+    const download = page.waitForEvent('download', { timeout: 20000 })
+    await page.getByRole('button', { name: 'Export report' }).click()
+    log('and the Excel report works too, its library having been kept', /\.xlsx$/.test((await download).suggestedFilename()))
+
+    // Signing out still has to work, with an expired token and nothing to talk to.
+    await page.locator('nav a').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Sign out' }).click()
+    log('signing out with unsaved work asks first',
+      await until(async () => /isn't saved yet/.test(await page.getByRole('dialog').textContent().catch(() => ''))))
+    await page.getByRole('button', { name: 'Discard it and sign out' }).click()
+    log('and works with no connection', await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1))
+    const left = await page.evaluate(
+      async key => ({
+        token: localStorage.getItem(key),
+        user: localStorage.getItem('fc.session.user'),
+        teams: localStorage.getItem('fc.session.teams'),
+        copies: await new Promise(resolve => {
+          const open = indexedDB.open('pemcora-offline')
+          open.onsuccess = () => {
+            const all = open.result.transaction('copies').objectStore('copies').getAll()
+            all.onsuccess = () => resolve(all.result.length)
+          }
+        }),
+      }),
+      AUTH_KEY,
+    )
+    log('leaving nothing of theirs behind', !left.token && !left.user && !left.teams && left.copies === 0, JSON.stringify(left))
+    await page.reload({ waitUntil: 'load' })
+    log('so a reload stays at the sign-in screen', await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1))
+    await ctx.close()
+  }
+
+  // ── Staying open ──────────────────────────────────────────────────────────
+  {
+    // The login library keeps trying to renew the token for about half a minute,
+    // then reports "no session". That is not the same as being signed out.
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page)
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+    await until(async () => (await page.locator('nav a').count()) >= 7)
+    const thrownOut = await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1, 40000)
+    log('it stays open while the login keeps failing to renew', !thrownOut)
+    log('still showing the work', (await page.locator('nav a').count()) >= 7)
+    await ctx.close()
+  }
+
+  // ── Signal that goes nowhere ──────────────────────────────────────────────
+  {
+    // The device thinks it's online, but nothing answers.
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page)
+    const before = Date.now()
+    await page.reload({ waitUntil: 'load' })
+    log('when the network goes nowhere it still opens', await until(async () => (await page.locator('nav a').count()) >= 7, 20000), `${Date.now() - before} ms`)
+    log('on what the device holds', await until(async () => /Clients1/.test(await page.textContent('main'))))
+    log('saying it is offline, not failed',
+      await until(async () => /^Offline/.test((await page.locator('div.text-right[role="status"]').textContent()).trim())))
+    await ctx.close()
+  }
+
+  // ── Never loaded here ─────────────────────────────────────────────────────
+  {
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page, { copy: false })
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+    log('with a team but no data yet, it says what it needs',
+      await until(async () => /doesn't have your team's data yet/.test(await page.textContent('body'))), (await page.textContent('body')).slice(0, 150))
+    await ctx.close()
+  }
+  {
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page, { copy: false })
+    await page.evaluate(() => localStorage.removeItem('fc.session.teams'))
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+    log('with no team known either, it says that',
+      await until(async () => /doesn't have your team yet/.test(await page.textContent('body'))), (await page.textContent('body')).slice(0, 150))
+    await ctx.close()
+  }
+
+  // ── A deploy still gets through ───────────────────────────────────────────
+  {
+    const { ctx, page } = await newDevice()
+    const original = readFileSync(join(OUT, 'index.html'), 'utf8')
+    writeFileSync(join(OUT, 'index.html'), original.replace('</head>', '<meta name="pemcora-test" content="newer"></head>'))
+    await page.reload({ waitUntil: 'load' })
+    log('with a connection the main page comes from the network',
+      (await page.locator('meta[name="pemcora-test"]').count()) === 1)
+    await ctx.setOffline(true)
+    await page.reload({ waitUntil: 'load' })
+    log('with none it comes from the build it was kept with',
+      (await page.locator('meta[name="pemcora-test"]').count()) === 0 && (await page.getByRole('heading', { name: /sign in/i }).count()) >= 0)
+    writeFileSync(join(OUT, 'index.html'), original)
+    await ctx.close()
+  }
+
+  // ── A new build takes over ────────────────────────────────────────────────
+  {
+    const { ctx, page } = await newDevice()
+    const firstKeys = await page.evaluate(() => caches.keys())
+    const next = sw.replace(/const BUILD = '[^']*'/, `const BUILD = '${Date.now() + 1000}-next'`)
+    writeFileSync(join(OUT, 'sw.js'), next)
+    await page.reload({ waitUntil: 'load' })
+    const taken = await until(async () =>
+      (await page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.getRegistration()
+        await registration.update().catch(() => {})
+        return (await caches.keys()).length
+      })) === firstKeys.length + 1)
+    log('a new build\'s worker installs beside the old one', taken)
+    const after = await page.evaluate(() => caches.keys())
+    log('keeping the last build, for a tab still open on it', firstKeys.every(k => after.includes(k)), after.join())
+    writeFileSync(join(OUT, 'sw.js'), sw)
+    await ctx.close()
+  }
+
+  log('no page errors along the way', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
+} catch (e) {
+  console.log('FAIL  suite threw before finishing — ' + e.message)
+} finally {
+  await browser.close()
+  server.kill()
+  process.exit(0)
+}

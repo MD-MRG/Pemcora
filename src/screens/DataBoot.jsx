@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { hydrate, pushStoredCopy, resetCache, flush } from '../lib/cache.js'
 import { supabaseAdapter } from '../lib/adapters/supabase.js'
 import { deviceCopies, removeCopy, unsavedCopies } from '../lib/offlineStore.js'
@@ -36,8 +36,11 @@ async function sendOtherTeams(userId, teamId) {
  * no signal if this device has never had the team's data.
  */
 export default function DataBoot({ children }) {
-  const { user } = useAuth()
+  const { user, session } = useAuth()
   const { team } = useTeam()
+  // Opened from the device with a login that can't be renewed right now, every
+  // request will be slow to fail, so don't wait long before using the device copy.
+  const openedFromDevice = useRef(!!session?.offline)
   const [state, setState] = useState('loading') // 'loading' | 'ready' | 'error'
   const [error, setError] = useState(null)
   const [attempt, setAttempt] = useState(0)
@@ -48,7 +51,10 @@ export default function DataBoot({ children }) {
     // Clear first: switching accounts must not show the previous team's data
     // for the moment before the new load lands.
     resetCache()
-    hydrate(supabaseAdapter(team.id, user?.id), { device: deviceCopies(user?.id, team.id) })
+    hydrate(supabaseAdapter(team.id, user?.id), {
+      device: deviceCopies(user?.id, team.id),
+      ...(openedFromDevice.current ? { patience: 1000, expectOffline: true } : {}),
+    })
       .then(() => {
         if (!alive) return
         setState('ready')

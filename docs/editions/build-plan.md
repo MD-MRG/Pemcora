@@ -981,7 +981,11 @@ step:
   connection. The main page always comes from the network when there is one, so a deploy
   still reaches people.
 - With no connection the app uses the last known team and data, and a login that can't be
-  renewed offline doesn't drop to the sign-in screen.
+  renewed offline doesn't drop to the sign-in screen. Nothing about that is a login: it holds
+  no token and the database refuses it everything, so it only opens what the device has.
+- Fixed along the way: the team list reloaded every time the login token renewed, about once
+  an hour, which took the whole app down to a spinner and back in the middle of whatever
+  someone was doing.
 
 #### B4. Entitlements in the app
 

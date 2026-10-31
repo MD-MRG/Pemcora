@@ -630,8 +630,12 @@ export async function hydrate(adapter, options = {}) {
       clearTimeout(timeout)
       // Still going: let it finish, and report a failure as a save would.
       if (gaveUp) {
-        started.catch(e => isNetworkFailure(e) || console.error('[cache] load failed', e))
-        if (state.status === 'loading') setStatus('idle')
+        started.catch(e => {
+          if (stale()) return
+          if (isNetworkFailure(e)) setStatus('offline', e)
+          else console.error('[cache] load failed', e)
+        })
+        if (state.status === 'loading') setStatus(options.expectOffline ? 'offline' : 'idle')
       }
     }
   } catch (e) {
