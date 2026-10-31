@@ -906,14 +906,19 @@ step:
   note, which the electrician then edits (C1).
 
 > **M.D.'s note (fail notes on smoke alarms):** a failed smoke alarm's note is for the
-> reason why it failed. If a smoke alarm fails, it has to be replaced.
+> reason why it failed. If a smoke alarm fails, it has to be replaced. (M.D. then limited
+> "has to be replaced" to tests where the alarm itself is at fault.)
 
-- The smoke alarm checks have no suggested wording. Their "Each smoke alarm" section has
-  `onFail: 'replace'`: the report prints the reason and "Has to be replaced" against each
-  failed alarm. Whole-property tests, such as an alarm on each level, take an ordinary note.
-- A licensed electrician's check of the lists should confirm this suits every per-alarm
-  test, including placement ones such as "At least 300 mm from a light fitting", where the
-  fix could be moving the alarm.
+- The smoke alarm checks have no suggested wording. Every failed test's note gives the
+  reason.
+- Tests where the alarm itself is at fault carry `onFail: 'replace'`, and the report prints
+  the reason and "Has to be replaced": the AS 3786 marking, photoelectric, no ionisation
+  sensor, under 10 years old, hard-wired or sealed battery, and works when tested.
+- Every other test takes an ordinary note, because something else fixes it: correctly
+  installed, the battery, interconnection, on the ceiling, the 300 mm and 400 mm distances,
+  and cleaned. So do the whole-property tests, such as an alarm on each level.
+- A licensed electrician's check of the lists should confirm this split, and whether the
+  placement tests should be able to fail at all.
 
 **B2 review (commit b5c30f4), fixed in B2b.** What the review changed:
 
@@ -1003,8 +1008,9 @@ step:
   editable. The Settings list editor lets an admin reword the suggestions (M.D.'s note in
   B2). Choosing the one with `[timeframe]` asks for the timeframe; finishing the visit
   refuses a note that still holds it (`noteIsFinished`).
-- On a section with `onFail: 'replace'`, the note box asks why the alarm failed, says it has
-  to be replaced, and offers C2's replace flow (M.D.'s note in B2).
+- On the smoke alarm checks, the note box asks why it failed. On a test with
+  `onFail: 'replace'`, it also says the alarm has to be replaced and offers C2's replace
+  flow (M.D.'s note in B2).
 - Whole-site fails show on the visit's room list (`siteFails`). Home's `KIND_LABEL` and
   `KIND_PATH` list only the three workflows today, so another workflow's visit would show as
   Preventative Maintenance; take them from the pack registry.

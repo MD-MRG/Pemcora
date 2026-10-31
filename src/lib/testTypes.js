@@ -27,8 +27,8 @@
 //            visits.site_results, each item's answers under its id:
 //            results[sectionId][itemId][testId]
 //
-// A section with `onFail: 'replace'` holds tests that condemn the item: a
-// failed smoke alarm has to be replaced, so its note says why it failed.
+// A test with `onFail: 'replace'` condemns its item when it fails: the alarm
+// itself is at fault and has to be replaced, and the note says why it failed.
 //
 // A room section can name `roomTypes` that switch it on by themselves, and a
 // template can carry `coverage` rules such as "every bedroom has a smoke

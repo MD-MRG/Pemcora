@@ -179,9 +179,36 @@ log('each smoke alarm check repeats for each alarm, with 7, 12 and 6 tests',
   ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check']
     .every(id => alarms(id)?.assetType === 'smoke_alarm') &&
   same(['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].map(id => alarms(id).tests.length), [7, 12, 6]))
-log('a failed alarm has to be replaced; a failed RCD is for the electrician to say',
-  ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].every(id => alarms(id).onFail === 'replace') &&
-  general.sections.every(s => s.onFail === undefined))
+const condemning = id => alarms(id).tests.filter(t => t.onFail === 'replace').map(t => t.label)
+log('only tests that fault the alarm itself say it has to be replaced',
+  same(condemning('vic_smoke_alarm'), [
+    'Marked AS 3786',
+    "Works when tested to the manufacturer's instructions",
+    'Hard-wired with a backup battery, if the building dates from after 1 August 1997',
+    'Under 10 years old',
+  ]) &&
+  same(condemning('qld_smoke_alarm'), [
+    'Photoelectric, marked AS 3786-2014',
+    'No ionisation sensor',
+    'Under 10 years old (manufacture date on the alarm)',
+    'Hard-wired with a backup battery, or a sealed 10-year battery (a hard-wired alarm is only replaced with another hard-wired one)',
+    'Works when tested (replaced immediately if not)',
+  ]) &&
+  same(condemning('smoke_alarm_check'), [
+    'Marked AS 3786',
+    "Works when tested to the manufacturer's instructions",
+    'Under 10 years old',
+  ]))
+log('placement, battery, interconnection and cleaning tests take an ordinary note',
+  ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].every(id =>
+    alarms(id).tests
+      .filter(t => typeof t === 'string')
+      .every(label => /Correctly installed|Battery|Interconnected|On the ceiling|At least \d+ mm|Cleaned/.test(label)) &&
+    alarms(id).tests.filter(t => typeof t === 'string').length === alarms(id).tests.length - condemning(id).length))
+log('nothing else in any list condemns its item',
+  WORKFLOWS.every(w => w.seed.sections.every(s => s.onFail === undefined)) &&
+  WORKFLOWS.filter(w => !['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].includes(w.id))
+    .every(w => [...w.seed.main, ...w.seed.sections.flatMap(s => s.tests)].every(t => t.onFail === undefined)))
 log('fail-note suggestions are on the electrical checks only',
   WORKFLOWS.filter(w => w.seed.failNotes).map(w => w.id).sort().join() ===
     'electrical_safety,qld_electrical_safety,vic_electrical_safety')

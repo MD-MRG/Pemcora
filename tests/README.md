@@ -37,7 +37,7 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 registry (`src/data/packs/`) and `templateStore.js` straight into Node and holds
 them to the catalogue in `supabase/migrations/` — every pack and workflow there
 has an entry, the AV lists are the ones Pemcora shipped with, and every seed
-becomes a template with only the fields step B2 defines (34 checks).
+becomes a template with only the fields step B2 defines (36 checks).
 
 ```
 node tests/packs.mjs
@@ -48,7 +48,7 @@ types (`src/lib/testTypes.js`): what each answer type keeps and when it is a
 fail, a template using every type round-tripping through the store, coverage
 gaps, the report snapshot (`src/lib/reportSnapshot.js`) for a whole-site visit
 with items and readings, whole-site fails reaching Home, and the Excel export —
-including an AV visit, which must export exactly as before (68 checks).
+including an AV visit, which must export exactly as before (72 checks).
 
 ```
 node tests/template-types.mjs

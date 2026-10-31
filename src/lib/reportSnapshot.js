@@ -69,8 +69,8 @@ function answer(test, place, group, itemId) {
 }
 
 // A fail row marks what a report has to say about it: `mustReplace` when the
-// section condemns a failed item, `unfinished` when its note still holds a
-// timeframe to fill in.
+// test condemns its item, `unfinished` when its note still holds a timeframe to
+// fill in.
 const failRows = (section, place, itemId, itemLabel) =>
   section.tests
     .filter(t =>
@@ -82,7 +82,7 @@ const failRows = (section, place, itemId, itemLabel) =>
         label: t.label,
         ...(itemId ? { item: itemLabel } : {}),
         note,
-        ...(section.onFail === 'replace' ? { mustReplace: true } : {}),
+        ...(t.onFail === 'replace' ? { mustReplace: true } : {}),
         ...(note && !noteIsFinished(note) ? { unfinished: true } : {}),
       }
     })

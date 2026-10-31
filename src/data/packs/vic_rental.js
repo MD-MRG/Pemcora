@@ -5,6 +5,7 @@
 // licensed electrician checks these lists before any team can use them.
 
 import { VIC_ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
+import { replaceOnFail } from './shared/smokeAlarm.js'
 
 export default {
   id: 'vic_rental',
@@ -47,15 +48,14 @@ export default {
             label: 'Each smoke alarm',
             scope: 'item',
             assetType: 'smoke_alarm',
-            onFail: 'replace',
             tests: [
-              'Marked AS 3786',
+              replaceOnFail('Marked AS 3786'),
               'Correctly installed',
-              "Works when tested to the manufacturer's instructions",
+              replaceOnFail("Works when tested to the manufacturer's instructions"),
               'Battery fitted and replaced where needed (a removable 9 V battery replaced every year)',
-              'Hard-wired with a backup battery, if the building dates from after 1 August 1997',
+              replaceOnFail('Hard-wired with a backup battery, if the building dates from after 1 August 1997'),
               'Interconnected, if built after 1 May 2014 and more than one alarm is required',
-              'Under 10 years old',
+              replaceOnFail('Under 10 years old'),
             ],
           },
           {

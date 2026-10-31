@@ -6,6 +6,7 @@
 // electrician checks these lists before any team can use them.
 
 import { ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
+import { replaceOnFail } from './shared/smokeAlarm.js'
 
 export default {
   id: 'qld_electrical',
@@ -34,19 +35,20 @@ export default {
             label: 'Each smoke alarm',
             scope: 'item',
             assetType: 'smoke_alarm',
-            onFail: 'replace',
             tests: [
-              'Photoelectric, marked AS 3786-2014',
-              'No ionisation sensor',
-              'Under 10 years old (manufacture date on the alarm)',
-              'Hard-wired with a backup battery, or a sealed 10-year battery (a hard-wired alarm is only replaced with another hard-wired one)',
+              replaceOnFail('Photoelectric, marked AS 3786-2014'),
+              replaceOnFail('No ionisation sensor'),
+              replaceOnFail('Under 10 years old (manufacture date on the alarm)'),
+              replaceOnFail(
+                'Hard-wired with a backup battery, or a sealed 10-year battery (a hard-wired alarm is only replaced with another hard-wired one)',
+              ),
               'Interconnected with every other alarm',
               'On the ceiling where practicable',
               'At least 300 mm from a wall-ceiling corner',
               'At least 300 mm from a light fitting',
               'At least 400 mm from an air-conditioning vent',
               'At least 400 mm from ceiling-fan blades',
-              'Works when tested (replaced immediately if not)',
+              replaceOnFail('Works when tested (replaced immediately if not)'),
               'Cleaned',
             ],
           },

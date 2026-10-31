@@ -7,6 +7,7 @@
 // use them.
 
 import { ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
+import { replaceOnFail } from './shared/smokeAlarm.js'
 
 export default {
   id: 'electrical_general',
@@ -47,14 +48,13 @@ export default {
             label: 'Each smoke alarm',
             scope: 'item',
             assetType: 'smoke_alarm',
-            onFail: 'replace',
             tests: [
-              'Marked AS 3786',
+              replaceOnFail('Marked AS 3786'),
               'Correctly installed',
-              "Works when tested to the manufacturer's instructions",
+              replaceOnFail("Works when tested to the manufacturer's instructions"),
               'Battery fitted and replaced where needed',
               'Interconnected where required',
-              'Under 10 years old',
+              replaceOnFail('Under 10 years old'),
             ],
           },
           {

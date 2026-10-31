@@ -304,11 +304,13 @@ const alarmVisit = {
       [alarmSection.id]: {
         al1: { [alarmSection.tests[10].id]: 'FAIL' },
         al2: { [alarmSection.tests[0].id]: 'FAIL' },
+        al3: { [alarmSection.tests[7].id]: 'FAIL', [alarmSection.tests[11].id]: 'FAIL' },
       },
       [storeySection.id]: { [storeySection.tests[1].id]: 'FAIL' },
     },
     troubleshooting: {
       [noteKey(alarmSection.tests[10].id, 'al1')]: 'No sound when the button is pressed',
+      [noteKey(alarmSection.tests[7].id, 'al3')]: 'Too close to the downlight',
       [storeySection.tests[1].id]: 'Repair recommended within [timeframe].',
     },
   },
@@ -316,13 +318,22 @@ const alarmVisit = {
 const alarmAssets = [
   { id: 'al1', assetType: 'smoke_alarm', label: 'Hall alarm' },
   { id: 'al2', assetType: 'smoke_alarm', label: 'Bedroom alarm' },
+  { id: 'al3', assetType: 'smoke_alarm', label: 'Landing alarm' },
 ]
 const alarmSnap = buildReportSnapshot({ visit: alarmVisit, assets: alarmAssets })
 log('the smoke alarm checks ask why it failed, with no suggested wording',
   ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].every(id => {
     const t = getTemplate(id)
-    return !t.failNotes && t.sections.find(s => s.scope === 'item').onFail === 'replace'
+    return !t.failNotes && t.sections.find(s => s.scope === 'item').tests.some(x => x.onFail === 'replace')
   }))
+log('a test the store seeds carries the rule; one that does not has no such field',
+  alarmSection.tests[10].onFail === 'replace' && alarmSection.tests[7].onFail === undefined &&
+  alarmSection.tests[10].id && alarmSection.tests[10].order === 10)
+log('a placement or cleaning fail keeps its reason and does not condemn the alarm',
+  same(alarmSnap.site.failed.filter(f => f.item === 'Landing alarm'), [
+    { label: alarmSection.tests[7].label, item: 'Landing alarm', note: 'Too close to the downlight' },
+    { label: alarmSection.tests[11].label, item: 'Landing alarm', note: '' },
+  ]), JSON.stringify(alarmSnap.site.failed.filter(f => f.item === 'Landing alarm')))
 log('a failed alarm has to be replaced, keeping the reason it failed',
   same(alarmSnap.site.failed[0], {
     label: alarmSection.tests[10].label, item: 'Hall alarm',
@@ -334,7 +345,7 @@ log('a note still holding its timeframe is marked unfinished',
   alarmSnap.site.failed.find(f => f.label === storeySection.tests[1].label)?.unfinished === true &&
   !alarmSnap.site.failed[0].unfinished)
 log('whole-site fails say which item each belongs to',
-  siteFails(alarmVisit.siteResults).map(f => f.itemId ?? '-').join() === 'al1,al2,-',
+  siteFails(alarmVisit.siteResults).map(f => f.itemId ?? '-').join() === 'al1,al2,al3,al3,-',
   siteFails(alarmVisit.siteResults).map(f => f.itemId ?? '-').join())
 
 // Whole-site fails reach Home, and only while the visit can still take a note.
@@ -438,6 +449,10 @@ log('a failed alarm prints why, and that it has to be replaced',
   alarmText.includes(`Hall alarm — ${alarmSection.tests[10].label}|No sound when the button is pressed — Has to be replaced`))
 log('with no reason yet, it still prints that it has to be replaced',
   alarmText.includes(`Bedroom alarm — ${alarmSection.tests[0].label}|Has to be replaced`))
+log('a placement fail prints only its reason',
+  alarmText.includes(`Landing alarm — ${alarmSection.tests[7].label}|Too close to the downlight`))
+log('a cleaning fail with no reason yet prints nothing about replacing it',
+  alarmText.includes(`Landing alarm — ${alarmSection.tests[11].label}|`))
 
 // The worksheet takes the check's own name; AV keeps the one it has always had.
 const sheetOf = async sheetName =>
