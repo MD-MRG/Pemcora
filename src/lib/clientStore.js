@@ -16,7 +16,21 @@
 // to hold in memory and a technician's edits should never wait on a network
 // round trip. See cache.js for why that trade is the right one here.
 
-import { readClients, writeClients, hydrateSync, hasAdapter } from './cache.js'
+import {
+  readClients,
+  writeClients,
+  hydrateSync,
+  hasAdapter,
+  adapterName,
+  commitSaved,
+  flushWithin,
+  forgetHeld,
+  heldVisits,
+  readSaved,
+  retryHeld,
+  startOnServer,
+  visitAlias,
+} from './cache.js'
 import { localAdapter } from './adapters/local.js'
 import { hasReading, roomFails } from './testTypes.js'
 
@@ -247,7 +261,20 @@ export function openVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   return listVisits(clientId, locationId, kind).find(v => !v.completedAt) ?? null
 }
 
-export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND, technician = '') {
+const newVisit = (kind, technician) => ({
+  id: uid(),
+  kind,
+  // Copied, not referenced: changing the default later must not rewrite who
+  // attended a visit months ago.
+  technician,
+  startedAt: new Date().toISOString(),
+  completedAt: null,
+  rooms: {},
+  exports: [],
+  exportPreference: null,
+})
+
+export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND, technician = '', visit = null) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location) return null
@@ -258,21 +285,88 @@ export function startVisit(clientId, locationId, kind = MAINTENANCE_KIND, techni
   const already = location.visits.find(v => !v.completedAt && kindOf(v) === kind)
   if (already) return already
 
-  const visit = {
-    id: uid(),
-    kind,
-    // Copied, not referenced: changing the default later must not rewrite who
-    // attended a visit months ago.
-    technician,
-    startedAt: new Date().toISOString(),
-    completedAt: null,
-    rooms: {},
-    exports: [],
-    exportPreference: null,
-  }
-  location.visits.push(visit)
+  const started = visit ?? newVisit(kind, technician)
+  location.visits.push(started)
   write(clients)
-  return visit
+  return started
+}
+
+/**
+ * Starting a visit from the screen (build plan, step B3). With a connection the
+ * visit doesn't open until the database has accepted it; without one it opens now
+ * and is checked when the device reconnects. Answers with an outcome:
+ *
+ *   started     it's open
+ *   offline     it's open, on this device for now
+ *   joined      another device had already started it: this is that visit
+ *   correction  a correction to an earlier visit is open at this site, and this
+ *               is it. It has to be finished before a new inspection can start.
+ *   refused     nothing opened, with the reason and a message to show
+ */
+export async function beginVisit(clientId, locationId, kind = MAINTENANCE_KIND, technician = '') {
+  if (adapterName() !== 'supabase') {
+    return { outcome: 'started', visit: startVisit(clientId, locationId, kind, technician) }
+  }
+
+  const already = openVisit(clientId, locationId, kind)
+  if (already) return { outcome: 'started', visit: already }
+
+  // The site may have been added seconds ago, so it goes first. If it can't, the
+  // visit has nothing to hang off yet and waits on the device with it.
+  await flushWithin(5000)
+  const visit = newVisit(kind, technician)
+  const answer = findLoc(readSaved(), clientId, locationId)
+    ? await startOnServer(locationId, visit)
+    : { outcome: 'offline' }
+
+  if (answer.outcome === 'refused') return answer
+  if (answer.outcome === 'offline') {
+    return { outcome: 'offline', visit: startVisit(clientId, locationId, kind, technician, visit) }
+  }
+
+  commitSaved(clients => {
+    const location = findLoc(clients, clientId, locationId)
+    if (!location) return
+    location.visits = location.visits ?? []
+    if (!location.visits.some(v => v.id === answer.visit.id)) {
+      location.visits.push(structuredClone(answer.visit))
+    }
+  })
+  return {
+    outcome: answer.outcome === 'accepted' ? 'started' : answer.outcome,
+    visit: answer.visit,
+  }
+}
+
+// The visit a page works on: the open one, or failing that the most recent. A
+// refused visit only comes first if nothing else is open, since a correction
+// waiting to be finished is what has to happen before it can save.
+export function currentVisit(visits, held = heldVisits()) {
+  return (
+    visits.find(v => !v.completedAt && !held[v.id]) ??
+    visits.find(v => !v.completedAt) ??
+    visits[0] ??
+    null
+  )
+}
+
+/** Sends a refused visit again. Resolves once that attempt is over. */
+export const retryHeldVisit = visitId => retryHeld(visitId)
+
+/**
+ * Gives up on a refused visit. One the database has never seen goes altogether;
+ * one it has goes back to what it holds.
+ */
+export function discardHeldVisit(clientId, locationId, visitId) {
+  forgetHeld(visitId)
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  const at = (location?.visits ?? []).findIndex(v => v.id === visitId)
+  if (at < 0) return
+  const saved = findLoc(readSaved(), clientId, locationId)?.visits?.find(v => v.id === visitId)
+  if (saved) location.visits[at] = saved
+  else location.visits.splice(at, 1)
+  write(clients)
 }
 
 export function setVisitTechnician(clientId, locationId, visitId, technician) {
@@ -286,8 +380,7 @@ export function setVisitTechnician(clientId, locationId, visitId, technician) {
 
 export function completeVisit(clientId, locationId, visitId) {
   const clients = read()
-  const location = findLoc(clients, clientId, locationId)
-  const visit = location?.visits?.find(v => v.id === visitId)
+  const visit = findVisit(clients, clientId, locationId, visitId)
   if (!visit) return false
   visit.completedAt = new Date().toISOString()
   write(clients)
@@ -375,8 +468,12 @@ export function roomResultCount(clientId, locationId, roomId) {
 
 // ── Room entries within a visit ─────────────────────────────────────────────
 
-const findVisit = (clients, clientId, locationId, visitId) =>
-  findLoc(clients, clientId, locationId)?.visits?.find(v => v.id === visitId) ?? null
+// Through visitAlias: a page can be holding the id of a visit that has since
+// joined the one another device started, and its edits still have to land.
+const findVisit = (clients, clientId, locationId, visitId) => {
+  const id = visitAlias(visitId)
+  return findLoc(clients, clientId, locationId)?.visits?.find(v => v.id === id) ?? null
+}
 
 export function getRoomEntry(clientId, locationId, visitId, roomId) {
   const visit = findVisit(read(), clientId, locationId, visitId)
@@ -489,12 +586,12 @@ export function deleteExport(clientId, locationId, visitId, revision) {
 export function reopenVisit(clientId, locationId, visitId) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
-  const visit = location?.visits?.find(v => v.id === visitId)
+  const visit = findVisit(clients, clientId, locationId, visitId)
   if (!visit) return 'missing'
   if (!visit.completedAt) return 'reopened'
 
   const kind = kindOf(visit)
-  if (location.visits.some(v => v.id !== visitId && !v.completedAt && kindOf(v) === kind)) {
+  if (location.visits.some(v => v.id !== visit.id && !v.completedAt && kindOf(v) === kind)) {
     return 'conflict'
   }
 

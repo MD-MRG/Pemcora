@@ -12,6 +12,9 @@ export default function ConfirmDialog({
   danger = false,
   onConfirm,
   onCancel,
+  // A third way out, for the rare question with two real answers.
+  alternativeLabel = null,
+  onAlternative = null,
 }) {
   return (
     <div
@@ -28,7 +31,7 @@ export default function ConfirmDialog({
         <h2 className="text-[16px] font-bold">{title}</h2>
         {children && <div className="text-ink-soft mt-2 text-[13.5px]">{children}</div>}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button
             type="button"
             onClick={onCancel}
@@ -36,6 +39,15 @@ export default function ConfirmDialog({
           >
             {cancelLabel}
           </button>
+          {alternativeLabel && (
+            <button
+              type="button"
+              onClick={onAlternative}
+              className="text-fail min-h-[46px] rounded-lg px-4 text-[13.5px] font-semibold hover:bg-red-50"
+            >
+              {alternativeLabel}
+            </button>
+          )}
           <button
             type="button"
             autoFocus

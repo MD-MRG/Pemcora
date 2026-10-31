@@ -30,6 +30,16 @@
 // once. `previous` is a snapshot taken at the last successful persist, which is
 // what lets the Supabase adapter work out what actually changed rather than
 // rewriting everything.
+//
+// Against a server, saving can fail and the app can be closed before it finishes
+// (build plan 2.2), so the cache is also the save queue. Every change is written
+// to a copy on the device first, then sent; what didn't reach the database stays
+// out of the snapshot and is sent again when the connection returns and on a
+// timer. A push reports what it managed rather than failing whole: a visit the
+// database refuses goes on the `held` list and stops being sent, so it never
+// holds up anything else.
+
+import { isNetworkFailure } from './saveErrors.js'
 
 const listeners = new Set()
 
@@ -44,8 +54,20 @@ const state = {
   adapter: null,
   snapshot: emptyState(), // what the backend is known to hold
   hydrated: false,
-  status: 'idle', // 'idle' | 'loading' | 'saving' | 'saved' | 'error'
+  status: 'idle', // 'idle' | 'loading' | 'saving' | 'saved' | 'offline' | 'error'
   error: null,
+
+  device: null, // where unsaved work is kept (offlineStore.js); null for local
+  held: {}, // visits the database refused, by id: see heldVisits()
+  aliases: {}, // a visit started here → the open visit it joined
+  problems: [], // what the last push couldn't save: { what, error }
+  unsavedClients: [], // clients with something in that list
+  others: [], // copies other tabs left behind, still to send
+
+  revision: 0, // goes up on every change
+  savedRevision: 0, // the revision the database has caught up with
+  generation: 0, // goes up when the session changes, so late answers are ignored
+  outside: 0, // goes up when a push changes the work: see outsideChanges()
 }
 
 // structuredClone rather than JSON round-tripping: the tree holds Dates and
@@ -125,7 +147,48 @@ export const readTemplates = () => take('templates')
 // ─────────────────────────────────────────────────────────────────────────────
 
 let timer = null
+let retryTimer = null
+let retryDelay = 0
 let inFlight = null
+
+const FIRST_RETRY = 30000
+const LONGEST_RETRY = 5 * 60000
+// Rounds of one push following another. Only someone typing through a slow push,
+// or two devices merging back and forth, takes more than a few; past this it waits
+// for the next change or the retry rather than hammering a poor connection.
+const MOST_ROUNDS = 20
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
+
+// An adapter that talks to a server: unsaved work has to outlive this page, and
+// saving can fail.
+const durable = () => !!state.adapter && !state.adapter.immediate
+
+function clearTimers() {
+  clearTimeout(timer)
+  clearTimeout(retryTimer)
+  retryTimer = null
+  retryDelay = 0
+}
+
+// Before anything is sent, so a closed app or a dead battery costs nothing. The
+// copy holds what has to be sent and what the database is known to hold, which
+// is enough to work the rest out again after a restart.
+function keepOnDevice() {
+  state.device?.save({
+    data: state.data,
+    snapshot: state.snapshot,
+    held: state.held,
+    unsaved: state.revision !== state.savedRevision || state.problems.length > 0,
+    unsavedClients: state.unsavedClients,
+  })
+}
+
+function scheduleRetry() {
+  clearTimeout(retryTimer)
+  retryDelay = Math.min(retryDelay ? retryDelay * 2 : FIRST_RETRY, LONGEST_RETRY)
+  retryTimer = setTimeout(flush, retryDelay)
+}
 
 function scheduleWrite() {
   if (!state.adapter) return
@@ -147,6 +210,11 @@ function scheduleWrite() {
   }
 
   clearTimeout(timer)
+  // Nothing to try until the connection is back; the 'online' event picks it up.
+  if (isOffline()) {
+    setStatus('offline')
+    return
+  }
   setStatus('saving')
   timer = setTimeout(flush, 600)
 }
@@ -156,6 +224,8 @@ function scheduleWrite() {
 function put(name, next) {
   current()
   if (next !== undefined) state.data[name] = next
+  state.revision += 1
+  keepOnDevice()
   emit()
   scheduleWrite()
 }
@@ -164,35 +234,248 @@ export const writeClients = next => put('clients', next)
 export const writeSettings = next => put('settings', next)
 export const writeTemplates = next => put('templates', next)
 
+const pushWith = (adapter, next, previous, held) =>
+  adapter.push ? adapter.push(next, previous, held) : adapter.persist(next, previous)
+
+// What came back from a push. Only what reached the database moves into the
+// snapshot, so whatever didn't is worked out again and sent next time. A refused
+// visit goes on the held list, where it stops being sent at all.
+function applyReport(report, pushing) {
+  state.snapshot = report?.settled ?? pushing
+  state.problems = report?.problems ?? []
+  state.unsavedClients = report?.unsavedClients ?? []
+  if (report?.held) state.held = { ...state.held, ...report.held }
+  if (report?.aliases) Object.assign(state.aliases, report.aliases)
+  // A visit joined or a room merged: the work on this device has changed under
+  // whoever is looking at it, so an open room has to read it again.
+  if (report?.rebase) {
+    state.data = report.rebase(state.data)
+    state.revision += 1
+    state.outside += 1
+  }
+}
+
+async function pushUntilCaughtUp() {
+  const { adapter, generation } = state
+  let rounds = 0
+  try {
+    do {
+      if (isOffline()) {
+        setStatus('offline')
+        return false
+      }
+      rounds += 1
+      if (rounds > MOST_ROUNDS) {
+        scheduleRetry()
+        return false
+      }
+      // Captured before awaiting: edits made during the push belong to the next
+      // one, and treating them as already-saved would lose them.
+      const revision = state.revision
+      const pushing = clone(state.data)
+      setStatus('saving')
+      const report = await pushWith(adapter, pushing, state.snapshot, state.held)
+      if (generation !== state.generation) return false
+      state.savedRevision = revision
+      applyReport(report, pushing)
+      keepOnDevice()
+    } while (state.revision !== state.savedRevision)
+  } catch (e) {
+    if (generation !== state.generation) return false
+    console.error('[cache] save failed', e)
+    setStatus(isNetworkFailure(e) ? 'offline' : 'error', e)
+    keepOnDevice()
+    scheduleRetry()
+    return false
+  }
+
+  if (state.problems.length) {
+    setStatus('error', state.problems[0].error)
+    scheduleRetry()
+    return false
+  }
+  clearTimeout(retryTimer)
+  retryDelay = 0
+  setStatus('saved')
+  if (state.others.length) await pushOtherTabs(adapter, generation)
+  return true
+}
+
 /**
- * Pushes pending changes now and resolves when they have landed.
+ * Pushes pending changes now and resolves true when everything has landed, false
+ * when something hasn't (it stays on the device and is tried again).
  *
  * Serialised through `inFlight`: two overlapping persists would diff against
- * the same snapshot and issue the same inserts twice.
+ * the same snapshot and issue the same inserts twice. A flush arriving while one
+ * runs just waits for it: the running one goes round again until it has caught up
+ * with the latest edit, or that edit would sit unsent with the status saying "saved".
  */
-export async function flush() {
+export function flush() {
   clearTimeout(timer)
-  if (!state.adapter || state.adapter.immediate) return
+  if (!durable()) return Promise.resolve(true)
   if (inFlight) return inFlight
+  const run = pushUntilCaughtUp().finally(() => {
+    if (inFlight === run) inFlight = null
+  })
+  inFlight = run
+  return run
+}
 
-  inFlight = (async () => {
-    // Captured before awaiting: edits made during the push belong to the next
-    // one, and treating them as already-saved would lose them.
-    const pushing = clone(state.data)
-    try {
-      await state.adapter.persist(pushing, state.snapshot)
-      state.snapshot = pushing
-      setStatus('saved')
-    } catch (e) {
-      console.error('[cache] persist failed', e)
-      setStatus('error', e)
-      throw e
-    } finally {
-      inFlight = null
+// ─────────────────────────────────────────────────────────────────────────────
+// Another tab's unsent work
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Sends what a stored copy still owes, going round again if a push changed it (a
+ * visit joined). Answers whether the copy has nothing left to send, and hands
+ * back any visit the database refused. Throws if the connection fails.
+ */
+export async function pushStoredCopy(adapter, copy) {
+  let { data, snapshot } = copy
+  let held = { ...(copy.held ?? {}) }
+  let problems = 0
+  for (let round = 0; round < 3; round++) {
+    const pushing = clone(data)
+    const report = await pushWith(adapter, pushing, snapshot, held)
+    snapshot = report?.settled ?? pushing
+    held = { ...held, ...(report?.held ?? {}) }
+    problems = report?.problems?.length ?? 0
+    if (!report?.rebase) break
+    data = report.rebase(data)
+  }
+  return { clean: problems === 0, held, data }
+}
+
+function findVisitIn(data, id) {
+  for (const client of data?.clients ?? []) {
+    for (const location of client.locations ?? []) {
+      const visit = (location.visits ?? []).find(v => v.id === id)
+      if (visit) return visit
     }
-  })()
+  }
+  return null
+}
 
-  return inFlight
+async function pushOtherTabs(adapter, generation) {
+  const copies = state.others
+  state.others = []
+  for (const copy of copies) {
+    if (!copy.unsaved && !Object.keys(copy.held ?? {}).length) {
+      await state.device?.remove([copy.id])
+      continue
+    }
+    try {
+      const { clean, held, data } = await pushStoredCopy(adapter, copy)
+      if (generation !== state.generation) return
+      // A refused visit moves here, where it can be seen and dealt with.
+      for (const [id, record] of Object.entries(held)) {
+        state.held[id] = { ...record, visit: findVisitIn(data, id) ?? record.visit }
+      }
+      if (clean) await state.device?.remove([copy.id])
+      else state.others.push(copy)
+    } catch (e) {
+      if (generation !== state.generation) return
+      if (!isNetworkFailure(e)) console.error('[cache] could not save another tab', e)
+      state.others.push(copy)
+      return
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What the app asks of the queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 'saving' | 'saved' | 'offline' | 'failed', or null when nothing is saved to a
+ *  server at all. A string, so React can compare it (useSyncExternalStore). */
+export function saveStatus() {
+  if (adapterName() !== 'supabase') return null
+  if (isOffline() || state.status === 'offline') return 'offline'
+  if (state.status === 'error') return 'failed'
+  if (state.status === 'saving' || state.status === 'loading') return 'saving'
+  return 'saved'
+}
+
+export const saveError = () => state.error
+
+export const heldCount = () => Object.keys(state.held).length
+
+/** Visits the database refused, kept on this device: visit id → the reason, the
+ *  client and site it belongs to, and whether its site still exists. */
+export const heldVisits = () => clone(state.held)
+
+/** A visit that joined another one still answers to its old id, for a page
+ *  that opened it before the join happened. */
+export const visitAlias = id => state.aliases[id] ?? id
+
+/** Goes up when work on this device changed other than through the app's own
+ *  writes, which is when an open room has to read it again. */
+export const outsideChanges = () => state.outside
+
+/** True while this device holds work the database hasn't got. */
+export const hasUnsavedWork = () =>
+  state.revision !== state.savedRevision ||
+  state.problems.length > 0 ||
+  Object.keys(state.held).length > 0
+
+/** What the database is known to hold, for working out what a discard goes back to. */
+export const readSaved = () => clone(state.snapshot.clients)
+
+/** Takes visits back off the held list and sends them. No id means all of them,
+ *  which is what an upgrade does (step B4). */
+export function retryHeld(id) {
+  if (id) delete state.held[id]
+  else state.held = {}
+  state.revision += 1
+  keepOnDevice()
+  emit()
+  return flush()
+}
+
+/** Forgets a held visit for good. The caller takes it out of the tree. */
+export function forgetHeld(id) {
+  delete state.held[id]
+  keepOnDevice()
+  emit()
+}
+
+/**
+ * A change the database already has, so it goes into both the working data and
+ * the snapshot and nothing is left to send. How a visit the database has just
+ * accepted joins the tree.
+ */
+export function commitSaved(change) {
+  change(state.data.clients)
+  change(state.snapshot.clients)
+  keepOnDevice()
+  emit()
+}
+
+const NO_ANSWER = Symbol('no answer')
+
+function within(patience, work) {
+  let timeout
+  return Promise.race([
+    work,
+    new Promise(resolve => {
+      timeout = setTimeout(() => resolve(NO_ANSWER), patience)
+    }),
+  ]).finally(() => clearTimeout(timeout))
+}
+
+/** A flush for someone standing there waiting: it carries on in the background
+ *  after this stops waiting for it. */
+export const flushWithin = patience => within(patience, flush())
+
+/**
+ * Asks the database to accept a visit, for as long as someone will reasonably
+ * stand there waiting. After that it counts as offline: the visit opens and is
+ * sent later, and if this attempt did land, its own id is what recognises it.
+ */
+export async function startOnServer(locationId, visit, patience = 10000) {
+  if (!state.adapter?.startVisit || isOffline()) return { outcome: 'offline' }
+  const answer = await within(patience, state.adapter.startVisit(locationId, visit))
+  return answer === NO_ANSWER ? { outcome: 'offline' } : answer
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,36 +500,190 @@ export function hydrateSync(adapter) {
   return state.data
 }
 
-export async function hydrate(adapter) {
-  state.adapter = adapter
-  setStatus('loading')
-  try {
-    const loaded = await adapter.load()
-    state.data = { ...emptyState(), ...(loaded ?? {}) }
-    state.snapshot = clone(state.data)
-    state.hydrated = true
-    setStatus('idle')
-  } catch (e) {
-    console.error('[cache] hydrate failed', e)
-    state.data = emptyState()
-    state.snapshot = emptyState()
-    state.hydrated = false
-    setStatus('error', e)
-    throw e
+let watching = false
+
+function watchConnection() {
+  if (watching || typeof window === 'undefined') return
+  watching = true
+  window.addEventListener('online', () => {
+    if (!durable()) return
+    retryDelay = 0
+    flush()
+  })
+  window.addEventListener('offline', () => {
+    if (durable()) setStatus('offline')
+  })
+}
+
+function restore(copy) {
+  state.data = { ...emptyState(), ...copy.data }
+  state.snapshot = { ...emptyState(), ...copy.snapshot }
+  state.held = copy.held ?? {}
+  state.unsavedClients = copy.unsavedClients ?? []
+  state.revision = copy.unsaved ? 1 : 0
+  state.savedRevision = 0
+  // Picked up from a tab that has gone: from here on it is this tab's.
+  if (copy.id !== state.device.ownId) {
+    keepOnDevice()
+    state.device.remove([copy.id])
   }
+}
+
+/**
+ * Loads the team's data. With a device copy to go on:
+ *
+ *   1. Restore it, so nothing depends on the network from here on.
+ *   2. Send what it still owes, before reading anything: this device's edits go
+ *      in as edits, rather than being overwritten by what it's about to read.
+ *      Refused visits are tried again, which is how they save after an upgrade.
+ *   3. Read the database, which is now the truth, and put back only what is
+ *      still on this device alone.
+ *
+ * If the network is out, or too slow to wait for, the copy is what the app runs
+ * on. What's unsent goes when the connection returns, and the next load brings in
+ * other devices' changes.
+ */
+export async function hydrate(adapter, options = {}) {
+  clearTimers()
+  state.generation += 1
+  const { generation } = state
+  const stale = () => generation !== state.generation
+  state.adapter = adapter
+  if ('device' in options) state.device = options.device ?? null
+  setStatus('loading')
+  if (!adapter.immediate) watchConnection()
+
+  let stored = null
+  if (state.device) {
+    try {
+      stored = await state.device.load()
+    } catch (e) {
+      console.error('[cache] the device copy could not be read', e)
+      state.device = null
+    }
+    if (stale()) return state.data
+  }
+
+  const own = stored?.own ?? null
+  if (own) {
+    restore(own)
+    state.hydrated = true
+  }
+  state.others = stored?.others ?? []
+
+  const heldBefore = state.held
+  let gaveUp = false
+
+  const work = async () => {
+    if (isOffline()) throw { code: '', message: 'This device is offline' }
+
+    if (own && (own.unsaved || Object.keys(heldBefore).length)) {
+      state.held = {}
+      await flush()
+      if (stale()) return
+      if (state.status === 'offline') throw state.error ?? { code: '', message: 'No connection' }
+    } else if (state.others.length) {
+      await pushOtherTabs(adapter, generation)
+      if (stale()) return
+    }
+
+    const revisionBefore = state.revision
+    const loaded = await adapter.load()
+    if (stale()) return
+    // Too late to wait for, but still worth having unless someone has started
+    // working from the copy in the meantime. Their edits are safe either way: this
+    // only decides whether they see other devices' changes now or on the next load.
+    if (gaveUp && state.revision !== revisionBefore) return
+
+    const local = state.data
+    state.data = adapter.adopt
+      ? adapter.adopt(loaded, local, state.held, state.unsavedClients)
+      : { ...emptyState(), ...(loaded ?? {}) }
+    state.snapshot = clone({ ...emptyState(), ...(loaded ?? {}) })
+    state.hydrated = true
+    state.revision = state.unsavedClients.length ? 1 : 0
+    state.savedRevision = 0
+    if (!state.unsavedClients.length) state.problems = []
+    if (gaveUp) state.outside += 1
+    keepOnDevice()
+    if (state.problems.length) setStatus('error', state.problems[0].error)
+    else setStatus('idle')
+  }
+
+  try {
+    if (!own) {
+      await work()
+    } else {
+      // The copy is good enough to work from, so a crawling connection doesn't
+      // get to hold the technician at a spinner.
+      let timeout
+      const started = work()
+      await Promise.race([
+        started,
+        new Promise(resolve => {
+          timeout = setTimeout(() => {
+            gaveUp = true
+            resolve()
+          }, options.patience ?? 8000)
+        }),
+      ])
+      clearTimeout(timeout)
+      // Still going: let it finish, and report a failure as a save would.
+      if (gaveUp) {
+        started.catch(e => isNetworkFailure(e) || console.error('[cache] load failed', e))
+        if (state.status === 'loading') setStatus('idle')
+      }
+    }
+  } catch (e) {
+    if (stale()) return state.data
+
+    if (own && isNetworkFailure(e)) {
+      if (!Object.keys(state.held).length) state.held = heldBefore
+      setStatus('offline', e)
+      keepOnDevice()
+      scheduleRetry()
+    } else {
+      console.error('[cache] hydrate failed', e)
+      state.data = emptyState()
+      state.snapshot = emptyState()
+      state.hydrated = false
+      setStatus('error', e)
+      throw e
+    }
+  }
+  if (stale()) return state.data
   emit()
   return state.data
 }
 
+/** Stops all saving for this session, for signing out. Nothing more goes to the
+ *  device or the database after this. */
+export function closeSession() {
+  clearTimers()
+  state.generation += 1
+  state.device = null
+}
+
 /** Drops everything held in memory — used on sign-out and account switches, so
- *  the next account cannot momentarily see the previous one's data. */
+ *  the next account cannot momentarily see the previous one's data. Unsent work
+ *  is already on the device, under that account and team. */
 export function resetCache() {
-  clearTimeout(timer)
+  clearTimers()
+  state.generation += 1
   state.data = emptyState()
   state.snapshot = emptyState()
   state.hydrated = false
   state.adapter = null
+  state.device = null
   state.status = 'idle'
   state.error = null
+  state.held = {}
+  state.aliases = {}
+  state.problems = []
+  state.unsavedClients = []
+  state.others = []
+  state.revision = 0
+  state.savedRevision = 0
+  inFlight = null
   emit()
 }

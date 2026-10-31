@@ -54,6 +54,34 @@ including an AV visit, which must export exactly as before (72 checks).
 node tests/template-types.mjs
 ```
 
+## Offline and multiple devices
+
+Three suites, from the rules up to the real thing. All three cover the five cases
+step B3 asks for: a reload with unsaved changes, a dropped connection mid-visit, a
+visit continued the next day, two devices on the same visit, a refused offline start.
+
+| Suite | Runs against | Checks |
+|---|---|---|
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 151 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 85 |
+| `offline-e2e.mjs` | The live project. Not in `npm test` | |
+
+`fake-server.mjs` is the stand-in. It keeps the database rules that matter to saving;
+the rules themselves are proved against real Postgres in `docs/editions/test/`.
+
+```
+node tests/save-queue.mjs
+node tests/offline.mjs
+```
+
+`offline-e2e.mjs` proves the stand-in told the truth: real Postgres, real triggers, two
+real browser sessions on one account. **It writes to the live project.** It makes a team
+of its own and deletes it at the end. It needs the dev server and a confirmed account:
+
+```
+node tests/offline-e2e.mjs <email> <password>
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

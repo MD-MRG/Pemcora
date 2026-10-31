@@ -1,15 +1,19 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
 import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
 import { useCanManage } from '../context/team.js'
 import Field from '../components/Field.jsx'
+import Notice from '../components/Notice.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
   listVisits,
-  startVisit,
+  beginVisit,
+  currentVisit,
+  retryHeldVisit,
+  discardHeldVisit,
   completeVisit,
   roomsWithStatus,
   addRoomToLocation,
@@ -28,6 +32,7 @@ import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
 import { isFail, MAIN } from '../lib/testTypes.js'
+import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 
 const fmt = iso => (iso ? new Date(iso).toLocaleDateString() : '')
@@ -53,7 +58,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
 
   return (
@@ -100,9 +105,10 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, on
         <button
           type="button"
           onClick={open ? onContinue : onStart}
-          className="bg-navy min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-[#24486e]"
+          disabled={starting}
+          className="bg-navy min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-[#24486e] disabled:opacity-60"
         >
-          {open ? 'Continue' : visit ? config.newLabel : config.startLabel}
+          {starting ? 'Starting…' : open ? 'Continue' : visit ? config.newLabel : config.startLabel}
         </button>
         {open && (
           <button
@@ -276,9 +282,20 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [askDeleteReport, setAskDeleteReport] = useState(null)
   const [askReopen, setAskReopen] = useState(false)
   const [reopenError, setReopenError] = useState('')
+  const [starting, setStarting] = useState(false)
+  const [startNote, setStartNote] = useState(null)
+  const [askDiscard, setAskDiscard] = useState(null)
+
+  // A save in the background can refuse a visit or join it to another device's,
+  // and this page has to show that without anyone touching it.
+  useSyncExternalStore(subscribe, heldCount)
+  useSyncExternalStore(subscribe, outsideChanges)
+  const offline = useSyncExternalStore(subscribe, saveStatus) === 'offline'
 
   const visits = listVisits(client.id, location.id, config.kind)
-  const current = visits.find(v => !v.completedAt) ?? visits[0] ?? null
+  const held = heldVisits()
+  const refused = visits.filter(v => held[v.id])
+  const current = currentVisit(visits, held)
   // Statuses come from the most recent visit whether it is open or finished —
   // before a new visit starts, the list should still show what the last one
   // found rather than pretending nothing has been tested.
@@ -324,13 +341,91 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         onBack={onBack}
       />
 
+      {startNote && (!startNote.whileOffline || offline) && (
+        <div className="mb-4">
+          <Notice blocked={startNote.blocked} title={startNote.title} />
+        </div>
+      )}
+
+      {refused.map(v => (
+        <div key={v.id} className="mb-4">
+          <Notice blocked title={`Not saved: ${config.title} started ${fmt(v.startedAt)}`}>
+            <p>{held[v.id].message}</p>
+            <p className="mt-1">It stays on this device, and everything else keeps saving.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await retryHeldVisit(v.id)
+                  onChanged()
+                }}
+                className="border-hair text-navy min-h-[42px] rounded-lg border bg-white px-4 text-[13.5px] font-semibold hover:bg-slate-50"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={() => setAskDiscard(v)}
+                className="text-fail min-h-[42px] rounded-lg px-3 text-[13.5px] font-semibold hover:bg-red-50"
+              >
+                Discard
+              </button>
+            </div>
+          </Notice>
+        </div>
+      ))}
+
+      {askDiscard && (
+        <ConfirmDialog
+          danger
+          title="Discard this visit?"
+          confirmLabel="Discard"
+          cancelLabel="Keep it"
+          onCancel={() => setAskDiscard(null)}
+          onConfirm={() => {
+            discardHeldVisit(client.id, location.id, askDiscard.id)
+            setAskDiscard(null)
+            onChanged()
+          }}
+        >
+          Everything entered on this device for this visit is lost. This cannot be undone. Export a
+          report first if you need a record of it.
+        </ConfirmDialog>
+      )}
+
       <VisitCard
         config={config}
         visit={current}
         roomCount={rooms.length}
         doneCount={done}
-        onStart={() => {
-          startVisit(client.id, location.id, config.kind, getSettings().technician ?? '')
+        starting={starting}
+        onStart={async () => {
+          setStarting(true)
+          setStartNote(null)
+          const started = await beginVisit(
+            client.id,
+            location.id,
+            config.kind,
+            getSettings().technician ?? '',
+          )
+          setStarting(false)
+          if (started.outcome === 'refused') {
+            // Step B4 turns a plan refusal into the upgrade sheet.
+            setStartNote({ blocked: true, title: started.message })
+          } else if (started.outcome === 'correction') {
+            setStartNote({
+              blocked: true,
+              title:
+                'A correction to an earlier visit is still open at this site. Finish that first, then start the new one.',
+            })
+          } else if (started.outcome === 'joined') {
+            setStartNote({ title: 'Another device had already started this visit, so you have joined it.' })
+          } else if (started.outcome === 'offline') {
+            setStartNote({
+              whileOffline: true,
+              title: 'Started on this device. It will be checked when the connection returns.',
+            })
+          }
           onChanged()
         }}
         onContinue={() => {
@@ -600,6 +695,30 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const [complete, setComplete] = useState(() => stored?.status === 'complete')
   const [pending, setPending] = useState(null)
 
+  // A push can change what this room holds: its visit joined one another device
+  // started, or their answers merged in. These are the screen's own copies, and
+  // the next save writes them back whole, so they have to catch up or that save
+  // would undo the merge. Comments are typed into the state and saved on blur, so
+  // anything being typed right now stays.
+  const seenChanges = useRef(outsideChanges())
+  const savedComments = useRef(stored?.comments ?? '')
+  useEffect(
+    () =>
+      subscribe(() => {
+        if (outsideChanges() === seenChanges.current || !visit) return
+        seenChanges.current = outsideChanges()
+        const fresh = getRoomEntry(client.id, location.id, visit.id, roomId)
+        if (!fresh) return
+        setResults(fresh.results ?? { main: {} })
+        if (fresh.sections) setSections(fresh.sections)
+        setTroubleshooting(fresh.troubleshooting ?? {})
+        setComplete(fresh.status === 'complete')
+        setComments(typed => (typed === savedComments.current ? (fresh.comments ?? '') : typed))
+        savedComments.current = fresh.comments ?? ''
+      }),
+    [client.id, location.id, visit, roomId],
+  )
+
   const testFor = useCallback(
     testId => [...snapshot.tests, ...snapshot.sections.flatMap(s => s.tests)].find(t => t.id === testId),
     [snapshot],
@@ -775,7 +894,11 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
             rows={3}
             value={comments}
             onChange={e => setComments(e.target.value)}
-            onBlur={() => !readOnly && persist({ comments })}
+            onBlur={() => {
+              if (readOnly) return
+              savedComments.current = comments
+              persist({ comments })
+            }}
             readOnly={readOnly}
             placeholder="Any general notes for this room"
             className="border-hair text-ink focus:border-navy w-full resize-y rounded-lg border px-3 py-2 text-[14px] outline-none"
@@ -899,7 +1022,7 @@ export default function WorkflowPage({ config }) {
     // Results can only be recorded into an OPEN visit. With none open the room
     // still opens, showing the last visit's findings read-only — tapping a room
     // to review must never silently start a visit and blank every chip.
-    const visit = visits.find(v => !v.completedAt) ?? visits[0] ?? null
+    const visit = currentVisit(visits)
     const readOnly = !visit || !!visit.completedAt
     const rooms = roomsWithStatus(client.id, location.id, visit)
     if (!rooms.some(r => r.id === roomId)) {

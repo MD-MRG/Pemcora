@@ -1,5 +1,6 @@
-// Runs the thirteen localStorage suites and the two Node-only ones (the pack
-// registry and the template types), and summarises them.
+// Runs the thirteen localStorage suites, the three Node-only ones (the pack
+// registry, the template types and the save queue) and the offline suite, and
+// summarises them.
 //
 //   npm test            (dev server must already be on 5173)
 //
@@ -34,6 +35,8 @@ const SUITES = [
   'template-editor',
   'packs',
   'template-types',
+  'save-queue',
+  'offline',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

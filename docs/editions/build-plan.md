@@ -944,15 +944,44 @@ step:
   wouldn't save either.
 - **Starting a visit offline** is allowed, and it's checked when the device reconnects.
 - **Same visit started on another device** (duplicate error 23505): take the server's open
-  visit id, merge anything entered locally room by room (newest edit wins), and carry on.
-  But if that open visit is a reopened one (it has a `first_completed_at`), don't join it:
-  it keeps its first completion date, so this inspection would be recorded under last
-  year's. Say a correction to an earlier visit is still open, and finish that first.
+  visit id, merge anything entered locally test by test (newest edit wins on the same test),
+  and carry on. But if that open visit is a reopened one (it has a `first_completed_at`),
+  don't join it: it keeps its first completion date, so this inspection would be recorded
+  under last year's. Say a correction to an earlier visit is still open, and finish that
+  first.
 - **Refused start** (402): move the visit out of the save queue into a "Not saved" area on
   the device, keep everything else saving, and retry it after an upgrade.
 - Done when tests cover: a reload with unsaved changes, a dropped connection mid-visit, a
   visit continued the next day, two devices on the same visit, and a refused offline
   start.
+- Decided with M.D. before building it:
+  - **Merging is test by test, not room by room,** because entered data has to remain: ten
+    answers on one device and nine on another make nineteen. The newest edit wins only on
+    the same test, and two different comments or notes are both kept. The same merge runs
+    whenever a save finds a room someone else has changed, online or not.
+  - **Dates the database refuses** (more than 7 days back, or a device clock running fast)
+    go to "Not saved" with the reason. The date is never changed automatically, and Excel
+    export still works. The one-time import can't pick these up, so such a visit stays on
+    the device until it's discarded.
+  - **Signing out** with nothing unsaved wipes the device copy. With unsaved work it asks
+    whether to keep it (it's sent at the next sign-in on that device) or discard it, and says
+    that anyone using that browser could read it.
+  - **Opening with no signal** is added as step B3b.
+- What the code review of today's saving found, all fixed here: an edit made during a save was
+  never sent while the status said saved; a connection dropped partway through a new client
+  jammed saving for good; joining an open visit was half built; one refused write stopped all
+  the others (a plain member on a team with unseeded lists couldn't save field work at all);
+  and nothing on screen showed whether a save had worked.
+- A visit finished offline goes in finished, so the open-visit index has nothing to say about
+  it: it's an inspection of its own, even with another visit open at the site.
+
+#### B3b. Opening with no signal
+
+- A service worker keeps the app's own files, never data or logins, so the app opens with no
+  connection. The main page always comes from the network when there is one, so a deploy
+  still reaches people.
+- With no connection the app uses the last known team and data, and a login that can't be
+  renewed offline doesn't drop to the sign-in screen.
 
 #### B4. Entitlements in the app
 
@@ -1000,7 +1029,8 @@ step:
 - Coverage warnings, such as "Bedroom 3 has no smoke alarm".
 - An outcome declaration at sign-off (compliant or non-compliant).
 - Load and save `visit_rooms.readings` and `visits.site_results` through the cache and
-  the Supabase adapter (B2 left them out on purpose).
+  the Supabase adapter (B2 left them out on purpose). Whole-site results need the same
+  merging as rooms (`mergeRoom`, B3), and `getVisitRoom` needs to read `readings`.
 - A room type on each room in the client and room editors, saved to `rooms.room_type`,
   so `section.roomTypes` and the coverage warnings have something to read (B2).
 - A No, or a reading outside its limits, opens the note box as FAIL does. Where the
@@ -1232,6 +1262,10 @@ Northern Territory, and for Queensland's electrical check:
   can swap it, but it loses that work and the month's inspection isn't given back.
 - A file uploaded to `reports/` that no delivery names stays there: nothing can delete
   report files. A cleanup of unnamed ones would be a later step.
+- A device that was offline shows other devices' changes only after its next load, once it
+  has sent its own. An open session doesn't refresh itself, online or off.
+- A refused visit whose site has since been deleted can only be discarded. Its data stays on
+  the device until then, but there's no site page left to open it from.
 
 ## 7. Sources for the pack lists
 

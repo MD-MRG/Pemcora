@@ -1,7 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { listClients } from '../lib/clientStore.js'
+import { discardHeldVisit, listClients } from '../lib/clientStore.js'
 import { stats, openWork, attention } from '../lib/home.js'
+import { heldCount, heldVisits, subscribe } from '../lib/cache.js'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 
 // Home answers three questions in the order a technician asks them:
 //   1. what was I doing?          → open visits, with a way straight back in
@@ -86,6 +88,10 @@ function WorkRow({ row, onResume }) {
 
 /* ── Section 2 · needs attention ──────────────────────────────────────────── */
 const ATTENTION = {
+  'not-saved': {
+    tag: 'Not saved',
+    line: row => `${row.kindLabel}: ${row.message} It is only on this device.`,
+  },
   unexported: {
     tag: 'Report not sent',
     line: row => `${row.kindLabel} finished ${fmt(row.at)} — no report exported`,
@@ -147,9 +153,13 @@ export default function Home() {
   const navigate = useNavigate()
   const clients = useMemo(() => listClients(), [])
 
+  // A save in the background can refuse a visit while this page is open.
+  useSyncExternalStore(subscribe, heldCount)
+  const [askDiscard, setAskDiscard] = useState(null)
+
   const figures = useMemo(() => stats(clients), [clients])
   const work = useMemo(() => openWork(clients), [clients])
-  const flags = useMemo(() => attention(clients), [clients])
+  const flags = attention(clients, heldVisits())
 
   // The deep-link. WorkflowPage and EditClient read this off the router state
   // and open on that location instead of the client list.
@@ -158,11 +168,14 @@ export default function Home() {
       state: { clientId: row.clientId, locationId: row.locationId, roomId: row.roomId },
     })
 
-  const onGo = row => go(row.type === 'no-rooms' ? '/edit-client' : row.path, row)
+  const onGo = row => {
+    if (row.orphan) setAskDiscard(row)
+    else go(row.type === 'no-rooms' ? '/edit-client' : row.path, row)
+  }
 
   // Nothing to summarise and nothing to resume — say what to do instead of
   // showing four zeros and three empty panels.
-  if (clients.length === 0) {
+  if (clients.length === 0 && flags.length === 0) {
     return (
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <div className="border-hair rounded-xl border bg-card p-6">
@@ -218,6 +231,23 @@ export default function Home() {
           </ul>
         )}
       </Panel>
+
+      {askDiscard && (
+        <ConfirmDialog
+          danger
+          title="Discard this visit?"
+          confirmLabel="Discard"
+          cancelLabel="Keep it"
+          onCancel={() => setAskDiscard(null)}
+          onConfirm={() => {
+            discardHeldVisit(askDiscard.clientId, askDiscard.locationId, askDiscard.visitId)
+            setAskDiscard(null)
+          }}
+        >
+          Its site has been deleted, so it cannot be saved, and it is only on this device. Everything
+          entered for this visit is lost. This cannot be undone.
+        </ConfirmDialog>
+      )}
     </div>
   )
 }

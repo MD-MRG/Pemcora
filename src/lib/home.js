@@ -134,11 +134,34 @@ function unnotedSiteFails(site) {
  *   'no-rooms'    a location with no floor plan — every workflow dead-ends
  *                 there until rooms exist
  *
+ *   'not-saved'   a visit the database refused, sitting on this device with no
+ *                 other copy anywhere. Comes first, because nobody else can see it
+ *
  * Open visits are excluded from 'unexported' on purpose: an unfinished visit
  * has no report yet by definition, and it is already in section 1.
  */
-export function attention(clients) {
+export function attention(clients, held = {}) {
   const rows = []
+
+  for (const [visitId, record] of Object.entries(held)) {
+    rows.push({
+      type: 'not-saved',
+      key: `n-${visitId}`,
+      visitId,
+      clientId: record.clientId,
+      clientName: record.clientName,
+      locationId: record.locationId,
+      where: record.where,
+      kind: record.kind,
+      kindLabel: KIND_LABEL[record.kind] ?? KIND_LABEL.maintenance,
+      path: KIND_PATH[record.kind] ?? KIND_PATH.maintenance,
+      at: record.at,
+      message: record.message,
+      // Its site has been deleted, so there is no visit page left to open.
+      orphan: !!record.orphan,
+      action: record.orphan ? 'Discard' : 'Open visit',
+    })
+  }
 
   for (const { client, location, visit } of allVisits(clients)) {
     const base = {
@@ -211,7 +234,7 @@ export function attention(clients) {
     }
   }
 
-  const rank = { unexported: 0, fails: 1, 'no-rooms': 2 }
+  const rank = { 'not-saved': -1, unexported: 0, fails: 1, 'no-rooms': 2 }
   return rows.sort(
     (a, b) => rank[a.type] - rank[b.type] || String(b.at ?? '').localeCompare(String(a.at ?? '')),
   )

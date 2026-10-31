@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
+import { closeSession, flush, hasUnsavedWork } from '../lib/cache.js'
+import { clearCopies, unsavedCopies } from '../lib/offlineStore.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Signing out had no route into it. `signOut` existed on the auth context from
@@ -14,15 +16,19 @@ const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 
 // The presentational half, kept separate so the card can be rendered and looked
 // at without a real session standing behind it.
-export function AccountCard({ email, teamName, role, onSignOut }) {
-  const [asking, setAsking] = useState(false)
+//
+// `onCheck` answers whether this device still holds work the team doesn't have.
+// `onSignOut` takes whether to keep that work on this device.
+export function AccountCard({ email, teamName, role, onCheck, onSignOut }) {
+  const [asking, setAsking] = useState(null) // null | 'saved' | 'unsaved'
+  const [checking, setChecking] = useState(false)
 
   return (
     <section className="border-hair rounded-xl border bg-white p-6">
       <h2 className="text-[19px] font-bold tracking-[-.01em]">Account</h2>
       <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
-        Who this device is signed in as. Your work is saved to the team as you go, so signing out
-        never costs you anything you have entered.
+        Who this device is signed in as. Your work is saved to the team as you go, and kept on this
+        device until it has been.
       </p>
 
       <dl className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -41,24 +47,47 @@ export function AccountCard({ email, teamName, role, onSignOut }) {
 
       <button
         type="button"
-        onClick={() => setAsking(true)}
-        className="border-hair text-ink mt-5 min-h-[46px] rounded-lg border px-5 text-[13.5px] font-semibold hover:bg-slate-50"
+        disabled={checking}
+        onClick={async () => {
+          setChecking(true)
+          const unsaved = await onCheck()
+          setChecking(false)
+          setAsking(unsaved ? 'unsaved' : 'saved')
+        }}
+        className="border-hair text-ink mt-5 min-h-[46px] rounded-lg border px-5 text-[13.5px] font-semibold hover:bg-slate-50 disabled:opacity-60"
       >
-        Sign out
+        {checking ? 'Checking…' : 'Sign out'}
       </button>
 
       {/* ConfirmDialog, never window.confirm — a native dialog is auto-dismissed
           in an embedded webview and the button would silently do nothing. */}
-      {asking && (
+      {asking === 'saved' && (
         <ConfirmDialog
           title="Sign out of Pemcora?"
           confirmLabel="Sign out"
           cancelLabel="Stay signed in"
-          onCancel={() => setAsking(false)}
-          onConfirm={onSignOut}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => onSignOut({ keep: false })}
         >
-          Everything you have entered is already saved to your team. You will need your password to
-          sign back in, so do not do this mid-visit on a site with no signal.
+          Everything you have entered is already saved to your team, and the copy on this device is
+          wiped. You will need your password to sign back in, so do not do this mid-visit on a site
+          with no signal.
+        </ConfirmDialog>
+      )}
+
+      {asking === 'unsaved' && (
+        <ConfirmDialog
+          title="Some of your work isn't saved yet"
+          confirmLabel="Keep it and sign out"
+          cancelLabel="Stay signed in"
+          alternativeLabel="Discard it and sign out"
+          onCancel={() => setAsking(null)}
+          onConfirm={() => onSignOut({ keep: true })}
+          onAlternative={() => onSignOut({ keep: false })}
+        >
+          It only exists on this device. If you keep it, it stays here and is sent the next time you
+          sign in on this device, but anyone using this browser could read it. If you discard it, it
+          is gone for good.
         </ConfirmDialog>
       )}
     </section>
@@ -79,7 +108,16 @@ export default function AccountPanel() {
       email={user?.email ?? ''}
       teamName={team?.name ?? '—'}
       role={role}
-      onSignOut={signOut}
+      onCheck={async () => {
+        // One last try, so a working connection never has to raise the question.
+        await flush()
+        return hasUnsavedWork() || (await unsavedCopies(user.id)).length > 0
+      }}
+      onSignOut={async ({ keep }) => {
+        closeSession()
+        await clearCopies(user.id, { keepUnsaved: keep })
+        await signOut()
+      }}
     />
   )
 }

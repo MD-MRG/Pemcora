@@ -40,6 +40,13 @@ Change the workflow there, never by copying it.
 Each room stores its own snapshot of the test list when first opened, so editing a list
 in Settings can never rewrite work that has already been signed off.
 
+Signed in, every change goes to a copy on the device first (IndexedDB,
+`src/lib/offlineStore.js`), then to Supabase, so a dropped connection, a closed app or a
+reload loses nothing. `src/lib/cache.js` is the save queue: it retries when the connection
+returns and on a timer, and a visit the database refuses is set aside as "Not saved" without
+holding up anything else. Two devices on one visit are merged test by test
+(`src/lib/visitMerge.js`).
+
 ## Tests
 
 Headless suites in `tests/` drive the real UI and assert against `localStorage` and the
