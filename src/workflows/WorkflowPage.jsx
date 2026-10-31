@@ -305,6 +305,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           : nextRevision(current)
     const filename = await downloadReport({
       client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
+      sheetName: config.sheetName,
       settings: getSettings(),
     })
     recordExport(client.id, location.id, current.id, { mode, filename })

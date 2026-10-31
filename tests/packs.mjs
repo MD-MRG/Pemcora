@@ -94,6 +94,13 @@ log('no workflow is defined twice', new Set(WORKFLOWS.map(w => w.id)).size === W
 const PAGE_FIELDS = ['title', 'progressNoun', 'startLabel', 'newLabel', 'emptyLine', 'reportTitle']
 log('every workflow has its page wording',
   WORKFLOWS.every(w => PAGE_FIELDS.every(f => typeof w.page[f] === 'string' && w.page[f].trim())))
+// Excel refuses a worksheet name over 31 characters or holding any of these.
+const validSheet = name => name.length <= 31 && !/[\\/?*[\]:]/.test(name)
+log('the new workflows name a worksheet Excel accepts; AV and custom name none',
+  WORKFLOWS.every(w =>
+    ['maintenance', 'commissioning', 'custom'].includes(w.id)
+      ? w.page.sheetName === undefined
+      : typeof w.page.sheetName === 'string' && validSheet(w.page.sheetName)))
 log('a page config is its workflow for both kind and template',
   WORKFLOWS.every(w => pageConfig(w.id).kind === w.id && pageConfig(w.id).templateKind === w.id))
 log('the AV and custom pages keep their wording',
@@ -172,6 +179,12 @@ log('each smoke alarm check repeats for each alarm, with 7, 12 and 6 tests',
   ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check']
     .every(id => alarms(id)?.assetType === 'smoke_alarm') &&
   same(['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].map(id => alarms(id).tests.length), [7, 12, 6]))
+log('a failed alarm has to be replaced; a failed RCD is for the electrician to say',
+  ['vic_smoke_alarm', 'qld_smoke_alarm', 'smoke_alarm_check'].every(id => alarms(id).onFail === 'replace') &&
+  general.sections.every(s => s.onFail === undefined))
+log('fail-note suggestions are on the electrical checks only',
+  WORKFLOWS.filter(w => w.seed.failNotes).map(w => w.id).sort().join() ===
+    'electrical_safety,qld_electrical_safety,vic_electrical_safety')
 log('Queensland checks every bedroom has an alarm',
   same(workflow('qld_smoke_alarm').seed.coverage, [{ roomTypes: ['bedroom'], assetType: 'smoke_alarm', min: 1 }]))
 

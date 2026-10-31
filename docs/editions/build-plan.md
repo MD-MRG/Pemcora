@@ -905,6 +905,28 @@ step:
   (`ELECTRICAL_FAIL_NOTES`), so each team's copy can be reworded. Choosing one fills the
   note, which the electrician then edits (C1).
 
+> **M.D.'s note (fail notes on smoke alarms):** a failed smoke alarm's note is for the
+> reason why it failed. If a smoke alarm fails, it has to be replaced.
+
+- The smoke alarm checks have no suggested wording. Their "Each smoke alarm" section has
+  `onFail: 'replace'`: the report prints the reason and "Has to be replaced" against each
+  failed alarm. Whole-property tests, such as an alarm on each level, take an ordinary note.
+- A licensed electrician's check of the lists should confirm this suits every per-alarm
+  test, including placement ones such as "At least 300 mm from a light fitting", where the
+  fix could be moving the alarm.
+
+**B2 review (commit b5c30f4), fixed in B2b.** What the review changed:
+
+- A check done entirely in the whole-site step lists no unopened rooms, rather than calling
+  each one "Not tested". A check with room work still lists them all.
+- The snapshot and the export cover the items at the site when the visit finished, plus any
+  item answered during it, so a report exported later doesn't change. An open visit speaks
+  for now. The snapshot therefore takes all the site's assets, removed ones included.
+- Whole-site fails count in Home (`siteFails`). A note still holding `[timeframe]` counts as
+  unwritten, and the snapshot marks it `unfinished`.
+- The new workflows name their own Excel worksheet (`sheetName`). AV and custom reports stay
+  on "PM Report".
+
 #### B3. Offline and multiple devices (M.D.'s note in 2.2)
 
 - Save the cache's unsaved changes (the data and the last-synced snapshot) to IndexedDB on
@@ -979,7 +1001,13 @@ step:
 - A No, or a reading outside its limits, opens the note box as FAIL does. Where the
   template has `failNotes`, the box offers them: choosing one fills the note, which stays
   editable. The Settings list editor lets an admin reword the suggestions (M.D.'s note in
-  B2).
+  B2). Choosing the one with `[timeframe]` asks for the timeframe; finishing the visit
+  refuses a note that still holds it (`noteIsFinished`).
+- On a section with `onFail: 'replace'`, the note box asks why the alarm failed, says it has
+  to be replaced, and offers C2's replace flow (M.D.'s note in B2).
+- Whole-site fails show on the visit's room list (`siteFails`). Home's `KIND_LABEL` and
+  `KIND_PATH` list only the three workflows today, so another workflow's visit would show as
+  Preventative Maintenance; take them from the pack registry.
 - Sign-off with the technician's name, their licence number filled in, and a signature
   pad; saved to `visits.signoff`.
 - After completing a reopened visit, show the completion date the database kept (its first
@@ -990,6 +1018,9 @@ step:
 - List, add and edit items, using the pack's fields for `attributes`.
 - Replacing an item marks the old one removed and adds the new one.
 - Expiry dates, and a photo of the label on Pro.
+- Give the report snapshot and the Excel export all the site's assets, removed ones
+  included, with `createdAt` and `removedAt`, so they can work out what stood there at the
+  visit.
 
 #### C3. Settings and client pages
 
@@ -1029,6 +1060,8 @@ step:
   token.
 - Upload the PDF to `reports/<team_id>/<uuid>.pdf`, call `send_report()`, and email the
   link `#/r/<token>` through Resend.
+- Refuse to send a report whose snapshot has a fail marked `unfinished`: a sent report can't
+  be edited, so `[timeframe]` must not reach one.
 - "Send again" calls `resend_report()`. "Withdraw" is available until the report is saved.
 - Before the function emails anything, cap how many reports a team can send a day:
   `send_report()` has no limit yet, so any Free account could send unlimited email from

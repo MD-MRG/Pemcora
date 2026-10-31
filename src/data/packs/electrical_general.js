@@ -23,6 +23,7 @@ export default {
         newLabel: 'Start new electrical safety check',
         emptyLine: 'No electrical safety check recorded for this location',
         reportTitle: 'Electrical Safety Check',
+        sheetName: 'Electrical Safety Check',
       },
       seed: ELECTRICAL_SAFETY,
     },
@@ -37,6 +38,7 @@ export default {
         newLabel: 'Start new smoke alarm check',
         emptyLine: 'No smoke alarm check recorded for this location',
         reportTitle: 'Smoke Alarm Check',
+        sheetName: 'Smoke Alarm Check',
       },
       seed: {
         main: [],
@@ -45,6 +47,7 @@ export default {
             label: 'Each smoke alarm',
             scope: 'item',
             assetType: 'smoke_alarm',
+            onFail: 'replace',
             tests: [
               'Marked AS 3786',
               'Correctly installed',

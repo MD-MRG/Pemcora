@@ -1,4 +1,13 @@
-import { MAIN, answerText, isFail, noteKey, scopeOf, typeOf } from './testTypes.js'
+import {
+  MAIN,
+  answerText,
+  isFail,
+  noteIsFinished,
+  noteKey,
+  scopeOf,
+  siteSections,
+  typeOf,
+} from './testTypes.js'
 
 // What a report says, as plain data: the snapshot send_report() keeps with a
 // delivery (build plan 2.10), and what the Excel export lays out. Building
@@ -12,13 +21,32 @@ import { MAIN, answerText, isFail, noteKey, scopeOf, typeOf } from './testTypes.
 //
 //   rooms    the location's rooms in floor-plan order: { id, name, floorLabel,
 //            planNumber }
-//   assets   the site's equipment as it stands today: { id, assetType, roomId,
-//            label, make, model, serial, installedOn, expiresOn, removedAt,
-//            attributes }
+//   assets   all the site's equipment, removed items included: { id, assetType,
+//            roomId, label, make, model, serial, installedOn, expiresOn,
+//            createdAt, removedAt, attributes }. The snapshot works out what
+//            stood there at the visit, so a report exported later doesn't change.
 
 export const SNAPSHOT_VERSION = 1
 
 const roomScoped = section => scopeOf(section) === 'room'
+
+// A check done entirely in the whole-site step: nothing to do in any room.
+const isSiteOnly = template =>
+  !!template?.sections?.length && !template.tests?.length && !template.sections.some(roomScoped)
+
+const time = iso => {
+  const t = Date.parse(iso ?? '')
+  return Number.isNaN(t) ? null : t
+}
+
+// Was this item at the site when the visit finished? A visit still open speaks
+// for now. An item with no date on record is taken to have been there.
+function stoodThen(asset, visit) {
+  const end = time(visit?.completedAt) ?? Infinity
+  const added = time(asset.createdAt) ?? time(asset.installedOn)
+  const removed = time(asset.removedAt)
+  return (added === null || added <= end) && (removed === null || removed > end)
+}
 
 // One test's answer. `group` is where it is kept: results[group][testId], or
 // results[group][itemId][testId] for an item.
@@ -40,14 +68,24 @@ function answer(test, place, group, itemId) {
   return out
 }
 
-const failRows = (tests, place, group, itemId, itemLabel) =>
-  tests
-    .filter(t => isFail(t, (itemId ? place.results?.[group]?.[itemId] : place.results?.[group])?.[t.id]))
-    .map(t => ({
-      label: t.label,
-      ...(itemId ? { item: itemLabel } : {}),
-      note: place.troubleshooting?.[noteKey(t.id, itemId)] || '',
-    }))
+// A fail row marks what a report has to say about it: `mustReplace` when the
+// section condemns a failed item, `unfinished` when its note still holds a
+// timeframe to fill in.
+const failRows = (section, place, itemId, itemLabel) =>
+  section.tests
+    .filter(t =>
+      isFail(t, (itemId ? place.results?.[section.id]?.[itemId] : place.results?.[section.id])?.[t.id]),
+    )
+    .map(t => {
+      const note = place.troubleshooting?.[noteKey(t.id, itemId)] || ''
+      return {
+        label: t.label,
+        ...(itemId ? { item: itemLabel } : {}),
+        note,
+        ...(section.onFail === 'replace' ? { mustReplace: true } : {}),
+        ...(note && !noteIsFinished(note) ? { unfinished: true } : {}),
+      }
+    })
 
 function roomSnapshot(room, entry) {
   const base = {
@@ -64,7 +102,9 @@ function roomSnapshot(room, entry) {
   // per-item sections belong to the visit, not to a room.
   const visible = template.sections.filter(s => roomScoped(s) && entry.sections?.[s.id])
   const groups = [
-    { id: MAIN, label: template.mainLabel || 'Main test list', tests: template.tests },
+    ...(isSiteOnly(template)
+      ? []
+      : [{ id: MAIN, label: template.mainLabel || 'Main test list', tests: template.tests }]),
     ...visible,
   ]
   return {
@@ -75,20 +115,25 @@ function roomSnapshot(room, entry) {
       scope: 'room',
       tests: g.tests.map(t => answer(t, entry, g.id)),
     })),
-    failed: groups.flatMap(g => failRows(g.tests, entry, g.id)),
+    failed: groups.flatMap(g => failRows(g, entry)),
     comments: entry.comments ?? '',
   }
 }
 
-// The items a per-item section covers: the site's items of that type, and any
-// item answered during the visit that has since been removed.
-function itemsFor(section, place, assets, roomNames) {
-  const answered = Object.keys(place.results?.[section.id] ?? {})
+// The items a per-item section covers: the items of that type at the site when
+// the visit finished, and any item answered during it. An item may hold only a
+// reading, so answers are looked for in both places.
+function itemsFor(section, visit, assets, roomNames) {
+  const place = visit.siteResults
+  const answered = new Set([
+    ...Object.keys(place.results?.[section.id] ?? {}),
+    ...Object.keys(place.readings?.[section.id] ?? {}),
+  ])
   const ofType = assets.filter(
-    a => a.assetType === section.assetType && (!a.removedAt || answered.includes(a.id)),
+    a => a.assetType === section.assetType && (answered.has(a.id) || stoodThen(a, visit)),
   )
   const known = new Set(ofType.map(a => a.id))
-  const items = [...ofType, ...answered.filter(id => !known.has(id)).map(id => ({ id }))]
+  const items = [...ofType, ...[...answered].filter(id => !known.has(id)).map(id => ({ id }))]
   return items.map((a, i) => ({
     id: a.id,
     label: a.label || `Item ${i + 1}`,
@@ -96,23 +141,19 @@ function itemsFor(section, place, assets, roomNames) {
   }))
 }
 
-function siteSnapshot(site, assets, roomNames) {
-  const template = site?.template
-  // Whole-site sections are part of the check, so they are on unless the
-  // technician switched one off.
-  const sections = (template?.sections ?? []).filter(
-    s => !roomScoped(s) && site.sections?.[s.id] !== false,
-  )
+function siteSnapshot(visit, assets, roomNames) {
+  const site = visit?.siteResults
+  const sections = siteSections(site)
   if (!sections.length) return null
 
   const failed = []
   const out = sections.map(s => {
     if (scopeOf(s) !== 'item') {
-      failed.push(...failRows(s.tests, site, s.id))
+      failed.push(...failRows(s, site))
       return { label: s.label, scope: 'site', tests: s.tests.map(t => answer(t, site, s.id)) }
     }
-    const items = itemsFor(s, site, assets, roomNames).map(item => {
-      failed.push(...failRows(s.tests, site, s.id, item.id, item.label))
+    const items = itemsFor(s, visit, assets, roomNames).map(item => {
+      failed.push(...failRows(s, site, item.id, item.label))
       return { ...item, tests: s.tests.map(t => answer(t, site, s.id, item.id)) }
     })
     return { label: s.label, scope: 'item', assetType: s.assetType, items }
@@ -129,6 +170,9 @@ export function buildReportSnapshot({
   reportTitle = '',
 }) {
   const roomNames = new Map(rooms.map(r => [r.id, r.name ?? '']))
+  // No room is opened in a whole-site check, and saying "not tested" about each
+  // one would misreport a finished check.
+  const siteOnly = isSiteOnly(visit?.siteResults?.template)
   return {
     version: SNAPSHOT_VERSION,
     reportTitle,
@@ -137,10 +181,12 @@ export function buildReportSnapshot({
     technician: visit?.technician ?? '',
     startedAt: visit?.startedAt ?? null,
     completedAt: visit?.completedAt ?? null,
-    site: siteSnapshot(visit?.siteResults, assets, roomNames),
-    rooms: rooms.map(room => roomSnapshot(room, visit?.rooms?.[room.id])),
+    site: siteSnapshot(visit, assets, roomNames),
+    rooms: rooms
+      .filter(room => !siteOnly || visit?.rooms?.[room.id])
+      .map(room => roomSnapshot(room, visit?.rooms?.[room.id])),
     equipment: assets
-      .filter(a => !a.removedAt)
+      .filter(a => stoodThen(a, visit))
       .map(a => ({
         assetType: a.assetType,
         label: a.label ?? '',

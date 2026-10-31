@@ -29,20 +29,39 @@ export function buildFilename(client, visit, revision, reportTitle = 'Preventati
 // The merged comment cell spans both columns, so its usable width is roughly
 // their two widths added together. Excel row height is in points and a default
 // row is 15, so one wrapped line costs about that much.
+const LABEL_WIDTH = 46
+const ANSWER_WIDTH = 42
 const COMMENT_WIDTH = 88
 const LINE_POINTS = 15
 // Somewhere to stop: a 200-line comment must not produce a page-tall row that
 // pushes the next room off the screen.
 const MAX_COMMENT_LINES = 24
+// The longest AV label is 47 characters and has always fitted its column, since
+// text runs narrower than the digits Excel measures a width in.
+const LABEL_FITS = 48
+
+// Count the lines the technician typed AND the ones wrapping will add.
+const wrappedLines = (text, width) =>
+  String(text ?? '')
+    .split('\n')
+    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / width)), 0)
+
+const heightFor = lines => Math.min(lines, MAX_COMMENT_LINES) * LINE_POINTS + 4
 
 export function commentHeight(text) {
   const s = String(text ?? '')
   if (!s.trim()) return undefined
-  // Count the lines the technician typed AND the ones wrapping will add.
-  const lines = s
-    .split('\n')
-    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / COMMENT_WIDTH)), 0)
-  return Math.min(lines, MAX_COMMENT_LINES) * LINE_POINTS + 4
+  return heightFor(wrappedLines(s, COMMENT_WIDTH))
+}
+
+// A two-column row whose text would be cut off: the answer beside a label stops
+// the label running on, and a line break in a cell needs wrapping to show.
+function fitRow(row, label, answer) {
+  const a = String(answer ?? '')
+  if (label.length <= LABEL_FITS && a.length <= ANSWER_WIDTH && !a.includes('\n')) return
+  row.getCell(1).alignment = { wrapText: true, vertical: 'top' }
+  row.getCell(2).alignment = { wrapText: true, vertical: 'top' }
+  row.height = heightFor(Math.max(wrappedLines(label, LABEL_WIDTH), wrappedLines(a, ANSWER_WIDTH)))
 }
 
 const GREY = 'FFE5E7EB'
@@ -53,7 +72,7 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  * Pure — builds and returns the workbook. No DOM, so it can be exercised in
  * Node as well as the browser.
  */
-export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [] }) {
+export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [], sheetName = 'PM Report' }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
 
@@ -61,8 +80,8 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   wb.creator = 'Pemcora'
   wb.created = new Date()
 
-  const ws = wb.addWorksheet('PM Report')
-  ws.columns = [{ width: 46 }, { width: 42 }]
+  const ws = wb.addWorksheet(sheetName)
+  ws.columns = [{ width: LABEL_WIDTH }, { width: ANSWER_WIDTH }]
 
   const blank = () => ws.addRow([])
   const merge = row => ws.mergeCells(`A${row.number}:B${row.number}`)
@@ -100,6 +119,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     if (tone === 'pass') c.font = { bold: true, color: { argb: 'FF1E7A45' } }
     else if (tone === 'fail') c.font = { bold: true, color: { argb: 'FFC22E1C' } }
     else if (tone === 'na') c.font = { color: { argb: 'FF7C8894' } }
+    fitRow(r, test.label, test.answer)
     return r
   }
 
@@ -160,8 +180,13 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
       ws.addRow(['No issues identified.'])
     } else {
       failed.forEach(f => {
-        const r = ws.addRow([f.item ? `${f.item} — ${f.label}` : f.label, f.note])
+        const label = f.item ? `${f.item} — ${f.label}` : f.label
+        const note = f.mustReplace
+          ? [f.note, 'Has to be replaced'].filter(Boolean).join(' — ')
+          : f.note
+        const r = ws.addRow([label, note])
         r.getCell(2).alignment = { wrapText: true, vertical: 'top' }
+        if (label.length > LABEL_FITS) fitRow(r, label, note)
       })
     }
     blank()
@@ -244,8 +269,8 @@ export function triggerDownload(buffer, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export async function downloadReport({ client, location, visit, rooms, revision, reportTitle, settings, assets }) {
-  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle, settings, assets })
+export async function downloadReport({ client, location, visit, rooms, revision, reportTitle, settings, assets, sheetName }) {
+  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle, settings, assets, sheetName })
   const buffer = await wb.xlsx.writeBuffer()
   const filename = buildFilename(client, visit, revision, reportTitle)
   triggerDownload(buffer, filename)

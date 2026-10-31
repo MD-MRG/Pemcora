@@ -5,7 +5,7 @@
 // picking them out of JSX, and so the page stays presentational.
 
 import { normalise } from './clientStore.js'
-import { roomFails } from './testTypes.js'
+import { noteIsFinished, noteKey, roomFails, siteFails } from './testTypes.js'
 
 // Visits stored before Commissioning existed carry no kind; they were all PM.
 // Same fallback as clientStore.js — if that one changes, this must too.
@@ -96,7 +96,8 @@ export function openWork(clients) {
         days: daysSince(visit.startedAt),
         total: rooms.length,
         done: entries.filter(e => e.status === 'complete').length,
-        fails: entries.reduce((n, e) => n + (e.fails ?? 0), 0),
+        fails:
+          entries.reduce((n, e) => n + (e.fails ?? 0), 0) + siteFails(visit.siteResults).length,
       }
     })
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
@@ -108,11 +109,19 @@ export function openWork(clients) {
  * FAILs that nobody has written a note against. Built on the same `roomFails`
  * as `countFails` in clientStore.js: a switched-off section keeps its results but
  * they must not raise a flag here, or the technician is chased about a section
- * they consciously excluded from the report.
+ * they consciously excluded from the report. A suggested note still waiting for
+ * its timeframe counts as unwritten.
  */
 function unnotedFails(entry) {
   const notes = entry?.troubleshooting ?? {}
-  return roomFails(entry).filter(f => String(notes[f.testId] ?? '').trim() === '').length
+  return roomFails(entry).filter(f => !noteIsFinished(notes[f.testId])).length
+}
+
+// The same for a visit's whole-site step, where a test repeated per item has
+// one note per item.
+function unnotedSiteFails(site) {
+  const notes = site?.troubleshooting ?? {}
+  return siteFails(site).filter(f => !noteIsFinished(notes[noteKey(f.testId, f.itemId)])).length
 }
 
 /**
@@ -155,6 +164,20 @@ export function attention(clients) {
     // Only an OPEN visit. A finished visit's rooms are read-only, so flagging a
     // missing note there sends the technician to a screen that cannot take one —
     // the note has to be written before the visit is finished or not at all.
+    const siteUnnoted = visit.completedAt ? 0 : unnotedSiteFails(visit.siteResults)
+    if (siteUnnoted > 0) {
+      rows.push({
+        ...base,
+        type: 'fails',
+        key: `f-${visit.id}-site`,
+        roomId: null,
+        roomName: 'Whole site',
+        count: siteUnnoted,
+        at: visit.siteResults.touchedAt ?? visit.startedAt,
+        action: 'Open visit',
+      })
+    }
+
     for (const room of visit.completedAt ? [] : roomsOf(location)) {
       const n = unnotedFails(visit.rooms?.[room.id])
       if (n > 0) {

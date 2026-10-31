@@ -18,7 +18,7 @@
 
 import { readClients, writeClients, hydrateSync, hasAdapter } from './cache.js'
 import { localAdapter } from './adapters/local.js'
-import { roomFails } from './testTypes.js'
+import { hasReading, roomFails } from './testTypes.js'
 
 export const uid = () => crypto.randomUUID()
 
@@ -401,6 +401,8 @@ const countFails = entry => roomFails(entry).length
 
 const hasAnyResult = entry =>
   Object.values(entry?.results ?? {}).some(group => Object.values(group ?? {}).some(Boolean)) ||
+  // A reading with no limits to judge it against is kept only under readings.
+  Object.values(entry?.readings ?? {}).some(group => Object.values(group ?? {}).some(hasReading)) ||
   String(entry?.comments ?? '').trim() !== ''
 
 export function saveRoomEntry(clientId, locationId, visitId, roomId, patch) {

@@ -25,6 +25,7 @@ export default {
         newLabel: 'Start new smoke alarm inspection',
         emptyLine: 'No smoke alarm inspection recorded for this location',
         reportTitle: 'Smoke Alarm Compliance Inspection',
+        sheetName: 'Smoke Alarm Inspection',
       },
       seed: {
         main: [],
@@ -33,6 +34,7 @@ export default {
             label: 'Each smoke alarm',
             scope: 'item',
             assetType: 'smoke_alarm',
+            onFail: 'replace',
             tests: [
               'Photoelectric, marked AS 3786-2014',
               'No ionisation sensor',
@@ -76,6 +78,7 @@ export default {
         newLabel: 'Start new electrical safety check',
         emptyLine: 'No electrical safety check recorded for this location',
         reportTitle: 'Electrical Safety Check',
+        sheetName: 'Electrical Safety Check',
       },
       seed: ELECTRICAL_SAFETY,
     },

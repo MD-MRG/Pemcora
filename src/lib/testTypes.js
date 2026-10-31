@@ -16,7 +16,8 @@
 //
 // A fail takes a troubleshooting note, whatever the type. The note box can
 // offer the template's `failNotes`: suggested wording the technician picks and
-// then edits, such as an electrician's defect classifications.
+// then edits, such as an electrician's defect classifications. A note still
+// holding [timeframe] isn't finished (`noteIsFinished`).
 //
 // Sections (`section.scope`):
 //
@@ -25,6 +26,9 @@
 //   item     once for every item of `assetType` at the site, in
 //            visits.site_results, each item's answers under its id:
 //            results[sectionId][itemId][testId]
+//
+// A section with `onFail: 'replace'` holds tests that condemn the item: a
+// failed smoke alarm has to be replaced, so its note says why it failed.
 //
 // A room section can name `roomTypes` that switch it on by themselves, and a
 // template can carry `coverage` rules such as "every bedroom has a smoke
@@ -53,11 +57,16 @@ export function isFail(test, value) {
   }
 }
 
+const isBlank = value => value == null || String(value).trim() === ''
+
+export const hasReading = reading => !isBlank(reading?.value)
+
 // PASS or FAIL for a reading against the test's limits; undefined when the
-// test has none or there is no number to judge.
+// test has none or there is no number to judge. Number('  ') is 0, so a blank
+// has to be ruled out first or it gets judged as a reading of zero.
 export function measureResult(test, value) {
   if (test?.min == null && test?.max == null) return undefined
-  if (value === '' || value == null) return undefined
+  if (isBlank(value)) return undefined
   const n = Number(value)
   if (!Number.isFinite(n)) return undefined
   return (test.min != null && n < test.min) || (test.max != null && n > test.max) ? 'FAIL' : 'PASS'
@@ -66,6 +75,13 @@ export function measureResult(test, value) {
 // Troubleshooting notes are keyed by test id, as they always were. A test
 // repeated for each item needs one note per item.
 export const noteKey = (testId, itemId) => (itemId ? `${itemId}:${testId}` : testId)
+
+// A suggested note can hold a timeframe for the technician to fill in. Left in
+// place it would reach a report that can't be edited once sent, so a note still
+// holding it counts as unwritten.
+const TIMEFRAME = '[timeframe]'
+export const noteIsFinished = note =>
+  !isBlank(note) && !String(note).toLowerCase().includes(TIMEFRAME)
 
 const RESULT_TEXT = { PASS: 'PASS', FAIL: 'FAIL', NA: 'N/A' }
 const YESNO_TEXT = { YES: 'Yes', NO: 'No', NA: 'N/A' }
@@ -81,10 +97,9 @@ export function answerText(test, value, reading) {
       return value ?? ''
     case 'measure': {
       if (value === 'NA') return 'N/A'
-      const shown =
-        reading?.value === '' || reading?.value == null
-          ? ''
-          : `${reading.value} ${reading.unit ?? test.unit ?? ''}`.trim()
+      const shown = hasReading(reading)
+        ? `${reading.value} ${reading.unit ?? test.unit ?? ''}`.trim()
+        : ''
       const verdict = value === 'PASS' || value === 'FAIL' ? value : ''
       return [shown, verdict].filter(Boolean).join(' — ')
     }
@@ -93,12 +108,19 @@ export function answerText(test, value, reading) {
   }
 }
 
-// 'pass', 'fail', 'na' or '' — how a report colours the answer.
+// 'pass', 'fail', 'na' or '' — how a report colours the answer. What someone
+// typed or chose is their own words, even if they typed "PASS".
 export function answerTone(test, value) {
   if (isFail(test, value)) return 'fail'
-  if (value === 'NA') return 'na'
-  if (value === 'PASS' || (typeOf(test) === 'yesno' && value === 'YES')) return 'pass'
-  return ''
+  switch (typeOf(test)) {
+    case 'choice':
+    case 'text':
+      return ''
+    case 'yesno':
+      return value === 'YES' ? 'pass' : value === 'NA' ? 'na' : ''
+    default:
+      return value === 'PASS' ? 'pass' : value === 'NA' ? 'na' : ''
+  }
 }
 
 const testsById = template =>
@@ -122,6 +144,34 @@ export function roomFails(entry) {
   const out = fails(entry.results[MAIN])
   for (const [sectionId, on] of Object.entries(entry.sections ?? {})) {
     if (on) out.push(...fails(entry.results[sectionId]))
+  }
+  return out
+}
+
+// The sections of a visit's whole-site step. They are part of the check, so
+// each is on unless the technician switched it off.
+export const siteSections = site =>
+  (site?.template?.sections ?? []).filter(
+    s => scopeOf(s) !== 'room' && site.sections?.[s.id] !== false,
+  )
+
+// The whole-site step's fails, each { testId, itemId, value }; itemId is only
+// there for a test repeated per item. An item's id comes from the answers, so
+// an item since removed from the site still counts.
+export function siteFails(site) {
+  const out = []
+  for (const section of siteSections(site)) {
+    const group = site.results?.[section.id] ?? {}
+    const places =
+      scopeOf(section) === 'item'
+        ? Object.entries(group).map(([itemId, answers]) => [answers, { itemId }])
+        : [[group, {}]]
+    for (const [answers, where] of places) {
+      for (const test of section.tests ?? []) {
+        const value = answers?.[test.id]
+        if (isFail(test, value)) out.push({ testId: test.id, ...where, value })
+      }
+    }
   }
   return out
 }
