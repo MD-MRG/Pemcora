@@ -181,7 +181,8 @@ try {
   await a.ctx.setOffline(true)
   log(await statusIs(a.page, /^Offline: changes are kept on this device$/), 'losing the connection shows at once', await status(a.page))
   await answer(a.page, FOURTH, 'FAIL')
-  await a.page.getByPlaceholder('Describe the issue / action taken').fill('Noted offline')
+  // By its test: the room already has another FAIL with a note box of its own.
+  await a.page.getByRole('textbox', { name: FOURTH, exact: true }).fill('Noted offline')
   await a.page.locator('h1').click()
   await sleep(1200)
   log((await onDatabase(FOURTH)) === undefined, 'nothing reached the database while offline')
