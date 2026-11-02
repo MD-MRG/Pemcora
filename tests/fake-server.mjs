@@ -6,6 +6,9 @@
  * client's name unique in its team, what a refused visit gets back, dates held to
  * the last 7 days, and a reopened visit keeping its first completion date.
  *
+ * A row whose parent has gone gets 23503, as api.js reports it. The real database's
+ * security rules say 42501 first, and api.js looks for the parent to tell the two apart.
+ *
  * The rules themselves are proved against real Postgres in docs/editions/test/.
  * This is only here so the app can be tested against them, on bad days, without
  * writing to the live project. tests/offline-e2e.mjs is the real thing.

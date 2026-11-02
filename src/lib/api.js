@@ -31,6 +31,30 @@ const byPosition = (a, b) => (a.position ?? 0) - (b.position ?? 0)
 // A friendlier message that keeps its code, which is what saveErrors.js goes by.
 const coded = (message, code) => Object.assign(new Error(message), { code })
 
+const PARENT = { clients: 'client', locations: 'site', floors: 'floor', rooms: 'room', visits: 'visit' }
+
+/**
+ * The security rules check that a new row hangs off a parent in the same team, and
+ * they answer before the foreign key does. So a parent deleted on another device
+ * comes back as "not allowed" (42501), not as a missing parent (23503), and the save
+ * queue would keep trying a save that can never land. Looking for the parent tells
+ * the two apart without reading the message: a missing one is reported with the code
+ * that means it. Still there, or no way to look, and the refusal stands.
+ *
+ * Found by tests/offline-e2e.mjs against the real database. The stand-in in
+ * tests/fake-server.mjs answers as this function does.
+ */
+async function whenParentGone(error, parents) {
+  if (error?.code !== '42501') return error
+  for (const [table, id] of parents) {
+    if (!id) continue
+    const { data, error: lookError } = await supabase.from(table).select('id').eq('id', id).maybeSingle()
+    if (lookError) return error
+    if (!data) return coded(`The ${PARENT[table]} this was saved under has been deleted.`, '23503')
+  }
+  return error
+}
+
 const roomFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
@@ -666,7 +690,7 @@ export async function addLocation(teamId, clientId, details, id) {
     }
     throw coded('That address and suburb already exist for this client.', '23505')
   }
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['clients', clientId]])
   return locationFromRow(data)
 }
 
@@ -693,7 +717,7 @@ export async function addFloor(teamId, locationId, floor, position) {
   // Its id is the only unique thing about a floor, so this is an insert that
   // already landed.
   if (isDuplicate(error)) return floor
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['locations', locationId]])
   return floorFromRow(data)
 }
 
@@ -718,7 +742,7 @@ export async function addRoom(teamId, floorId, room, position) {
     .single()
   // As for a floor: only its id is unique.
   if (isDuplicate(error)) return room
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['floors', floorId]])
   return roomFromRow(data)
 }
 
@@ -877,7 +901,7 @@ export async function startVisit(teamId, locationId, kind, technician, userId, i
 
   const { data, error } = await insert()
   if (!isDuplicate(error)) {
-    if (error) throw error
+    if (error) throw await whenParentGone(error, [['locations', locationId]])
     return visitFromRow(data)
   }
 
@@ -895,7 +919,7 @@ export async function startVisit(teamId, locationId, kind, technician, userId, i
 
   // Finished in the moment between, so nothing is in the way any more.
   const retried = await insert()
-  if (retried.error) throw retried.error
+  if (retried.error) throw await whenParentGone(retried.error, [['locations', locationId]])
   return visitFromRow(retried.data)
 }
 
@@ -935,7 +959,8 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
     )
     .select()
     .single()
-  if (error) throw error
+  // The visit first: if that has gone, so has everything in it.
+  if (error) throw await whenParentGone(error, [['visits', visitId], ['rooms', roomId]])
   return visitRoomFromRow(data)
 }
 
@@ -969,7 +994,7 @@ export async function saveRoomlessVisitRoom(teamId, visitId, entry) {
   const { error } = await supabase
     .from('visit_rooms')
     .insert({ team_id: teamId, visit_id: visitId, room_id: null, ...visitRoomToRow(entry) })
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['visits', visitId]])
 }
 
 // No row to delete is fine: another device got there first.
@@ -997,7 +1022,7 @@ export async function recordExport(teamId, visitId, revision, filename, userId) 
     )
     .select()
     .single()
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['visits', visitId]])
   return {
     id: data.id,
     revision: data.revision,

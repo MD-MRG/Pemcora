@@ -347,8 +347,23 @@ try {
   log(classifySaveError(old.error) === 'date', 'a date more than 7 days back is classed as a date refusal', `${old.error?.code} ${old.error?.hint}`)
   const dupe = await insert({})
   log(classifySaveError(dupe.error) === 'conflict', 'a second open visit is classed as a conflict', dupe.error?.code)
+  // The security rules answer before the foreign key: a missing parent comes back as
+  // "not allowed", which is why api.js looks for it.
   const orphan = await sb.from('visit_rooms').insert({ team_id: team.id, visit_id: uuid(), room_id: ids.r1 })
-  log(classifySaveError(orphan.error) === 'gone', 'a room saved under no visit is classed as gone', orphan.error?.code)
+  log(orphan.error?.code === '42501', 'the real database refuses a room under a missing visit as not allowed', orphan.error?.code)
+  const throughApp = await b.page.evaluate(
+    async ({ teamId, visitId }) => {
+      const api = await import('/src/lib/api.js')
+      try {
+        await api.saveRoomlessVisitRoom(teamId, visitId, { roomName: 'Room r1', results: { main: {} } })
+        return null
+      } catch (e) {
+        return { code: e.code, hint: e.hint }
+      }
+    },
+    { teamId: team.id, visitId: uuid() },
+  )
+  log(classifySaveError(throughApp) === 'gone', 'and through the app it is classed as gone', JSON.stringify(throughApp))
 
   // ── A correction open elsewhere ──────────────────────────────────────────
   const openNow = await openRow()

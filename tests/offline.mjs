@@ -590,6 +590,53 @@ try {
       out = await call('updateVisit', ['v1', { technician: 'Sam' }])
       log('updating one that is there is fine', !out.error, JSON.stringify(out.error))
 
+      // Something deleted on another device. The real database's security rules
+      // answer "not allowed" before its foreign key can answer "missing", so api.js
+      // looks for the parent. tests/offline-e2e.mjs found this against the real one.
+      const notAllowed = table => ({
+        status: 403,
+        body: { code: '42501', message: `new row violates row-level security policy for table "${table}"`, details: null, hint: null },
+      })
+      const found = { status: 200, body: [{ id: 'x' }] }
+      const missing = { status: 200, body: [] }
+      const entry = { roomName: 'Room r1', results: { main: {} } }
+
+      script = [notAllowed('visit_rooms'), found, missing]
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', entry])
+      log('a room deleted on another device is reported as gone, not refused', out.error?.code === '23503', JSON.stringify(out.error))
+      log('having looked for the visit, then the room', requests.slice(-2).join() === 'GET /visits,GET /rooms', requests.slice(-3).join(' | '))
+
+      script = [notAllowed('visit_rooms'), missing]
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', entry])
+      log('so is a visit deleted on another device, without looking further',
+        out.error?.code === '23503' && requests.at(-1) === 'GET /visits', requests.slice(-2).join(' | '))
+
+      script = [notAllowed('visit_rooms'), found, found]
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', entry])
+      log('with both still there, a refusal stays a refusal', out.error?.code === '42501', JSON.stringify(out.error))
+
+      script = [notAllowed('visit_rooms')] // and looking gets no answer at all
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', entry])
+      log('with no way to look, it stays a refusal too', out.error?.code === '42501', JSON.stringify(out.error))
+
+      script = [{ status: 409, body: { code: '23514', message: 'The date', details: null, hint: 'visit_date' } }]
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', entry])
+      log('and nothing else sends it looking', out.error?.code === '23514' && requests.at(-1) === 'POST /visit_rooms', requests.at(-1))
+
+      for (const [method, args, table, parent] of [
+        ['saveRoomlessVisitRoom', ['t', 'v1', entry], 'visit_rooms', 'visit'],
+        ['recordExport', ['t', 'v1', 1, 'report.xlsx', 'u'], 'visit_exports', 'visit'],
+        ['startVisit', startArgs, 'visits', 'location'],
+        ['addLocation', ['t', 'c1', { address: '1 High St' }, 'l1'], 'locations', 'client'],
+        ['addFloor', ['t', 'l1', { id: 'f1', label: 'Ground' }, 0], 'floors', 'location'],
+        ['addRoom', ['t', 'f1', { id: 'r1', name: 'Room' }, 0], 'rooms', 'floor'],
+      ]) {
+        script = [notAllowed(table), missing]
+        out = await call(method, args)
+        log(`${method}: under a ${parent} deleted on another device, it's gone`,
+          out.error?.code === '23503' && requests.at(-1) === `GET /${parent}s`, `${JSON.stringify(out.error)} ${requests.at(-1)}`)
+      }
+
       const client = { id: 'c1', name: 'Equinix', locations: [] }
       script = [duplicate, { status: 200, body: [client] }]
       out = await call('createClient', ['t', 'Equinix', 'c1'])

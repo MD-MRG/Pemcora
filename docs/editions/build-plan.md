@@ -974,6 +974,13 @@ step:
   and nothing on screen showed whether a save had worked.
 - A visit finished offline goes in finished, so the open-visit index has nothing to say about
   it: it's an inspection of its own, even with another visit open at the site.
+- Found by the first live run of `tests/offline-e2e.mjs`, during B5: when a room, visit,
+  floor, site or client has been deleted on another device, the real database's security
+  rules refuse a save under it as "not allowed" before its foreign key can say "missing". The
+  device showed "Save failed" and tried again forever, where it should have kept the answers
+  without their room, or held the visit. `api.js` now looks for the parent when a save is
+  refused that way, and reports one that's gone as gone. The stand-in had answered "missing"
+  all along, which is why only the live run could find it.
 
 #### B3b. Opening with no signal
 
