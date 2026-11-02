@@ -198,6 +198,8 @@ try {
     route.request().method() === 'GET' ? route.continue() : route.abort(),
   )
   await answer(a.page, FOURTH, 'PASS')
+  // It had a FAIL with a note, and the app asks before throwing the note away.
+  await a.page.getByRole('dialog').getByRole('button', { name: 'Discard notes' }).click()
   log(await statusIs(a.page, /^Offline/), 'a save that can\'t get through says so', await status(a.page))
   await a.page.reload({ waitUntil: 'networkidle' })
   await goToSite(a.page)
@@ -211,7 +213,7 @@ try {
   await a.ctx.route('**/rest/v1/visit_rooms*', route =>
     route.request().method() === 'GET' ? route.continue() : route.abort(),
   )
-  await answer(a.page, FIRST, 'NA')
+  await answer(a.page, FIRST, 'N/A') // the button's label; the database keeps NA
   await a.page.close()
   await a.ctx.unroute('**/rest/v1/visit_rooms*')
   a.page = await a.ctx.newPage()
