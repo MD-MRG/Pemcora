@@ -305,7 +305,13 @@ function rebase(data, ctx) {
     const location = findLocation(data, locationId)
     if (!location) continue
     location.visits = location.visits ?? []
-    if (!location.visits.some(v => v.id === visit.id)) location.visits.push(structuredClone(visit))
+    // It can be one this device already holds, as it last saw it: finished here, and
+    // reopened and corrected on another device since. The database's copy is the one
+    // to keep. Keeping this device's would have its next save finish the visit again,
+    // and send its old answers back over the correction.
+    const at = location.visits.findIndex(v => v.id === visit.id)
+    if (at >= 0) location.visits[at] = structuredClone(visit)
+    else location.visits.push(structuredClone(visit))
   }
 
   for (const { localId, server, locationId } of ctx.joins) {

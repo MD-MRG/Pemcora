@@ -498,6 +498,33 @@ for (const step of ['createClient', 'addLocation', 'addFloor', 'addRoom', 'start
   log('with it finished, the new visit saves', server.visits.get(visit.id)?.rooms.r1?.results.main.t1 === 'PASS' && !heldVisits()[visit.id])
 }
 {
+  // The correction is a visit this device already holds, as it last saw it: finished.
+  // It has been reopened on another device since. Found against the real database
+  // by tests/offline-e2e.mjs: this device used to finish it again on its next save.
+  const server = setup()
+  const finished = new Date(Date.now() - 86400000).toISOString()
+  server.seedVisit({ id: 'old', completedAt: finished, firstCompletedAt: finished, rooms: { r2: answers({ t3: 'FAIL' }) } })
+  await boot(server)
+  log('this device holds it as finished', !!localVisit('old')?.completedAt)
+
+  server.visits.get('old').completedAt = null // reopened elsewhere
+  server.visits.get('old').rooms.r2 = server.roomRow('old', 'r2', answers({ t3: 'PASS' })) // and corrected
+  server.down = true
+  const { visit } = await start()
+  server.down = false
+  await flush()
+  await flush()
+
+  const copies = data => data.flatMap(c => c.locations).flatMap(l => l.visits ?? []).filter(v => v.id === 'old')
+  log('it is still not joined', heldVisits()[visit.id]?.reason === 'correction')
+  log('this device doesn\'t finish it again', server.visits.get('old').completedAt === null, server.visits.get('old').completedAt)
+  log('it shows here as open, as the database has it', localVisit('old')?.completedAt === null)
+  log('with the other device\'s correction in it', localVisit('old')?.rooms.r2?.results.main.t3 === 'PASS')
+  log('and nothing of this device\'s older copy sent back', server.visits.get('old').rooms.r2.results.main.t3 === 'PASS')
+  log('one copy of it on the device', copies(readClients()).length === 1, `${copies(readClients()).length}`)
+  log('and one in its record of what the database holds', copies(cache.readSaved()).length === 1, `${copies(cache.readSaved()).length}`)
+}
+{
   // Starting online and finding a correction open: it opens instead.
   const server = setup()
   await boot(server)

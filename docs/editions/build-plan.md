@@ -981,6 +981,10 @@ step:
   without their room, or held the visit. `api.js` now looks for the parent when a save is
   refused that way, and reports one that's gone as gone. The stand-in had answered "missing"
   all along, which is why only the live run could find it.
+- Found by the same run: a device that held a visit as finished, while another device had
+  reopened it for a correction, kept its own finished copy when the database handed it the
+  open one. Its next save finished the visit again and sent its old answers back over the
+  correction. It now keeps the database's copy. `tests/save-queue.mjs` covers it.
 
 #### B3b. Opening with no signal
 
