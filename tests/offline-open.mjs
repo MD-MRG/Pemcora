@@ -411,6 +411,103 @@ try {
       await ctx.close()
     }
     {
+      // A new person, through the real sign-in, gate and team loading (step B5).
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page, { copy: false })
+      await signedIn(page)
+      await page.evaluate(() => localStorage.removeItem('fc.session.teams'))
+
+      let teams = []
+      let onCreate = route => route.abort()
+      const creates = []
+      const teamRow = { team_id: TEAM.id, name: "Sam's team", description: '', invite_code: 'x', role: 'owner', member_count: 1, admin_count: 1 }
+      const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
+      const reply = (route, status, body) =>
+        route.fulfill({ status, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+      await ctx.route(`${BACKEND}/**`, route => {
+        const { pathname } = new URL(route.request().url())
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+        if (pathname.endsWith('/my_teams')) return reply(route, 200, teams)
+        if (pathname.endsWith('/team_entitlements')) return reply(route, 200, row({ starter_pack: 'av' }))
+        if (pathname.endsWith('/create_organisation')) {
+          creates.push(route.request().postDataJSON())
+          return onCreate(route)
+        }
+        if (route.request().method() === 'GET') return reply(route, 200, pathname.endsWith('/team_settings') ? {} : [])
+        return route.abort()
+      })
+
+      await page.reload({ waitUntil: 'load' })
+      const avChoice = page.getByRole('radio', { name: /^AV integration/ })
+      log('a new person is asked what their team does',
+        await until(async () => (await avChoice.count()) === 1), (await page.textContent('body')).slice(0, 150))
+      log('and no team has been made without asking', creates.length === 0)
+      log('with the checks that aren\'t ready marked as coming soon',
+        await page.getByRole('radio', { name: /^Electrical work/ }).isDisabled() &&
+        await page.getByRole('radio', { name: /^Landlord/ }).isDisabled() &&
+        await page.getByRole('radio', { name: /^Property management/ }).isDisabled())
+      log('and the sign-in screen no longer says AV Service', !/AV Service/i.test(await page.textContent('body')))
+
+      await avChoice.check()
+      await page.getByRole('button', { name: 'Continue', exact: true }).click()
+
+      // No connection, and nothing made: it says so and stays.
+      await page.getByRole('button', { name: 'Create team', exact: true }).click()
+      log('a failed attempt stays on the screen, and can be tried again',
+        await until(async () => creates.length === 1 && await page.getByRole('button', { name: 'Create team', exact: true }).isEnabled()))
+      log('saying something went wrong', (await page.locator('[role="status"]').count()) >= 1)
+      log('asking for what they chose',
+        JSON.stringify(creates[0]) === JSON.stringify({
+          p_name: "Sam's team", p_account_type: 'provider', p_pack_id: 'av', p_description: '', p_state: null, p_addons: [],
+        }), JSON.stringify(creates[0]))
+
+      // Made, with only the answer lost: the app has to find it, not make another.
+      onCreate = route => {
+        teams = [teamRow]
+        return route.abort()
+      }
+      await page.getByRole('button', { name: 'Create team', exact: true }).click()
+      log('made with the answer lost, it finds the team and opens',
+        await until(async () => (await page.locator('nav a').count()) >= 7), (await page.textContent('body')).slice(0, 150))
+      log('without being asked to try again', creates.length === 2, `${creates.length}`)
+      log('and the plate says what it does', /AV Service/i.test(await page.locator('span.uppercase').first().textContent()))
+      await ctx.close()
+    }
+    {
+      // An answer that does arrive, and a member who wasn't asked anything.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page, { copy: false })
+      await signedIn(page)
+      await page.evaluate(() => localStorage.removeItem('fc.session.teams'))
+      let teams = []
+      const teamRow = { team_id: TEAM.id, name: "Sam's team", description: '', invite_code: 'x', role: 'owner', member_count: 1, admin_count: 1 }
+      const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
+      const reply = (route, status, body) =>
+        route.fulfill({ status, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+      await ctx.route(`${BACKEND}/**`, route => {
+        const { pathname } = new URL(route.request().url())
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+        if (pathname.endsWith('/my_teams')) return reply(route, 200, teams)
+        if (pathname.endsWith('/team_entitlements')) return reply(route, 200, row({ starter_pack: 'av' }))
+        if (pathname.endsWith('/create_organisation')) {
+          teams = [teamRow]
+          return reply(route, 200, { id: TEAM.id, name: "Sam's team" })
+        }
+        if (route.request().method() === 'GET') return reply(route, 200, pathname.endsWith('/team_settings') ? {} : [])
+        return route.abort()
+      })
+      await page.reload({ waitUntil: 'load' })
+      await page.getByRole('radio', { name: /^AV integration/ }).check({ timeout: 15000 })
+      await page.getByRole('button', { name: 'Continue', exact: true }).click()
+      await page.getByRole('button', { name: 'Create team', exact: true }).click()
+      log('confirming opens the app', await until(async () => (await page.locator('nav a').count()) >= 7))
+      log('on Home, with its team', new URL(page.url()).hash === '#/' || new URL(page.url()).hash === '')
+      await page.reload({ waitUntil: 'load' })
+      log('and it\'s never asked again',
+        await until(async () => (await page.locator('nav a').count()) >= 7) && (await page.getByRole('radio', { name: /^AV integration/ }).count()) === 0)
+      await ctx.close()
+    }
+    {
       // A project without the function yet: today's AV app has to keep working.
       const { ctx, page } = await newDevice()
       await hasBeenHere(page)

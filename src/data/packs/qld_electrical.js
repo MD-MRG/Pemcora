@@ -11,6 +11,7 @@ import { replaceOnFail } from './shared/smokeAlarm.js'
 export default {
   id: 'qld_electrical',
   label: 'Queensland electrical and smoke alarm compliance',
+  tagline: 'Electrical compliance',
   proposed: true,
   workflows: [
     {

@@ -7,6 +7,7 @@ import LogoUpload from '../components/LogoUpload.jsx'
 import TemplateEditor from '../components/TemplateEditor.jsx'
 import ImportLocalData from '../components/ImportLocalData.jsx'
 import AccountPanel from '../components/AccountPanel.jsx'
+import StarterPackCard from '../components/StarterPackCard.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 import { useEntitlements } from '../context/team.js'
 import { holdsPack, isProvider } from '../lib/entitlements.js'
@@ -115,6 +116,8 @@ export default function Settings() {
           hunting for "sign out" should not have to scroll past branding and
           sixty test items to find it. Renders nothing without a session. */}
       <AccountPanel />
+
+      <StarterPackCard />
 
       <section className="border-hair rounded-xl border bg-white p-6">
         <h2 className="text-[19px] font-bold tracking-[-.01em]">Company</h2>

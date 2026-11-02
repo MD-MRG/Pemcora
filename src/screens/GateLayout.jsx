@@ -13,7 +13,7 @@ export default function GateLayout({ title, subtitle, children, footer }) {
           </div>
           <div>
             <p className="text-[17px] leading-tight font-semibold text-ink">Pemcora</p>
-            <p className="text-[12.5px] text-ink-soft">AV Service</p>
+            <p className="text-[12.5px] text-ink-soft">Inspections and reports</p>
           </div>
         </div>
 

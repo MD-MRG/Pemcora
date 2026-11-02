@@ -6,6 +6,7 @@ import SideNav from './SideNav.jsx'
 import { navByPath, redirectFor } from '../nav.js'
 import { useEntitlements } from '../context/team.js'
 import { hasVisitsOfKind } from '../lib/clientStore.js'
+import { brandTagline } from '../lib/entitlements.js'
 import { prefs } from '../lib/prefs.js'
 import { getSettings, saveSettings } from '../lib/settingsStore.js'
 import { applyPlate, DEFAULT_PLATE } from '../lib/plates.js'
@@ -23,7 +24,9 @@ const breakpointOf = w => (w < BP_PHONE ? 'phone' : w < BP_WIDE ? 'tablet' : 'wi
 export default function AppShell() {
   const location = useLocation()
   const current = navByPath(location.pathname)
-  const sendTo = redirectFor(location.pathname, useEntitlements(), hasVisitsOfKind)
+  const entitlements = useEntitlements()
+  const sendTo = redirectFor(location.pathname, entitlements, hasVisitsOfKind)
+  const tagline = brandTagline(entitlements)
 
   // null = no manual choice yet, so the breakpoint decides.
   const [manual, setManual] = useState(() => prefs.getCollapsed())
@@ -144,7 +147,7 @@ export default function AppShell() {
               aria-label="Navigation"
             >
               <div className="relative h-[76px] shrink-0">
-                <BrandPlate collapsed={false} name={brandName} logoFull={settings.logoFull} logoCollapsed={settings.logoCollapsed} />
+                <BrandPlate collapsed={false} name={brandName} tagline={tagline} logoFull={settings.logoFull} logoCollapsed={settings.logoCollapsed} />
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
@@ -179,6 +182,7 @@ export default function AppShell() {
       <BrandPlate
         collapsed={collapsed}
         name={brandName}
+        tagline={tagline}
         logoFull={settings.logoFull}
         logoCollapsed={settings.logoCollapsed}
       />

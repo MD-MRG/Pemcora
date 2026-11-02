@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { useCanManage, useTeam } from '../context/team.js'
 import { listMembers } from '../lib/api.js'
-import { startUpgrade } from '../lib/entitlements.js'
+import { startUpgrade, swapStarterPack } from '../lib/entitlements.js'
 
 /**
  * What a plan refusal gets instead of an error (build plan 2.11). `sheet` comes from
@@ -58,6 +58,26 @@ export default function UpgradeSheet({ sheet, onClose }) {
         </>
       )}
       {sheet.kept && <p className="mt-3">{sheet.kept}</p>}
+      {canManage && sheet.swap && (
+        <div className="border-hair mt-3 rounded-lg border p-3">
+          <p>{sheet.swap.line}</p>
+          <button
+            type="button"
+            onClick={async () => {
+              setNote('')
+              try {
+                await swapStarterPack(sheet.swap.packId)
+                onClose()
+              } catch (e) {
+                setNote(e.message)
+              }
+            }}
+            className="border-hair text-navy mt-2 min-h-[42px] rounded-lg border bg-white px-4 text-[13.5px] font-semibold hover:bg-slate-50"
+          >
+            {sheet.swap.action}
+          </button>
+        </div>
+      )}
       {!canManage && (
         <p className="text-ink mt-3 font-semibold">
           {admins.length

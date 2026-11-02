@@ -14,7 +14,7 @@ import * as api from './api.js'
 import { heldVisits, retryHeld } from './cache.js'
 import { prefs } from './prefs.js'
 import { isNetworkFailure } from './saveErrors.js'
-import { PACKS, workflow } from '../data/packs/index.js'
+import { offeredPacks, packById, workflow } from '../data/packs/index.js'
 
 // The allowance runs by the calendar month in Sydney, whatever the device's clock
 // says about where it is (2.5).
@@ -91,6 +91,28 @@ export function startNeedsUpgrade(e, kind) {
   return !!allowance(e)?.usedUp || (!!e?.enforced && !holdsPack(e, workflow(kind).packId))
 }
 
+/** What the starter pack could be swapped for: nothing for a team without one, or
+ *  once a visit has started under it (2.3). choose_starter_pack() has the last word. */
+export function swapTargets(e) {
+  if (!e?.starterPack || e.starterInUse) return []
+  return offeredPacks().filter(pack => !e.packs.includes(pack.id))
+}
+
+export async function swapStarterPack(packId) {
+  await state.source.chooseStarterPack(state.teamId, packId)
+  await refreshEntitlements()
+}
+
+const NO_TEAM_YET = 'Inspections and reports'
+
+/** The line under the name on the brand plate: what this team does. */
+export function brandTagline(e) {
+  if (!e) return NO_TEAM_YET
+  if (!isProvider(e)) return 'Property compliance'
+  const pack = packById(e.starterPack ?? e.packs.find(id => id !== 'core'))
+  return pack?.tagline ?? NO_TEAM_YET
+}
+
 /* ── Dates ────────────────────────────────────────────────────────────────── */
 
 const dayLabel = (date, month, timeZone = SYDNEY) =>
@@ -162,9 +184,17 @@ function allowanceSheet(e, now) {
   }
 }
 
-function packSheet(packId) {
-  const label = PACKS.find(p => p.id === packId)?.label ?? packId
+function packSheet(e, packId) {
+  const label = packById(packId)?.label ?? packId
+  const canSwap = swapTargets(e).some(pack => pack.id === packId)
   return {
+    swap: canSwap
+      ? {
+          packId,
+          line: `This team hasn't started a visit under ${packById(e.starterPack)?.label}, so you can still swap it for this one.`,
+          action: `Swap to ${label}`,
+        }
+      : null,
     title: `This team doesn't have the ${label} pack`,
     lines: [
       `New ${label} visits need the pack. Past visits, reports and due dates all stay as they are.`,
@@ -180,7 +210,7 @@ function packSheet(packId) {
  *  team holds says which part of it. Never the message text. */
 export function visitSheet(e, kind, now = new Date()) {
   const packId = workflow(kind).packId
-  return holdsPack(e, packId) ? allowanceSheet(e, now) : packSheet(packId)
+  return holdsPack(e, packId) ? allowanceSheet(e, now) : packSheet(e, packId)
 }
 
 /** A team with no seat left, when inviting someone or moving them in. `plan` is that

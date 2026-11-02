@@ -39,6 +39,7 @@ const SUITES = [
   'offline',
   'offline-open',
   'entitlements',
+  'signup',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

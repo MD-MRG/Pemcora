@@ -12,6 +12,7 @@ import { replaceOnFail } from './shared/smokeAlarm.js'
 export default {
   id: 'electrical_general',
   label: 'Electrical compliance baseline',
+  tagline: 'Electrical compliance',
   proposed: true,
   workflows: [
     {

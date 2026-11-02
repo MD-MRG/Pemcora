@@ -103,6 +103,7 @@ const seed = src => ({
 export default {
   id: 'av',
   label: 'AV maintenance and commissioning',
+  tagline: 'AV Service',
   workflows: [
     {
       // Recurring service visits. Shares its whole workflow with Commissioning —

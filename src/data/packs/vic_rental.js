@@ -10,6 +10,7 @@ import { replaceOnFail } from './shared/smokeAlarm.js'
 export default {
   id: 'vic_rental',
   label: 'Victorian rental safety checks',
+  tagline: 'Electrical compliance',
   proposed: true,
   workflows: [
     {

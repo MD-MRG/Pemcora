@@ -71,7 +71,7 @@ service worker, so it builds one under `node_modules/.cache` (not `dist/`) and s
 itself, with a backend address that doesn't exist, so nothing can reach the live project.
 It covers an expired login, working a whole visit and exporting its report with no
 connection, a network that goes nowhere, signing out offline, a deploy getting through, and
-how the app reads what a team has (44 checks). The suite runs in `npm test`, or on its own with no dev server:
+how the app reads what a team has, and a new person going through the real gate (57 checks). The suite runs in `npm test`, or on its own with no dev server:
 
 ```
 node tests/offline-open.mjs
@@ -111,6 +111,19 @@ node tests/entitlements.mjs
 never runs it: with a good login, with no signal, with no such function on the project, and
 with an answer that never comes. `offline-e2e.mjs` checks the real `team_entitlements()`.
 
+## Signing up
+
+`signup.mjs` is step B5. The rules run in Node first: every row of the starter table in 2.3,
+and what can be chosen yet. Then Team Setup, the Teams page's form and the "Your pack" card run
+in a browser, both with everything open and as the live site has them, and the suite reads back
+what they asked the server to create (136 checks). What the server does with it is in the SQL
+suite, and `offline-open.mjs` walks a new person through the real gate in a production build,
+including a team made with its answer lost.
+
+```
+node tests/signup.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does
@@ -123,9 +136,10 @@ point is to prove the data reached Postgres.
 node tests/supabase-e2e.mjs [email] [password]
 ```
 
-Needs the dev server and a confirmed account; sign-up is closed on the project,
-so it defaults to reusing one of the RLS suite's accounts rather than creating
-more. It creates a team and deletes it, and everything under it, at the end.
+Needs the dev server and a confirmed account with no team of its own: Team Setup asks
+what its team does, and the suite answers AV integration. Sign-up is open on the project
+with Confirm email on, so pass an account you've already confirmed. It creates a team
+and deletes it, and everything under it, at the end.
 
 The assertion that matters most is that **the floor id the app minted is the
 same id the row has in Postgres**. Ids are generated client-side and sent with

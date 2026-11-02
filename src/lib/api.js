@@ -305,7 +305,18 @@ export async function getEntitlements(teamId) {
     cancelAt: data.cancel_at ?? null,
     importUsed: !!data.import_used,
     openVisits: Number(data.open_visits ?? 0),
+    starterPack: data.starter_pack ?? null,
+    starterInUse: !!data.starter_in_use,
   }
+}
+
+// Owner or admin. Refused with the plan's code once the old pack has been used.
+export async function chooseStarterPack(teamId, packId) {
+  const { error } = await supabase.rpc('choose_starter_pack', {
+    p_team_id: teamId,
+    p_pack_id: packId,
+  })
+  if (error) throw error
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +397,21 @@ export async function removeMember(teamId, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Teams and invitations
 // ─────────────────────────────────────────────────────────────────────────────
+
+// A new team that knows what it is. All six arguments, because the sign-up function
+// is the overload in 0008 that takes all six.
+export async function createOrganisation({ name, description, accountType, packId, state, addons }) {
+  const { data, error } = await supabase.rpc('create_organisation', {
+    p_name: name,
+    p_account_type: accountType,
+    p_pack_id: packId ?? null,
+    p_description: description ?? '',
+    p_state: state ?? null,
+    p_addons: addons ?? [],
+  })
+  if (error) throw error
+  return data
+}
 
 // Admin-only at the database, and reported the same way as team_settings: RLS
 // turns a refused update into zero rows rather than an error.

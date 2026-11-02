@@ -182,6 +182,33 @@ log(!joined.error, 'member joins with the invite code', joined.error?.message)
   log((write.data ?? []).length === 0 || !!write.error, 'member CANNOT change team settings', write.error?.message ?? 'no rows updated')
 }
 
+// ── Report records (0008) ────────────────────────────────────────────────────
+
+{
+  const location = await owner.sb
+    .from('locations')
+    .insert({ team_id: teamId, client_id: clientId, address: '1 Record St', suburb: 'Town' })
+    .select()
+    .single()
+  const visit = await owner.sb
+    .from('visits')
+    .insert({ team_id: teamId, location_id: location.data?.id, kind: 'maintenance', completed_at: new Date().toISOString() })
+    .select()
+    .single()
+  log(!visit.error, 'owner records a finished visit', visit.error?.message)
+
+  const filed = await member.sb
+    .from('visit_exports')
+    .insert({ team_id: teamId, visit_id: visit.data?.id, revision: 1, filename: 'one.xlsx' })
+  log(!filed.error, 'member can file a report', filed.error?.message)
+
+  const del = await member.sb.from('visit_exports').delete().eq('visit_id', visit.data?.id).select()
+  log(!!del.error || (del.data ?? []).length === 0, 'member CANNOT delete a report record', del.error?.message ?? 'no rows deleted')
+
+  const own = await owner.sb.from('visit_exports').delete().eq('visit_id', visit.data?.id).select()
+  log(!own.error && own.data?.length === 1, 'owner can', own.error?.message)
+}
+
 // ── The owner CAN do what the member cannot ──────────────────────────────────
 
 {
@@ -245,6 +272,40 @@ log(!other.error, 'outsider creates their own team', other.error?.message)
 {
   const { error } = await outsider.sb.from('clients').insert({ team_id: teamId, name: 'Injected' })
   log(!!error, "outsider CANNOT insert into the other team", error?.code ?? 'NO ERROR')
+}
+
+// ── Signed out, through the real API (0008) ──────────────────────────────────
+//
+// Only the database can say this for sure: the SQL suite runs on a stand-in for
+// Supabase, and this goes through PostgREST with the app's public key.
+
+{
+  const signedOut = createClient(URL_, KEY, { auth: { persistSession: false } })
+  const anyTeam = { p_team_id: teamId }
+  const closed = [
+    ['all_members_overview', {}],
+    ['create_team', { p_name: 'Anon' }],
+    ['is_team_admin', { _team_id: teamId }],
+    ['is_team_member', { _team_id: teamId }],
+    ['is_team_owner', { _team_id: teamId }],
+    ['move_member', { p_user_id: member.userId, p_from_team_id: teamId, p_to_team_id: teamId }],
+    ['my_teams', {}],
+    ['set_member_role', { ...anyTeam, p_user_id: member.userId, p_role: 'member' }],
+    ['team_members_list', anyTeam],
+    ['transfer_ownership', { ...anyTeam, p_user_id: member.userId }],
+  ]
+  for (const [fn, args] of closed) {
+    const { error } = await signedOut.rpc(fn, args)
+    log(error?.code === '42501', `signed out, ${fn} is refused`, error?.code ?? 'NO ERROR')
+  }
+
+  const email = await signedOut.rpc('email_is_registered', { p_email: owner.email })
+  log(!email.error, 'signed out, the sign-in page\'s check still answers', email.error?.message)
+  const nobody = '00000000-0000-4000-8000-000000000000'
+  for (const fn of ['invite_preview', 'report_preview', 'reminder_opt_out']) {
+    const { error } = await signedOut.rpc(fn, { p_token: nobody })
+    log(error?.code !== '42501', `signed out, ${fn} still answers`, error?.message ?? 'answered')
+  }
 }
 
 // ── Clean up the teams (cascades to every row beneath them) ──────────────────

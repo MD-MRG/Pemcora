@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
-import GateLayout, { GateButton } from './GateLayout.jsx'
+import TeamChoices from '../components/TeamChoices.jsx'
+import GateLayout from './GateLayout.jsx'
 
-// Naming a team used to be the first thing anyone was asked for, on a screen
-// between the confirmation email and the app. It was a poor first question: at
-// that moment nobody knows what the answer changes, and the name is editable on
-// the Teams page five seconds later anyway. So the team is now created without
-// asking, and this screen is only ever seen for the instant that takes — or, if
-// the call fails, for as long as it takes to retry.
+// A team's first question used to be its name, and then nothing at all: the name can
+// be changed on the Teams page, so the team was created without asking. What it does
+// can't be changed, and decides what it's given, so that is what gets asked (build
+// plan 2.3). The name still isn't.
 //
 // Whoever gets here owns the team they get. Invited people never reach this
 // screen: their membership is created when they confirm their email, so they
@@ -29,48 +28,16 @@ function defaultTeamName(email) {
   return words ? `${words}'s team` : 'My Team'
 }
 
-export default function TeamSetup() {
+export default function TeamSetup({ opening }) {
   const { user, signOut } = useAuth()
-  const { createTeam } = useTeam()
+  const { createOrganisation } = useTeam()
+  const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
-  const [attempt, setAttempt] = useState(0)
-  const email = user?.email
-
-  // StrictMode runs every effect twice in development. Without this guard that
-  // is two create_team calls and two teams, and the second one is invisible
-  // until someone opens the Teams page and wonders where it came from.
-  const started = useRef(false)
-
-  useEffect(() => {
-    if (started.current) return
-    started.current = true
-    createTeam(defaultTeamName(email)).then(({ error }) => {
-      // On success TeamContext refreshes and the gate lets the app through, so
-      // there is no success state to render here.
-      if (error) setProblem(error.message)
-    })
-    // No cleanup, and deliberately none. The usual `let alive = true` guard is
-    // wrong under StrictMode: its cleanup runs between the two development
-    // mounts, so the one call that did go out has its result thrown away and
-    // the screen sits on "Setting up your workspace…" forever, whatever the
-    // server said. The call is already guarded against firing twice, and a
-    // setState after unmount is a no-op in React 18 and later.
-  }, [attempt, email, createTeam])
-
-  if (!problem) {
-    return (
-      <div className="bg-stage flex min-h-dvh items-center justify-center">
-        <p className="text-ink-soft text-[13.5px]" role="status">
-          Setting up your workspace…
-        </p>
-      </div>
-    )
-  }
 
   return (
     <GateLayout
-      title="Could not finish setting up"
-      subtitle="Your account exists, but the team that holds your clients and visits was not created."
+      title="Set up your team"
+      subtitle="Your clients, visits and reports live with your team. Tell us what it does, and we'll give it the right checks."
       footer={
         <p className="text-[12.5px]">
           Signed in as {user?.email}.{' '}
@@ -85,17 +52,23 @@ export default function TeamSetup() {
       }
     >
       <div className="space-y-4">
-        <Notice blocked title={problem} />
-        <GateButton
-          type="button"
-          onClick={() => {
+        {problem && <Notice blocked title={problem} />}
+        <TeamChoices
+          opening={opening}
+          busy={busy}
+          onConfirm={async choice => {
+            setBusy(true)
             setProblem('')
-            started.current = false
-            setAttempt(n => n + 1)
+            // On success TeamContext refreshes and the gate lets the app through, so
+            // there is no success state to render here.
+            const { error } = await createOrganisation({
+              name: defaultTeamName(user?.email),
+              ...choice,
+            })
+            setBusy(false)
+            if (error) setProblem(error.message)
           }}
-        >
-          Try again
-        </GateButton>
+        />
       </div>
     </GateLayout>
   )

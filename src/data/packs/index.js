@@ -73,3 +73,9 @@ export function workflow(id) {
 // What WorkflowPage takes. A workflow is both the visits' `kind` and the
 // template it reads, so a page never has to say either twice.
 export const pageConfig = id => ({ kind: id, templateKind: id, ...workflow(id).page })
+
+export const packById = id => PACKS.find(p => p.id === id) ?? null
+
+// The packs a team can be given: not core, which every team has, and none whose
+// lists a licensed electrician hasn't checked yet.
+export const offeredPacks = () => PACKS.filter(p => p.id !== 'core' && !p.proposed)

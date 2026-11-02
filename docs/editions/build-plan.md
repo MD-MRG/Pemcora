@@ -1054,6 +1054,40 @@ step:
   four public ones still answer, and the security advisor lists only those four as callable
   signed out.
 
+> **M.D.'s note (decided at B5):** until the rest is ready, only AV integration can be chosen
+> on the live site. Electrical work, Landlord and Property management show "Coming soon".
+> Add-ons show no prices until E1, and a choice is saved on the team for E1 to pick up.
+> Settings gets a "Your pack" card, for a team that took the wrong pack. Only owners and
+> admins can delete a report record.
+
+- How it came out:
+  - **What opens when.** An inspecting team's choice opens when `proposed` comes off its
+    pack, one state at a time, which also puts that pack on offer as an add-on and for
+    swapping. Landlords and property managers open at D4, by switching `receiving` on in
+    `OPEN_NOW` (`src/lib/signup.js`). Every path is built and tested with them open, so the
+    2.3 table is proved by the tests rather than on the live site.
+  - **Nobody who stops at "Coming soon" gets a team.** They have an account, and can sign out.
+  - **The Teams page's "Create a team" asks the same questions**, because it used to call
+    `create_team()` and silently give AV, which 2.3 forbids. Nothing in the app calls
+    `create_team()` now. It and its AV fallback stay until E6, since test suites still use
+    them and an open tab on an older build could too.
+  - **State** is only asked of electricians, the one row of the table that depends on it. It's
+    kept in `teams.state`, which G2 needs to find a state's teams when its own pack is released.
+  - **A team is no longer made without asking.** That also ends a quiet hazard: a team list
+    that came back empty for any reason used to make a second team.
+  - **The sign-up function is its own overload with no defaults**, so a call with up to four
+    arguments still means 0006's, and re-running 0006 can't leave two functions a call could
+    mean either of.
+  - **Swapping from the sheet is one button**, not the picker, because the sheet already knows
+    which pack is missing. The picker is on the "Your pack" card and at sign-up.
+  - **`0008` goes on before Phase B merges**, because the new sign-up screen calls it. Nothing
+    already live depends on what it closes. It closes `set_updated_at()` as well, which the
+    A4 list missed because it isn't `SECURITY DEFINER`. Revoking from `anon` alone would have
+    done nothing, since these functions were also open through `PUBLIC`.
+  - **After M.D. applies it:** run `tests/rls.mjs`, which checks through the real API that
+    signed-out calls are refused, and look at the security advisor, which is the last part of
+    "done when". Neither can run until then.
+
 ### Phase C — Field work
 
 #### C1. Workflow page
@@ -1150,7 +1184,8 @@ step:
 
 #### D4. Landlord and agency side
 
-- Sign-up for landlords and agencies.
+- Sign-up for landlords and agencies: B5 built it, so this is switching `receiving` on in
+  `OPEN_NOW` (`src/lib/signup.js`), and replacing `src/pages/ReceivingHolding.jsx`.
 - Properties list with each property's due dates, received reports and PDFs.
 - Hand-entered checks, with a certificate upload on Pro (decision D6).
 - Remove a site link to stop automatic filing.
@@ -1172,7 +1207,8 @@ step:
 - Events: `checkout.session.completed`, `customer.subscription.created`, `.updated` and
   `.deleted`, `invoice.payment_failed` and `invoice.paid`.
 - Set Stripe's retries to finish within 7 days.
-- Connect the sign-up add-on choices (B5) to checkout.
+- Connect the sign-up add-on choices (B5) to checkout, and show their prices. Choices made
+  before this are in `teams.addons_wanted`.
 - Connect the upgrade sheet (B4): `startUpgrade()` in `src/lib/entitlements.js` goes to
   checkout, for Pro, extra seats or a pack, and coming back having paid calls `afterUpgrade()`.
 
@@ -1206,6 +1242,9 @@ starter pack.
 
 - Prices are final, and the webhook has been tested end to end in Stripe's test mode.
 - M.D. has deployed `send-invite` as changed in B4, so a full team gets the upgrade sheet.
+- Retire `create_team()` and the AV fallback in `provision_team()`, in a new migration. The
+  app stopped calling it at B5. Point the test suites that still use it at
+  `create_organisation()` first.
 - With M.D.'s go-ahead: `update public.app_settings set enforce_limits = true;`
 
 ### Phase F — Reminders (M.D.'s note in 2.8)
@@ -1309,6 +1348,10 @@ Northern Territory, and for Queensland's electrical check:
   the device until then, but there's no site page left to open it from.
 - The usage line is only as fresh as the last read, so it can lag behind a visit started on
   another device. Nothing depends on it: Start always asks the database.
+- Only owners and admins can delete a report record, but any member can still reopen a
+  finished visit or delete a whole visit, with its records, by calling the database directly.
+  The screens don't offer either to a member. Reopening keeps the first completion date, and
+  a deleted visit's inspection isn't given back.
 
 ## 7. Sources for the pack lists
 

@@ -85,6 +85,7 @@ All additive, all with defaults, so every existing row reads exactly as before.
 | `teams` | `account_type` provider · landlord · agency | which side of a delivery a team is on. Column-locked: the app can still rename and describe a team and nothing else |
 | `visits.kind`, `team_templates.kind` | CHECK list → foreign key to `workflows` | the next state's rules is one INSERT, not an ALTER |
 | `teams` | `import_open_until`, `import_used_at`; `invite_code` lengthened to 12 characters (60 bits) | the owner's one-time window for importing older work; a join code too long to guess |
+| `teams` (0008) | `state`, `addons_wanted` | which state a new electrical team is in, for giving it that state's pack when one is released; add-ons picked at sign-up, noted until billing exists |
 | `team_invites` | `invitee_name`, `cancelled_at`, `cancel_reason` | the notice can name who lost the last seat |
 | `clients` | `contact_name`, `contact_email`, `contact_phone`, `reminders_enabled` | who gets the report and the re-check reminder, and whether they get reminders |
 | `team_settings` | `reminders_enabled` | reminders off for the whole team (admins) |
@@ -189,9 +190,9 @@ publishable key in the bundle. Anything React hides, the REST API still answers.
 
 | RPC | Who | Does |
 |---|---|---|
-| `create_organisation(name, account_type, pack_id)` | anyone signed in | the new onboarding; wraps `create_team()` |
+| `create_organisation(name, account_type, pack_id, description, state, addons)` | anyone signed in | the sign-up screen (0008); wraps 0006's four-argument one, which wraps `create_team()` |
 | `choose_starter_pack(team, pack)` | owner/admin | pick or swap the starter |
-| `team_entitlements(team)` | members | plan, limits, usage, packs, `enforced` — for upgrade prompts and nav |
+| `team_entitlements(team)` | members | plan, limits, usage, packs, `enforced`, and which pack is the starter and whether it has been used — for upgrade prompts and nav |
 | `open_import_window(team)` | owner | opens the one-time, 15-minute window for importing older work |
 | `send_report(visit, email, snapshot, file_path)` | provider members | records a delivery; address, provider name and sign-off come from the DB, not the client |
 | `report_preview(token)` | anyone with the link | `status` ok · expired · saved; content only while ok, else just the provider's name |

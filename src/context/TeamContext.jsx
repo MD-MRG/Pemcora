@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
+import * as api from '../lib/api.js'
 import { prefs } from '../lib/prefs.js'
 import { isNetworkFailure } from '../lib/saveErrors.js'
 import { useAuth } from './auth.js'
@@ -106,15 +107,18 @@ export function TeamProvider({ children }) {
     [],
   )
 
-  const createTeam = useCallback(
-    async (name, description) => {
-      const { data, error: e } = await supabase.rpc('create_team', {
-        p_name: name,
-        p_description: description ?? '',
-      })
-      if (e) return { error: e }
-      await refresh()
-      return { data }
+  const createOrganisation = useCallback(
+    async details => {
+      try {
+        const data = await api.createOrganisation(details)
+        await refresh()
+        return { data }
+      } catch (e) {
+        // The team may have been made and only the answer lost. Looking now means
+        // trying again doesn't make a second one.
+        if (isNetworkFailure(e)) await refresh({ quietly: true })
+        return { error: e }
+      }
     },
     [refresh],
   )
@@ -130,7 +134,7 @@ export function TeamProvider({ children }) {
     isOwner: role === 'owner',
     isAdmin: role === 'owner' || role === 'admin',
     refresh,
-    createTeam,
+    createOrganisation,
     setActiveTeam,
   }
   return <TeamContext.Provider value={value}>{children}</TeamContext.Provider>

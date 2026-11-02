@@ -247,8 +247,18 @@ export class FakeServer {
         cancelAt: null,
         importUsed: false,
         openVisits: [...this.visits.values()].filter(v => !v.completedAt).length,
+        starterPack: null,
+        starterInUse: false,
         ...this.plan,
       }),
+
+      chooseStarterPack: async (_team, packId) => {
+        if (this.plan.starterInUse) {
+          throw pg('PT402', 'This team already has work under its current pack, so it cannot be swapped.', 'upgrade')
+        }
+        this.plan = { ...this.plan, starterPack: packId, packs: ['core', packId] }
+        this.packRefused.clear()
+      },
 
       saveMemberPrefs: async (_team, _user, patch) => {
         this.prefs = { ...this.prefs, ...patch }
