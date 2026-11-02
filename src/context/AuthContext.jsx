@@ -127,7 +127,9 @@ export function AuthProvider({ children }) {
       // token, then give up before doing anything. Signing out has to work regardless:
       // the stored login goes, and the token runs out by itself.
       const reachable = navigator.onLine !== false && !session?.offline
-      const result = reachable ? await supabase.auth.signOut() : { error: null }
+      // This device only. Left to itself the library ends the login on every device,
+      // which signs the same person out of a phone mid-visit.
+      const result = reachable ? await supabase.auth.signOut({ scope: 'local' }) : { error: null }
       if (!reachable || result.error) localStorage.removeItem(supabase.auth.storageKey)
       prefs.setLastUser(null)
       prefs.setLastTeams(null, null)

@@ -415,6 +415,10 @@ try {
       }),
   )
   log(left === 0, 'with nothing unsaved, it leaves no copy on the device', `${left}`)
+  // This suite's own login is another device's. Renewing it asks the real Auth server
+  // whether that login is still alive.
+  const renewed = await sb.auth.refreshSession()
+  log(!renewed.error && !!renewed.data.session, 'and the same account stays signed in on its other devices', renewed.error?.message)
 } catch (e) {
   log(false, 'suite threw before finishing', e.message)
 } finally {

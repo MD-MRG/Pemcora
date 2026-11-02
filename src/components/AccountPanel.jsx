@@ -63,15 +63,15 @@ export function AccountCard({ email, teamName, role, onCheck, onSignOut }) {
           in an embedded webview and the button would silently do nothing. */}
       {asking === 'saved' && (
         <ConfirmDialog
-          title="Sign out of Pemcora?"
+          title="Sign out on this device?"
           confirmLabel="Sign out"
           cancelLabel="Stay signed in"
           onCancel={() => setAsking(null)}
           onConfirm={() => onSignOut({ keep: false })}
         >
           Everything you have entered is already saved to your team, and the copy on this device is
-          wiped. You will need your password to sign back in, so do not do this mid-visit on a site
-          with no signal.
+          wiped. Your other devices stay signed in. You will need your password to sign back in, so
+          do not do this mid-visit on a site with no signal.
         </ConfirmDialog>
       )}
 
@@ -87,7 +87,7 @@ export function AccountCard({ email, teamName, role, onCheck, onSignOut }) {
         >
           It only exists on this device. If you keep it, it stays here and is sent the next time you
           sign in on this device, but anyone using this browser could read it. If you discard it, it
-          is gone for good.
+          is gone for good. Your other devices stay signed in.
         </ConfirmDialog>
       )}
     </section>

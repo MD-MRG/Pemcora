@@ -58,6 +58,7 @@ use more tokens. `max` can overthink, so keep it for review passes.
 | B3 offline and multiple devices | `xhigh` | the hardest app change; a mistake here loses field data |
 | C1 workflow page | `high` | shared by every workflow, including today's AV visits |
 | C2–C4 equipment, settings, Due page | `medium` | screens on top of finished database functions |
+| C5 signed-in devices | `xhigh` | it ends logins: a mistake signs someone else out, or leaves a lost device signed in |
 | D1 PDF builder | `medium` | mostly layout |
 | D2–D3 sending, report links and saving | `xhigh` | public links, short-lived file links and the email check protect landlords' data |
 | D4 landlord side | `medium` | screens on top of finished functions |
@@ -985,6 +986,13 @@ step:
   reopened it for a correction, kept its own finished copy when the database handed it the
   open one. Its next save finished the visit again and sent its old answers back over the
   correction. It now keeps the database's copy. `tests/save-queue.mjs` covers it.
+- Found by the second live run: Sign out ended the person's login on every device, because
+  the login library does that unless told otherwise. Signing out of the office PC signed the
+  same person out of a phone mid-visit within the hour. It now ends this device's login only
+  (M.D.'s decision, 3 November), and the dialog says the other devices stay signed in.
+  `tests/offline-open.mjs` holds the app to it, and `tests/offline-e2e.mjs` checks against the
+  real Auth server that the account's other logins still renew. Signing out a lost device from
+  another one is step C5.
 
 #### B3b. Opening with no signal
 
@@ -1157,6 +1165,46 @@ step:
   "no longer needed". It takes that from `reminder_opted_out()`, not from the check's own
   switch, which a team can make read "on" again by re-creating the check while the
   contact's email is blank.
+
+#### C5. Signed-in devices (M.D.'s note)
+
+**M.D.'s note (3 November):** Sign out ends the login on the device it's pressed on. Each
+person needs to see which devices are signed in to their account and sign one out from
+another: a phone or tablet that was lost, or a laptop or PC that was lost, stolen or damaged.
+
+- A "Signed-in devices" list on the Account card in Settings, one row per login:
+  - what it is, from the login's browser details, such as "Safari on iPhone" or "Edge on
+    Windows"
+  - when it signed in, and when it was last used
+  - "This device" on the one in use, matched by the `session_id` in its login token
+- Each other row has "Sign out", which asks first and names the device. There's also "Sign
+  out all other devices", which is `supabase.auth.signOut({ scope: 'others' })` and needs
+  no new function.
+- Two new database functions, in a new migration:
+  - `my_devices()` reads the caller's own rows from `auth.sessions`, which no client can
+    read. It returns the id, browser details, signed-in and last-used times, and nothing
+    else: no tokens and no IP address.
+  - `end_device(p_session_id)` deletes one of the caller's own logins and refuses anyone
+    else's. Deleting a session row deletes its refresh tokens with it (the live project's
+    foreign key is `on delete cascade`, checked 3 November), so that device can't renew.
+  - Both are `SECURITY DEFINER` with a fixed `search_path`, granted to `authenticated` only
+    and revoked from `public` and `anon`.
+- What it can't do, said on the screen and in section 6:
+  - The device's current login token keeps working until it runs out, up to an hour (the
+    project's token lifetime). A shorter lifetime narrows that window; making it immediate
+    would mean checking the session on every request.
+  - A device that never connects again keeps what it held. B3b opens the app with no signal,
+    so a lost laptop that stays offline still shows the team's data that was on it.
+- When the app finds its login was ended elsewhere, it goes to the sign-in screen and wipes
+  its copy of the team's data (decision D12 covers unsaved work). It tells this from the Auth
+  server's error code when renewing, never from the message text. A renewal that fails for
+  want of a connection is still B3b's case and changes nothing.
+- Done when:
+  - the SQL suite shows a person can list and end only their own logins, and that signed out
+    nobody can call either function
+  - an app suite covers the list, both sign-outs, and a device finding it was signed out
+  - a live run with two logins ends one from the other: the ended one can't renew and the
+    other still can
 
 ### Phase D — Reports and landlords
 
@@ -1341,6 +1389,7 @@ Northern Territory, and for Queensland's electrical check:
 | D9 | Who can upgrade and manage billing | owners and admins |
 | D10 | Store lease dates for Queensland rentals (due within 30 days before each lease) | not yet; the 12-month repeat stands in |
 | D11 | One person running several Free teams, each with its own inspection a month | allowed, since limits are per team; revisit before E6 |
+| D12 | Unsaved work on a device that finds it was signed out from another device (C5) | kept for the next sign-in there, as Sign out's "Keep it" does, since it exists nowhere else; confirm with M.D. at C5 |
 
 ## 6. Known limits
 
@@ -1363,6 +1412,10 @@ Northern Territory, and for Queensland's electrical check:
   finished visit or delete a whole visit, with its records, by calling the database directly.
   The screens don't offer either to a member. Reopening keeps the first completion date, and
   a deleted visit's inspection isn't given back.
+- Until step C5, a lost device can't be signed out from another one: Sign out ends only the
+  device it's pressed on. M.D. can end every login of one account in the SQL editor with
+  `delete from auth.sessions where user_id = (select id from auth.users where email = '…');`.
+  That device's current token still works for up to an hour.
 
 ## 7. Sources for the pack lists
 

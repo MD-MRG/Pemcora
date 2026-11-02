@@ -537,6 +537,33 @@ try {
       release()
       await ctx.close()
     }
+    {
+      // Signing out with a connection, through the real login library. The same person
+      // may be mid-visit on a phone, so it ends this device's login and no other.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page, { copy: false })
+      await signedIn(page)
+      await answering(ctx, respond => respond(200, row()), { data: true })
+      const logouts = []
+      await ctx.route(`${BACKEND}/auth/v1/logout*`, route => {
+        if (route.request().method() === 'OPTIONS') return route.fallback()
+        logouts.push(new URL(route.request().url()).searchParams.get('scope'))
+        return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*' } })
+      })
+      await page.reload({ waitUntil: 'load' })
+      await until(async () => (await page.locator('nav a').count()) >= 7)
+      await page.locator('nav a').filter({ hasText: 'Settings' }).click()
+      await page.getByRole('button', { name: 'Sign out' }).click()
+      log('signing out says it is for this device',
+        await until(async () => /other devices stay signed in/.test(await page.getByRole('dialog').textContent().catch(() => ''))))
+      // Whichever of the two questions it asks, the last button signs out.
+      await page.getByRole('dialog').getByRole('button', { name: /sign out/i }).last().click()
+      log('with a connection, signing out reaches the database',
+        await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1) && logouts.length === 1,
+        `${logouts.length}`)
+      log('and ends this device\'s login, not every device\'s', logouts.join() === 'local', logouts.join())
+      await ctx.close()
+    }
   }
 
   // ── Never loaded here ─────────────────────────────────────────────────────
