@@ -11,10 +11,14 @@ import {
   removeMember,
   moveMember,
   deleteAccount,
+  getEntitlements,
 } from '../lib/api.js'
+import { seatSheet } from '../lib/entitlements.js'
+import { classifySaveError } from '../lib/saveErrors.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { IconTrash } from '../components/icons.jsx'
 
 const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' }
@@ -63,7 +67,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
     try {
       setInvites(await listInvites(team.id))
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
   }, [team.id, onProblem])
 
@@ -77,7 +81,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       await updateTeam(team.id, { name: name.trim(), description: description.trim() })
       await onChanged()
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
     setBusy(false)
   }
@@ -92,7 +96,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       setCopied(false)
       await loadInvites()
     } catch (e2) {
-      onProblem(e2.message)
+      onProblem(e2, team)
     }
     setBusy(false)
   }
@@ -102,7 +106,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       await revokeInvite(id)
       await loadInvites()
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
   }
 
@@ -283,14 +287,15 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
   const editable = isOwnerOf && !isSelf && member.role !== 'owner'
   const elsewhere = teams.filter(t => t.id !== member.teamId && t.role === 'owner')
 
-  const run = async (fn, after) => {
+  const run = async (fn, after, intoTeam) => {
     setBusy(true)
     try {
       await fn()
       setConfirming(null)
       await after()
     } catch (e) {
-      onProblem(e.message)
+      setConfirming(null)
+      onProblem(e, intoTeam)
       setBusy(false)
     }
   }
@@ -412,7 +417,11 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
               cancelLabel="Cancel"
               onCancel={() => setConfirming(null)}
               onConfirm={() =>
-                run(() => moveMember(member.userId, member.teamId, moveTo), onChanged)
+                run(
+                  () => moveMember(member.userId, member.teamId, moveTo),
+                  onChanged,
+                  teams.find(t => t.id === moveTo),
+                )
               }
             >
               <label className="block">
@@ -454,8 +463,18 @@ export default function Teams() {
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [creating, setCreating] = useState(false)
+  const [sheet, setSheet] = useState(null)
 
-  const onProblem = useCallback(message => setProblem(message), [])
+  // A team with no seat left gets the upgrade sheet, told by the code and never the
+  // message. Anything else says what went wrong. `intoTeam` is the team that refused.
+  const onProblem = useCallback(async (e, intoTeam) => {
+    if (classifySaveError(e) !== 'upgrade') {
+      setProblem(e.message)
+      return
+    }
+    const plan = intoTeam ? await getEntitlements(intoTeam.id).catch(() => null) : null
+    setSheet(seatSheet(intoTeam?.name, plan))
+  }, [])
 
   const loadMembers = useCallback(async () => {
     if (!session) return
@@ -514,6 +533,8 @@ export default function Teams() {
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
+      {sheet && <UpgradeSheet sheet={sheet} onClose={() => setSheet(null)} />}
+
       {problem && (
         <Notice blocked title={problem}>
           <button

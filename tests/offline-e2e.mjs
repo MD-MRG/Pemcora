@@ -146,6 +146,14 @@ try {
   await goToSite(a.page)
   await goToSite(b.page)
 
+  // ── What the team has (step B4) ───────────────────────────────────────────
+  const seen = await a.page.evaluate(async id => (await import('/src/lib/api.js')).getEntitlements(id), team.id)
+  log(seen?.accountType === 'provider' && seen.packs.includes('core') && seen.packs.includes('av'),
+    'the real team_entitlements() reaches the app, and a team made today holds AV', JSON.stringify(seen))
+  log(seen?.enforced === false, 'with the limits still off')
+  log(typeof seen?.visitsUsed === 'number' && typeof seen?.seatsUsed === 'number' && typeof seen?.isPro === 'boolean',
+    'in the shape the app expects')
+
   // ── Starting online, on two devices ──────────────────────────────────────
   await start(a.page)
   log(await until(async () => !!(await openRow())), 'the visit reaches the database')
@@ -269,7 +277,8 @@ try {
 
   await a.ctx.route('**/rest/v1/visits?*', refuse)
   await start(a.page)
-  log(await until(async () => /1 inspection a month/.test(await mainText(a.page))), 'refused online: it says why')
+  log(await until(async () => /free inspection/.test(await a.page.getByRole('dialog').textContent().catch(() => ''))), 'refused online: the upgrade sheet says why')
+  await a.page.getByRole('dialog').getByRole('button', { name: 'Not now' }).click()
   log((await a.page.getByRole('button', { name: /^Start new visit$/ }).count()) === 1, 'and nothing opened')
 
   await a.ctx.setOffline(true)

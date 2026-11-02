@@ -87,9 +87,11 @@ Deno.serve(async req => {
     p_team_id: body.teamId,
     p_email: body.email,
   })
-  if (error) return json({ error: error.message }, 400)
+  // The code and hint go back with it: they're how the app tells a full team, which
+  // gets the upgrade sheet, from any other refusal.
+  if (error) return json({ error: error.message, code: error.code, hint: error.hint }, 400)
 
-  const link = `${base}?invite=${encodeURIComponent(invite.token)}`
+  const link =`${base}?invite=${encodeURIComponent(invite.token)}`
 
   const { data: team } = await caller.from('teams').select('name').eq('id', body.teamId).single()
   const { data: auth } = await caller.auth.getUser()

@@ -48,16 +48,19 @@ export default function ConfirmDialog({
               {alternativeLabel}
             </button>
           )}
-          <button
-            type="button"
-            autoFocus
-            onClick={onConfirm}
-            className={`min-h-[46px] rounded-lg px-5 text-[13.5px] font-semibold text-white ${
-              danger ? 'bg-fail hover:bg-[#a52717]' : 'bg-navy hover:bg-[#24486e]'
-            }`}
-          >
-            {confirmLabel}
-          </button>
+          {/* No label when there is nothing this person can do but read it. */}
+          {confirmLabel && (
+            <button
+              type="button"
+              autoFocus
+              onClick={onConfirm}
+              className={`min-h-[46px] rounded-lg px-5 text-[13.5px] font-semibold text-white ${
+                danger ? 'bg-fail hover:bg-[#a52717]' : 'bg-navy hover:bg-[#24486e]'
+              }`}
+            >
+              {confirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>

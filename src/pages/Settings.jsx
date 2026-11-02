@@ -8,6 +8,9 @@ import TemplateEditor from '../components/TemplateEditor.jsx'
 import ImportLocalData from '../components/ImportLocalData.jsx'
 import AccountPanel from '../components/AccountPanel.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
+import { useEntitlements } from '../context/team.js'
+import { holdsPack, isProvider } from '../lib/entitlements.js'
+import { workflow } from '../data/packs/index.js'
 
 const TEMPLATES = [
   {
@@ -74,6 +77,13 @@ export default function Settings() {
   const [settings, setSettings] = useState(() => getSettings())
   const [saveError, setSaveError] = useState('')
   const [templateKind, setTemplateKind] = useState('maintenance')
+
+  // Only the lists of the packs this team holds. A landlord or agency inspects
+  // nothing, so it has no lists and no technician to record.
+  const entitlements = useEntitlements()
+  const inspects = isProvider(entitlements)
+  const lists = TEMPLATES.filter(t => holdsPack(entitlements, workflow(t.kind).packId))
+  const shownKind = lists.some(t => t.kind === templateKind) ? templateKind : lists[0]?.kind
 
   const update = patch => {
     const { ok, settings: next } = saveSettings(patch)
@@ -176,54 +186,58 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="border-hair rounded-xl border bg-white p-6">
-        <h2 className="text-[19px] font-bold tracking-[-.01em]">Technician</h2>
-        <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
-          Recorded against each new visit and printed on its report. It can be changed on the visit
-          itself when a colleague attends.
-        </p>
-        <div className="mt-4 max-w-sm">
-          <Field
-            label="Default technician"
-            value={settings.technician}
-            onChange={v => update({ technician: v })}
-            placeholder="e.g. Michal Dolezal"
-          />
-        </div>
-      </section>
+      {inspects && (
+        <section className="border-hair rounded-xl border bg-white p-6">
+          <h2 className="text-[19px] font-bold tracking-[-.01em]">Technician</h2>
+          <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+            Recorded against each new visit and printed on its report. It can be changed on the visit
+            itself when a colleague attends.
+          </p>
+          <div className="mt-4 max-w-sm">
+            <Field
+              label="Default technician"
+              value={settings.technician}
+              onChange={v => update({ technician: v })}
+              placeholder="e.g. Michal Dolezal"
+            />
+          </div>
+        </section>
+      )}
 
-      <section className="border-hair rounded-xl border bg-white p-6">
-        <h2 className="text-[19px] font-bold tracking-[-.01em]">Test lists</h2>
-        <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
-          Each workflow keeps its own list. <b>Changes apply to new rooms only</b> — a room already
-          filled in keeps the tests it was completed with, so editing here can never rewrite work
-          that has been signed off.
-        </p>
+      {inspects && (
+        <section className="border-hair rounded-xl border bg-white p-6">
+          <h2 className="text-[19px] font-bold tracking-[-.01em]">Test lists</h2>
+          <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+            Each workflow keeps its own list. <b>Changes apply to new rooms only</b> — a room already
+            filled in keeps the tests it was completed with, so editing here can never rewrite work
+            that has been signed off.
+          </p>
 
-        <div className="border-hair mt-5 flex flex-wrap gap-1 border-b">
-          {TEMPLATES.map(t => (
-            <button
-              key={t.kind}
-              type="button"
-              onClick={() => setTemplateKind(t.kind)}
-              aria-pressed={templateKind === t.kind}
-              className={`-mb-px min-h-[42px] rounded-t-lg border-b-2 px-4 text-[13.5px] font-semibold ${
-                templateKind === t.kind
-                  ? 'border-navy text-navy'
-                  : 'text-ink-soft border-transparent hover:bg-slate-50'
-              }`}
-            >
-              {t.tab}
-            </button>
-          ))}
-        </div>
+          <div className="border-hair mt-5 flex flex-wrap gap-1 border-b">
+            {lists.map(t => (
+              <button
+                key={t.kind}
+                type="button"
+                onClick={() => setTemplateKind(t.kind)}
+                aria-pressed={shownKind === t.kind}
+                className={`-mb-px min-h-[42px] rounded-t-lg border-b-2 px-4 text-[13.5px] font-semibold ${
+                  shownKind === t.kind
+                    ? 'border-navy text-navy'
+                    : 'text-ink-soft border-transparent hover:bg-slate-50'
+                }`}
+              >
+                {t.tab}
+              </button>
+            ))}
+          </div>
 
-        <div className="mt-5">
-          {TEMPLATES.filter(t => t.kind === templateKind).map(t => (
-            <TemplateEditor key={t.kind} kind={t.kind} title={t.title} note={t.note} />
-          ))}
-        </div>
-      </section>
+          <div className="mt-5">
+            {lists.filter(t => t.kind === shownKind).map(t => (
+              <TemplateEditor key={t.kind} kind={t.kind} title={t.title} note={t.note} />
+            ))}
+          </div>
+        </section>
+      )}
 
       <ImportLocalData />
 

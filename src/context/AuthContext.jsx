@@ -66,6 +66,7 @@ export function AuthProvider({ children }) {
       } else if (event === 'SIGNED_OUT') {
         prefs.setLastUser(null)
         prefs.setLastTeams(null, null)
+        prefs.clearLastEntitlements()
       } else if (event === 'INITIAL_SESSION') {
         // The library reports null here when it just couldn't reach the server.
         // getSession() above knows the difference, and decides.
@@ -130,6 +131,7 @@ export function AuthProvider({ children }) {
       if (!reachable || result.error) localStorage.removeItem(supabase.auth.storageKey)
       prefs.setLastUser(null)
       prefs.setLastTeams(null, null)
+      prefs.clearLastEntitlements()
       setSession(null)
       return result
     },

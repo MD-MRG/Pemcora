@@ -39,6 +39,8 @@ export class FakeServer {
     this.admin = true
     this.visitLimit = null // inspections left, when the plan limits are on
     this.counted = 0 // the monthly counter: goes up once per visit first saved
+    this.packRefused = new Set() // visit kinds whose pack this team doesn't hold
+    this.plan = {} // anything team_entitlements() should answer differently
     this.calls = []
     this.tick = 0
 
@@ -231,6 +233,23 @@ export class FakeServer {
       getTemplates: async () => this.templates,
       getMemberPrefs: async () => this.prefs,
 
+      getEntitlements: async () => ({
+        enforced: this.visitLimit !== null,
+        accountType: 'provider',
+        plan: 'free',
+        isPro: false,
+        seatLimit: 1,
+        seatsUsed: 1,
+        visitLimit: this.visitLimit,
+        visitsUsed: this.counted,
+        packs: ['core', 'av'],
+        pastDueUntil: null,
+        cancelAt: null,
+        importUsed: false,
+        openVisits: [...this.visits.values()].filter(v => !v.completedAt).length,
+        ...this.plan,
+      }),
+
       saveMemberPrefs: async (_team, _user, patch) => {
         this.prefs = { ...this.prefs, ...patch }
       },
@@ -343,6 +362,9 @@ export class FakeServer {
         // The pack and the dates are checked before the row goes in, and the
         // index answers as it goes in. Only then the counter, so joining an open
         // visit is never refused or counted.
+        if (this.packRefused.has(kind)) {
+          throw pg('PT402', `This team does not have the pack for ${kind}`, 'upgrade')
+        }
         this.checkDate('The visit\'s start date', startedAt)
         if (completedAt) this.checkDate('The visit\'s completion date', completedAt)
         if (!completedAt) {

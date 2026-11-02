@@ -997,6 +997,32 @@ step:
 - Done when: a team without a pack doesn't see its pages, and a 402 shows the upgrade sheet
   while any other error shows "Save failed".
 
+> **M.D.'s note (decided at B4):** while the limits are off, nothing talks about the
+> allowance: no usage line and no "Upgrade to start". Landlord and agency navigation gets its
+> three entries now, each with a holding page saying what will appear there. A visit refused
+> in the background never pops a sheet: the "Not saved" notice gets an "Upgrade" button. A
+> refusal right after pressing Start shows the sheet at once.
+
+- How it came out:
+  - **Hiding pages by pack doesn't depend on the limits.** It's about what a team does, not
+    what it pays. A hidden page's address goes Home, unless the team has visits of that kind
+    (2.3): then it opens so they can be read, and starting a new one gets the sheet.
+  - **"Upgrade to start" still asks the database.** A second device has to be able to join an
+    open visit with the allowance used up (2.5), and a refused attempt uses nothing. Offline,
+    it opens and is checked on reconnecting, like any offline start.
+  - **Not knowing hides nothing.** Until the first answer arrives, or on a project without
+    the function, every page shows. A device that has never seen the team's plan waits up to
+    3 seconds for it, so a landlord's first screen isn't an inspector's menu.
+  - **Allowance or pack** is told apart by what the team holds, never the message text.
+  - **Nobody can reach the sheet on the live site yet**, since nothing is refused until E6.
+    "Upgrade to Pro" calls `startUpgrade()` in `src/lib/entitlements.js`, and until E1
+    connects it to checkout it says upgrading isn't available yet. `afterUpgrade()` refreshes
+    the entitlements, saves what the plan refused and confirms "You're on Pro. Your visit is
+    saved." It's built and tested, and E1 calls it.
+  - **`send-invite` changed:** it now passes on the refusal's code and hint, which it used to
+    drop. Until M.D. deploys it, a full team gets the plain error message, not the sheet. That
+    can't happen until E6 either, so it's on the E6 list.
+
 #### B5. Sign-up (M.D.'s note in 2.3)
 
 - Team Setup calls `create_organisation()`.
@@ -1007,6 +1033,12 @@ step:
   selected by default, and "You can add packs any time."
 - Until billing exists (Phase E), the add-on choices are shown but only noted. Step E1
   connects them to checkout.
+- The upgrade sheet offers to swap the starter pack while the team hasn't used it (2.11),
+  using the same picker. B4 left that for here.
+- Decide with M.D. whether landlords and agencies can sign up before D4, since their pages
+  only say what's coming until then (Due in C4, Properties and Reports in D4).
+- "AV Service" is hard-coded under the name on the brand plate and the sign-in screen
+  (`BrandPlate.jsx`, `GateLayout.jsx`). It needs changing once a team that isn't AV can exist.
 - Close the older `SECURITY DEFINER` functions to signed-out callers, in a new migration on
   top of 0007. The A4 security advisor found `anon` can still call `all_members_overview`,
   `create_team`, `is_team_admin`, `is_team_member`, `is_team_owner`, `move_member`,
@@ -1141,6 +1173,8 @@ step:
   `.deleted`, `invoice.payment_failed` and `invoice.paid`.
 - Set Stripe's retries to finish within 7 days.
 - Connect the sign-up add-on choices (B5) to checkout.
+- Connect the upgrade sheet (B4): `startUpgrade()` in `src/lib/entitlements.js` goes to
+  checkout, for Pro, extra seats or a pack, and coming back having paid calls `afterUpgrade()`.
 
 #### E2. Downgrade (M.D.'s note in 2.6)
 
@@ -1151,12 +1185,14 @@ starter pack.
 #### E3. Cancellation (M.D.'s note in 2.6)
 
 - Cancellation only at the end of the paid period.
-- Banner: "Pro ends on [date]. Finish these open visits before then:" with the list.
+- Banner: "Pro ends on [date]. Finish these open visits before then:" with the list. Built
+  in B4.
 - Admin emails 7 days and 1 day before.
 
 #### E4. Declined card (M.D.'s note in 2.6)
 
-- Banner with the 7-day deadline and a link to update the card.
+- Banner with the 7-day deadline and a link to update the card. B4 built the banner, and
+  everyone in the team sees it. This adds the link, for owners and admins.
 - Admin emails on days 0, 3 and 6.
 - On day 7 the database treats the team as Free (A1 item 3).
 
@@ -1169,6 +1205,7 @@ starter pack.
 #### E6. Go live
 
 - Prices are final, and the webhook has been tested end to end in Stripe's test mode.
+- M.D. has deployed `send-invite` as changed in B4, so a full team gets the upgrade sheet.
 - With M.D.'s go-ahead: `update public.app_settings set enforce_limits = true;`
 
 ### Phase F — Reminders (M.D.'s note in 2.8)
@@ -1270,6 +1307,8 @@ Northern Territory, and for Queensland's electrical check:
   has sent its own. An open session doesn't refresh itself, online or off.
 - A refused visit whose site has since been deleted can only be discarded. Its data stays on
   the device until then, but there's no site page left to open it from.
+- The usage line is only as fresh as the last read, so it can lag behind a visit started on
+  another device. Nothing depends on it: Start always asks the database.
 
 ## 7. Sources for the pack lists
 

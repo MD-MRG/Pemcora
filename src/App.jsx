@@ -11,6 +11,7 @@ import PreventativeMaintenance from './pages/PreventativeMaintenance.jsx'
 import CustomList from './pages/CustomList.jsx'
 import Teams from './pages/Teams.jsx'
 import Settings from './pages/Settings.jsx'
+import ReceivingHolding from './pages/ReceivingHolding.jsx'
 
 // HashRouter: real URLs and a working back button, with no GitHub Pages
 // 404 rewrite needed and no dependency on the deploy sub-path.
@@ -33,6 +34,9 @@ export default function App() {
                 <Route path="/custom-list" element={<CustomList />} />
                 <Route path="/teams" element={<Teams />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/properties" element={<ReceivingHolding page="properties" />} />
+                <Route path="/reports" element={<ReceivingHolding page="reports" />} />
+                <Route path="/due" element={<ReceivingHolding page="due" />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>

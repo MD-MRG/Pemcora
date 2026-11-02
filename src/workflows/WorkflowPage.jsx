@@ -1,10 +1,11 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
 import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
-import { useCanManage } from '../context/team.js'
+import { useCanManage, useEntitlements } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
+import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { IconTrash } from '../components/icons.jsx'
 import {
@@ -34,6 +35,7 @@ import { downloadReport } from '../lib/report.js'
 import { isFail, MAIN } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
+import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
 
 const fmt = iso => (iso ? new Date(iso).toLocaleDateString() : '')
 
@@ -58,8 +60,9 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
+  const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
   return (
     <section className="border-hair mb-4 rounded-xl border bg-white p-5 shadow-sm">
@@ -88,6 +91,8 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, o
         </>
       )}
 
+      {usage && <p className="text-ink-soft mt-1 text-[13px] tabular-nums">{usage}</p>}
+
       {visit && (
         <label className="mt-4 block max-w-xs">
           <span className="text-ink-soft mb-1.5 block text-[12.5px] font-semibold">Technician</span>
@@ -108,7 +113,7 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, o
           disabled={starting}
           className="bg-navy min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-[#24486e] disabled:opacity-60"
         >
-          {starting ? 'Starting…' : open ? 'Continue' : visit ? config.newLabel : config.startLabel}
+          {starting ? 'Starting…' : open ? 'Continue' : startLabel}
         </button>
         {open && (
           <button
@@ -285,6 +290,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [starting, setStarting] = useState(false)
   const [startNote, setStartNote] = useState(null)
   const [askDiscard, setAskDiscard] = useState(null)
+  const [sheet, setSheet] = useState(null)
+  const entitlements = useEntitlements()
 
   // A save in the background can refuse a visit or join it to another device's,
   // and this page has to show that without anyone touching it.
@@ -343,9 +350,13 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
 
       {startNote && (!startNote.whileOffline || offline) && (
         <div className="mb-4">
-          <Notice blocked={startNote.blocked} title={startNote.title} />
+          <Notice blocked={startNote.blocked} title={startNote.title}>
+            {startNote.detail}
+          </Notice>
         </div>
       )}
+
+      {sheet && <UpgradeSheet sheet={sheet} onClose={() => setSheet(null)} />}
 
       {refused.map(v => (
         <div key={v.id} className="mb-4">
@@ -353,6 +364,17 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
             <p>{held[v.id].message}</p>
             <p className="mt-1">It stays on this device, and everything else keeps saving.</p>
             <div className="mt-3 flex flex-wrap gap-2">
+              {/* Never a sheet by itself: this can be refused minutes after it was
+                  started, in the middle of something else. */}
+              {held[v.id].reason === 'upgrade' && (
+                <button
+                  type="button"
+                  onClick={() => setSheet(visitSheet(entitlements, config.kind))}
+                  className="bg-navy min-h-[42px] rounded-lg px-4 text-[13.5px] font-semibold text-white hover:bg-[#24486e]"
+                >
+                  Upgrade
+                </button>
+              )}
               <button
                 type="button"
                 onClick={async () => {
@@ -399,6 +421,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         roomCount={rooms.length}
         doneCount={done}
         starting={starting}
+        usage={usageLine(entitlements)}
+        needsUpgrade={startNeedsUpgrade(entitlements, config.kind)}
         onStart={async () => {
           setStarting(true)
           setStartNote(null)
@@ -408,10 +432,14 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
             config.kind,
             getSettings().technician ?? '',
           )
-          setStarting(false)
-          if (started.outcome === 'refused') {
-            // Step B4 turns a plan refusal into the upgrade sheet.
-            setStartNote({ blocked: true, title: started.message })
+          // It used up an inspection, or this device's idea of what's left was out of
+          // date. "Upgrade to start" asked the database just the same, because a second
+          // device can join an open visit with the allowance used up (2.5).
+          const fresh = refreshEntitlements()
+          if (started.outcome === 'refused' && started.reason === 'upgrade') {
+            setSheet(visitSheet(await fresh, config.kind))
+          } else if (started.outcome === 'refused') {
+            setStartNote({ blocked: true, title: 'Save failed', detail: started.message })
           } else if (started.outcome === 'correction') {
             setStartNote({
               blocked: true,
@@ -426,6 +454,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
               title: 'Started on this device. It will be checked when the connection returns.',
             })
           }
+          setStarting(false)
           onChanged()
         }}
         onContinue={() => {

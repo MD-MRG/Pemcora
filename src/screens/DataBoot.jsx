@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { hydrate, pushStoredCopy, resetCache, flush } from '../lib/cache.js'
 import { supabaseAdapter } from '../lib/adapters/supabase.js'
+import {
+  closeEntitlements,
+  currentEntitlements,
+  openEntitlements,
+  refreshEntitlements,
+} from '../lib/entitlements.js'
 import { deviceCopies, removeCopy, unsavedCopies } from '../lib/offlineStore.js'
 import { isNetworkFailure } from '../lib/saveErrors.js'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
+
+// A device that has never seen this team's plan waits a moment for it, so a landlord's
+// first screen isn't an inspector's menu. Not for long, because not knowing it hides
+// nothing and the database decides everything anyway.
+const ENTITLEMENTS_PATIENCE = 3000
 
 // Work left on this device under another of this person's teams: they switched
 // away from it with no signal. It goes when it can. Refused or failing work stays
@@ -51,10 +62,16 @@ export default function DataBoot({ children }) {
     // Clear first: switching accounts must not show the previous team's data
     // for the moment before the new load lands.
     resetCache()
-    hydrate(supabaseAdapter(team.id, user?.id), {
+    const reading = openEntitlements(team.id, user?.id)
+    const firstAnswer =
+      currentEntitlements() || openedFromDevice.current
+        ? null
+        : Promise.race([reading, new Promise(resolve => setTimeout(resolve, ENTITLEMENTS_PATIENCE))])
+    const loading = hydrate(supabaseAdapter(team.id, user?.id), {
       device: deviceCopies(user?.id, team.id),
       ...(openedFromDevice.current ? { patience: 1000, expectOffline: true } : {}),
     })
+    Promise.all([loading, firstAnswer])
       .then(() => {
         if (!alive) return
         setState('ready')
@@ -68,8 +85,15 @@ export default function DataBoot({ children }) {
     return () => {
       alive = false
       resetCache()
+      closeEntitlements()
     }
   }, [team.id, user?.id, attempt])
+
+  // Back online: what this device knows about the plan may be out of date.
+  useEffect(() => {
+    window.addEventListener('online', refreshEntitlements)
+    return () => window.removeEventListener('online', refreshEntitlements)
+  }, [])
 
   // Pending edits are debounced, so this is the last chance to send them before
   // a close or a reload. If it doesn't finish, they are on the device already and

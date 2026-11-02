@@ -7,10 +7,28 @@ import {
   IconList,
   IconTeams,
   IconSettings,
+  IconProperties,
+  IconReports,
+  IconDue,
 } from './components/icons.jsx'
+import { workflow } from './data/packs/index.js'
+import { holdsPack, isProvider } from './lib/entitlements.js'
+
+const TEAMS = {
+  key: 'teams',
+  label: 'Teams',
+  path: '/teams',
+  icon: IconTeams,
+  blurb: 'Your teams, who is in them, and who they are still waiting on',
+  pack: 'core',
+  // Owners and admins only. SideNav filters on this; the page refuses on its
+  // own account too, since a nav that merely hides a link is not a lock.
+  admin: true,
+}
 
 // Single source of truth for navigation, routes and page headings.
-// `blurb` shows in the context bar under the title.
+// `blurb` shows in the context bar under the title. `pack` is what a team has to
+// hold to see the page, and a page that runs a workflow says which.
 export const MAIN_NAV = [
   {
     key: 'home',
@@ -18,6 +36,7 @@ export const MAIN_NAV = [
     path: '/',
     icon: IconHome,
     blurb: 'Work in progress, anything needing attention, and your team totals',
+    pack: 'core',
   },
   {
     key: 'new-client',
@@ -25,6 +44,7 @@ export const MAIN_NAV = [
     path: '/new-client',
     icon: IconClientNew,
     blurb: 'Create a client record with its sites and contacts',
+    pack: 'core',
   },
   {
     key: 'edit-client',
@@ -32,6 +52,7 @@ export const MAIN_NAV = [
     path: '/edit-client',
     icon: IconClientEdit,
     blurb: 'Find a client and amend their details, sites and contacts',
+    pack: 'core',
   },
   {
     key: 'commissioning',
@@ -39,6 +60,8 @@ export const MAIN_NAV = [
     path: '/commissioning',
     icon: IconCommissioning,
     blurb: 'Per-room device checks, firmware and signal verification, sign-off',
+    workflow: 'commissioning',
+    pack: workflow('commissioning').packId,
   },
   {
     key: 'maintenance',
@@ -46,6 +69,8 @@ export const MAIN_NAV = [
     path: '/maintenance',
     icon: IconMaintenance,
     blurb: 'Room-by-room PM visits, faults raised, and the report that goes out',
+    workflow: 'maintenance',
+    pack: workflow('maintenance').packId,
   },
   {
     key: 'custom-list',
@@ -53,18 +78,41 @@ export const MAIN_NAV = [
     path: '/custom-list',
     icon: IconList,
     blurb: 'Build a one-off checklist from your own test items',
+    workflow: 'custom',
+    pack: workflow('custom').packId,
+  },
+  TEAMS,
+]
+
+// Landlords and agencies receive reports rather than carry out inspections, so they
+// get their own pages. A team's type is fixed when it's created (2.3).
+const RECEIVING_PAGES = [
+  {
+    key: 'properties',
+    label: 'Properties',
+    path: '/properties',
+    icon: IconProperties,
+    blurb: 'Your properties, what is due at each one, and the reports on file',
   },
   {
-    key: 'teams',
-    label: 'Teams',
-    path: '/teams',
-    icon: IconTeams,
-    blurb: 'Your teams, who is in them, and who they are still waiting on',
-    // Owners and admins only. SideNav filters on this; the page refuses on its
-    // own account too, since a nav that merely hides a link is not a lock.
-    admin: true,
+    key: 'reports',
+    label: 'Reports',
+    path: '/reports',
+    icon: IconReports,
+    blurb: 'Reports your providers have sent you',
+  },
+  {
+    key: 'due',
+    label: 'Due',
+    path: '/due',
+    icon: IconDue,
+    blurb: 'Checks that are overdue or coming up across your properties',
   },
 ]
+
+export const RECEIVING_NAV = [...RECEIVING_PAGES, TEAMS]
+
+const RECEIVING_HOME = RECEIVING_PAGES[0].path
 
 // Pinned below a divider — utility rather than day-to-day work.
 export const FOOT_NAV = [
@@ -77,7 +125,30 @@ export const FOOT_NAV = [
   },
 ]
 
-export const ALL_NAV = [...MAIN_NAV, ...FOOT_NAV]
+export const ALL_NAV = [...MAIN_NAV, ...RECEIVING_PAGES, ...FOOT_NAV]
 
 export const navByPath = path =>
   ALL_NAV.find(n => n.path === path) ?? ALL_NAV.find(n => n.path === '/')
+
+/** The main navigation this team sees. Not knowing what it has hides nothing. */
+export const navFor = entitlements =>
+  isProvider(entitlements)
+    ? MAIN_NAV.filter(item => holdsPack(entitlements, item.pack))
+    : RECEIVING_NAV
+
+/**
+ * Where an address sends this team instead, or null to open it.
+ *
+ * A pack's pages are hidden from a team without it, but losing an add-on must not
+ * lose the work done under it (2.3): with visits of that kind on record, the page
+ * opens so they can be read, and starting a new one is what gets refused.
+ */
+export function redirectFor(path, entitlements, hasVisitsOfKind) {
+  const item = ALL_NAV.find(n => n.path === path)
+  if (!entitlements || !item || item === TEAMS || FOOT_NAV.includes(item)) return null
+
+  if (!isProvider(entitlements)) return RECEIVING_PAGES.includes(item) ? null : RECEIVING_HOME
+  // A landlord's pages name no pack, so no inspecting team holds them.
+  if (holdsPack(entitlements, item.pack)) return null
+  return item.workflow && hasVisitsOfKind(item.workflow) ? null : '/'
+}

@@ -85,6 +85,29 @@ export const IconSettings = p => (
   </Svg>
 )
 
+export const IconProperties = p => (
+  <Svg {...p}>
+    <path d="M5 21V5.2A1.7 1.7 0 0 1 6.7 3.5h6.6A1.7 1.7 0 0 1 15 5.2V21" />
+    <path d="M15 10.5h2.8A1.7 1.7 0 0 1 19.5 12.2V21" />
+    <path d="M3 21h18M8.5 7.5h3M8.5 11.5h3M8.5 15.5h3" />
+  </Svg>
+)
+
+export const IconReports = p => (
+  <Svg {...p}>
+    <path d="M13.8 3.5H7.2a1.7 1.7 0 0 0-1.7 1.7v13.6a1.7 1.7 0 0 0 1.7 1.7h9.6a1.7 1.7 0 0 0 1.7-1.7V8.2Z" />
+    <path d="M13.8 3.5v4.7h4.7M9 13h6M9 16.5h6" />
+  </Svg>
+)
+
+export const IconDue = p => (
+  <Svg {...p}>
+    <rect x="4" y="5.2" width="16" height="15.3" rx="1.8" />
+    <path d="M4 10h16M8.5 3.2v3.6M15.5 3.2v3.6" />
+    <path d="m9.2 15.2 2 2 3.6-3.8" />
+  </Svg>
+)
+
 export const IconChevron = ({ size = 18, dir = 'left', ...rest }) => (
   <Svg size={size} {...rest} style={{ transform: dir === 'right' ? 'rotate(180deg)' : undefined }}>
     <path d="M14.5 5.5 8 12l6.5 6.5" />

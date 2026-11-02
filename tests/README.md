@@ -70,8 +70,8 @@ visit continued the next day, two devices on the same visit, a refused offline s
 service worker, so it builds one under `node_modules/.cache` (not `dist/`) and serves it
 itself, with a backend address that doesn't exist, so nothing can reach the live project.
 It covers an expired login, working a whole visit and exporting its report with no
-connection, a network that goes nowhere, signing out offline, and a deploy getting through
-(34 checks). The suite runs in `npm test`, or on its own with no dev server:
+connection, a network that goes nowhere, signing out offline, a deploy getting through, and
+how the app reads what a team has (44 checks). The suite runs in `npm test`, or on its own with no dev server:
 
 ```
 node tests/offline-open.mjs
@@ -92,6 +92,24 @@ of its own and deletes it at the end. It needs the dev server and a confirmed ac
 ```
 node tests/offline-e2e.mjs <email> <password>
 ```
+
+## What a team has
+
+`entitlements.mjs` is step B4. It runs the rules and the store in Node, then the real screens
+in a browser against the stand-in: pages hidden by pack, a landlord's own navigation, the usage
+line, the upgrade sheet, the banners, and what happens after paying. A refusal has to be told
+by its code, so it checks that a 402 saying anything gets the sheet and anything else saying
+"upgrade" doesn't (187 checks). The Teams page and who to ask need a signed-in team, so
+`fixtures/mount-plan-pages.jsx` puts them on the page with one, with real requests behind them.
+Those checks need `VITE_SUPABASE_URL` in `.env` and are skipped without it.
+
+```
+node tests/entitlements.mjs
+```
+
+`offline-open.mjs` checks how `DataBoot` reads them in a production build, since test mode
+never runs it: with a good login, with no signal, with no such function on the project, and
+with an answer that never comes. `offline-e2e.mjs` checks the real `team_entitlements()`.
 
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 

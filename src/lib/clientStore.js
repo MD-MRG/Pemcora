@@ -257,6 +257,12 @@ export function listVisits(clientId, locationId, kind = MAINTENANCE_KIND) {
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))) // newest first
 }
 
+/** Has this team any visit of this kind on record, at any site? */
+export const hasVisitsOfKind = kind =>
+  read().some(client =>
+    client.locations.some(location => (location.visits ?? []).some(v => kindOf(v) === kind)),
+  )
+
 export function openVisit(clientId, locationId, kind = MAINTENANCE_KIND) {
   return listVisits(clientId, locationId, kind).find(v => !v.completedAt) ?? null
 }

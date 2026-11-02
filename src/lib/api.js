@@ -283,6 +283,32 @@ export async function saveMemberPrefs(teamId, userId, patch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Entitlements
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Null if this person isn't in the team. A null limit is no limit.
+export async function getEntitlements(teamId) {
+  const { data, error } = await supabase.rpc('team_entitlements', { p_team_id: teamId })
+  if (error) throw error
+  if (!data) return null
+  return {
+    enforced: !!data.enforced,
+    accountType: data.account_type ?? 'provider',
+    plan: data.plan ?? 'free',
+    isPro: !!data.is_pro,
+    seatLimit: data.seat_limit ?? null,
+    seatsUsed: Number(data.seats_used ?? 0),
+    visitLimit: data.visit_limit ?? null,
+    visitsUsed: Number(data.visits_used ?? 0),
+    packs: data.packs ?? ['core'],
+    pastDueUntil: data.past_due_until ?? null,
+    cancelAt: data.cancel_at ?? null,
+    importUsed: !!data.import_used,
+    openVisits: Number(data.open_visits ?? 0),
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Members
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -411,10 +437,13 @@ export async function sendInvite(teamId, email) {
       body: { teamId, email, appUrl: emailRedirectUrl() },
     })
     // A non-2xx carries our own { error } body, which is the useful message —
-    // FunctionsHttpError's own text is only ever "non-2xx status code".
+    // FunctionsHttpError's own text is only ever "non-2xx status code". The code and
+    // hint come with it, which is how a full team is told from any other refusal.
     if (error) {
       const said = await error.context?.json?.().catch(() => null)
-      if (said?.error) throw new Error(said.error)
+      if (said?.error) {
+        throw Object.assign(new Error(said.error), { code: said.code, hint: said.hint })
+      }
       throw error
     }
     return { link: data.link, emailed: Boolean(data.emailed), email: data.email ?? email }

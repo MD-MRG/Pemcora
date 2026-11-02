@@ -6,6 +6,7 @@ const KEY = {
   activeTeam: 'fc.team.active',
   lastUser: 'fc.session.user',
   lastTeams: 'fc.session.teams',
+  lastEntitlements: 'fc.session.entitlements',
 }
 
 function read(key, fallback) {
@@ -47,4 +48,15 @@ export const prefs = {
     return last?.userId === userId ? last.teams : null
   },
   setLastTeams: (userId, teams) => write(KEY.lastTeams, teams ? { userId, teams } : null),
+  // What each of those teams had when last asked, for the same reason.
+  getLastEntitlements: (userId, teamId) => {
+    const last = read(KEY.lastEntitlements, null)
+    return last?.userId === userId ? (last.teams[teamId] ?? null) : null
+  },
+  setLastEntitlements: (userId, teamId, entitlements) => {
+    const last = read(KEY.lastEntitlements, null)
+    const teams = last?.userId === userId ? last.teams : {}
+    write(KEY.lastEntitlements, { userId, teams: { ...teams, [teamId]: entitlements } })
+  },
+  clearLastEntitlements: () => write(KEY.lastEntitlements, null),
 }

@@ -1,4 +1,5 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useSyncExternalStore } from 'react'
+import { currentEntitlements, subscribeEntitlements } from '../lib/entitlements.js'
 import { useAuth } from './auth.js'
 
 // Split from TeamProvider for the reason given in auth.js — a module that
@@ -25,3 +26,6 @@ export function useCanManage() {
   const { isAdmin } = useTeam()
   return !session || isAdmin
 }
+
+/** The team's plan and packs, or null while they aren't known. See entitlements.js. */
+export const useEntitlements = () => useSyncExternalStore(subscribeEntitlements, currentEntitlements)

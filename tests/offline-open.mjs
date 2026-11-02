@@ -291,6 +291,157 @@ try {
     await ctx.close()
   }
 
+  // ── What the team has (step B4) ───────────────────────────────────────────
+  {
+    // A login that is still good, so the app asks the database as it would online.
+    // Only these two requests get an answer. The data comes from the device, unless
+    // this is about what shows while the plan is still on its way.
+    const answering = async (ctx, entitlements, { data = false } = {}) => {
+      await ctx.unroute(`${BACKEND}/**`)
+      await ctx.route(`${BACKEND}/**`, route => {
+        const { pathname } = new URL(route.request().url())
+        const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+        const respond = (status, body) =>
+          route.fulfill({ status, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+        if (pathname.endsWith('/my_teams')) {
+          return respond(200, [{ team_id: TEAM.id, name: TEAM.name, description: '', invite_code: 'x', role: 'member', member_count: 1, admin_count: 1 }])
+        }
+        if (pathname.endsWith('/team_entitlements')) return entitlements(respond)
+        if (data && route.request().method() === 'GET') {
+          return respond(200, pathname.endsWith('/team_settings') ? {} : [])
+        }
+        return route.abort()
+      })
+    }
+    const navLabels = page => page.locator('nav[aria-label="Main"] a').allTextContents()
+    const signedIn = page =>
+      page.evaluate(
+        ({ AUTH_KEY, USER }) =>
+          localStorage.setItem(
+            AUTH_KEY,
+            JSON.stringify({
+              access_token: 'good',
+              refresh_token: 'refresh',
+              token_type: 'bearer',
+              expires_in: 3600,
+              expires_at: Math.floor(Date.now() / 1000) + 3600,
+              user: USER,
+            }),
+          ),
+        { AUTH_KEY, USER },
+      )
+    const row = over => ({
+      enforced: false, account_type: 'provider', plan: 'free', is_pro: false, seat_limit: 1, seats_used: 1,
+      visit_limit: 1, visits_used: 0, packs: ['core', 'av'], past_due_until: null, cancel_at: null,
+      import_used: false, open_visits: 0, ...over,
+    })
+
+    {
+      // Without a pack, read through the real sign-in and DataBoot.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page)
+      await signedIn(page)
+      await answering(ctx, respond => respond(200, row({ packs: ['core', 'vic_rental'] })))
+      await page.reload({ waitUntil: 'load' })
+      log('opening reads what the team has',
+        await until(async () => {
+          const labels = await navLabels(page)
+          return labels.includes('Custom List') && !labels.includes('Preventative Maintenance')
+        }), (await navLabels(page)).join(' | '))
+      await page.goto(`${BASE}#/maintenance`)
+      log('so a page it doesn\'t hold goes Home', await until(() => new URL(page.url()).hash === '#/'), page.url())
+
+      await ctx.unroute(`${BACKEND}/**`)
+      await ctx.setOffline(true)
+      await page.reload({ waitUntil: 'load' })
+      log('and with no connection the last answer still holds',
+        await until(async () => {
+          const labels = await navLabels(page)
+          return labels.includes('Custom List') && !labels.includes('Preventative Maintenance')
+        }), (await navLabels(page)).join(' | '))
+
+      await answering(ctx, respond => respond(200, row()))
+      await ctx.setOffline(false)
+      log('and when the connection returns it asks again',
+        await until(async () => (await navLabels(page)).includes('Preventative Maintenance')), (await navLabels(page)).join(' | '))
+      await ctx.unroute(`${BACKEND}/**`)
+      await ctx.setOffline(true)
+
+      await page.locator('nav a').filter({ hasText: 'Settings' }).click()
+      await page.getByRole('button', { name: 'Sign out' }).click()
+      await until(async () => (await page.getByRole('dialog').count()) === 1)
+      const leave = page.getByRole('dialog').getByRole('button', { name: /sign out/i }).last()
+      await leave.click()
+      await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1)
+      log('signing out leaves none of it behind',
+        (await page.evaluate(() => localStorage.getItem('fc.session.entitlements'))) === null)
+      await ctx.close()
+    }
+    {
+      // Never seen this team's plan, and it's a landlord's.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page)
+      await signedIn(page)
+      // The data arrives at once and the plan well after, so without the wait the app
+      // would have a menu on screen before it knew whose.
+      await answering(
+        ctx,
+        async respond => {
+          await sleep(2000)
+          return respond(200, row({ account_type: 'landlord', packs: ['core'] }))
+        },
+        { data: true },
+      )
+      // Watching from the moment the page starts, for the inspector's menu flashing up.
+      await ctx.addInitScript(() => {
+        window.__sawInspectorMenu = false
+        new MutationObserver(() => {
+          if (document.querySelector('nav[aria-label="Main"]')?.textContent.includes('New Client')) {
+            window.__sawInspectorMenu = true
+          }
+        }).observe(document, { childList: true, subtree: true })
+      })
+      await page.reload({ waitUntil: 'load' })
+      log('a landlord\'s first screen is its own',
+        await until(async () => (await navLabels(page)).join() === 'Properties,Reports,Due,Settings'), (await navLabels(page)).join(' | '))
+      log('on its properties', new URL(page.url()).hash === '#/properties', page.url())
+      log('without an inspector\'s menu flashing up first',
+        !(await page.evaluate(() => window.__sawInspectorMenu)))
+      await ctx.close()
+    }
+    {
+      // A project without the function yet: today's AV app has to keep working.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page)
+      await signedIn(page)
+      await answering(ctx, respond => respond(404, { code: 'PGRST202', message: 'Could not find the function', details: null, hint: null }))
+      await page.reload({ waitUntil: 'load' })
+      log('with no such function everything still opens',
+        await until(async () => (await navLabels(page)).includes('Preventative Maintenance')),
+        (await navLabels(page)).join(' | '))
+      await ctx.close()
+    }
+    {
+      // An answer that never comes must not hold the app up for long.
+      const { ctx, page } = await newDevice()
+      await hasBeenHere(page)
+      await signedIn(page)
+      let release
+      const never = new Promise(resolve => (release = resolve))
+      await answering(ctx, async respond => {
+        await never
+        return respond(200, row())
+      })
+      const began = Date.now()
+      await page.reload({ waitUntil: 'load' })
+      log('an answer that doesn\'t come holds it up only briefly',
+        await until(async () => (await navLabels(page)).includes('Preventative Maintenance'), 12000), `${Date.now() - began} ms`)
+      release()
+      await ctx.close()
+    }
+  }
+
   // ── Never loaded here ─────────────────────────────────────────────────────
   {
     const { ctx, page } = await newDevice()
