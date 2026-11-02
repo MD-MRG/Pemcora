@@ -70,6 +70,20 @@ if (signedIn.error) {
   process.exit(1)
 }
 
+// A run that crashed outright can leave its team behind. Clear those first: only teams
+// of this suite's name, that this account owns.
+{
+  const { data: mine } = await sb.rpc('my_teams')
+  for (const left of (mine ?? []).filter(t => t.role === 'owner' && /^Offline test \d+$/.test(t.name))) {
+    const { error } = await sb.from('teams').delete().eq('id', left.team_id)
+    console.log(error ? `Could not delete ${left.name} left by an earlier run: ${error.message}` : `Deleted ${left.name}, left by an earlier run`)
+  }
+}
+
+// A failure inside a request handler isn't the main flow's to catch, and would end the
+// run without deleting its team. Count it, and let the run carry on to its clean-up.
+process.on('unhandledRejection', e => log(false, 'a request handler threw', e?.message))
+
 const stamp = Date.now()
 const { data: team, error: teamError } = await sb.rpc('create_team', { p_name: `Offline test ${stamp}` })
 if (teamError) {
@@ -234,10 +248,14 @@ try {
   // ── An answer lost on the way back ───────────────────────────────────────
   // The insert lands, and the device never hears. Sent again, real Postgres answers
   // 23505, and the visit's own id is what says "that was you".
+  // Only the first insert loses its answer. The device sends it again by itself, and
+  // that one may arrive while this is being taken away.
+  let lost = false
   await a.ctx.route('**/rest/v1/visits?*', async route => {
-    if (route.request().method() !== 'POST') return route.continue()
+    if (route.request().method() !== 'POST' || lost) return route.continue().catch(() => {})
+    lost = true
     await route.fetch()
-    return route.abort()
+    return route.abort().catch(() => {})
   })
   await start(a.page)
   log(await until(async () => !!(await openRow())), 'an insert whose answer is lost still landed')
