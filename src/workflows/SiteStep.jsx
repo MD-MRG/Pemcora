@@ -3,12 +3,14 @@ import { useOutletContext } from 'react-router-dom'
 import AnswerInput from '../components/AnswerInput.jsx'
 import FailNote from '../components/FailNote.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import ItemForm from '../components/ItemForm.jsx'
 import Notice from '../components/Notice.jsx'
 import { BackBar } from '../components/ClientBrowser.jsx'
-import { addAsset, getSiteEntry, listAssets, saveSiteEntry } from '../lib/clientStore.js'
+import { addAsset, getSiteEntry, listAssets, replaceAsset, saveSiteEntry } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
 import { isFail, noteKey, scopeOf, typeOf } from '../lib/testTypes.js'
 import { gapLines, itemsFor, siteSectionsOf } from '../lib/siteStep.js'
+import { replacementOf } from '../lib/equipment.js'
 import { outsideChanges, subscribe } from '../lib/cache.js'
 import { assetTypeLabel, assetTypeNoun, assetTypePlural } from '../data/packs/shared/assetTypes.js'
 
@@ -83,6 +85,44 @@ function AddItemForm({ assetType, rooms, onAdd, onCancel }) {
   )
 }
 
+// What a failed test that condemns its item says above the note: that it has to
+// be replaced, with the replace flow, or what it was replaced with.
+function ReplaceNote({ item, assets, rooms, name, canReplace, open, onOpen, onCancel, onReplace }) {
+  const newer = item && replacementOf(item, assets)
+  const said = newer
+    ? `Replaced with ${newer.label || `a new ${assetTypeNoun(item.assetType)}`}. Note why the old one failed.`
+    : item?.removedAt
+      ? 'Removed. Note why it failed.'
+      : 'Has to be replaced. Note why it failed.'
+  return (
+    <div className="border-fail/30 bg-fail/5 mb-2 overflow-hidden rounded-lg border">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <p className="text-fail text-[13px] font-semibold">{said}</p>
+        {item && !item.removedAt && canReplace && !open && (
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={`Replace ${name}`}
+            className="border-fail/40 text-fail min-h-[36px] rounded-lg border bg-white px-3 text-[13px] font-semibold hover:bg-red-50"
+          >
+            Replace
+          </button>
+        )}
+      </div>
+      {open && item && (
+        <ItemForm
+          asset={{ assetType: item.assetType, label: item.label, roomId: item.roomId }}
+          rooms={rooms}
+          name={`Replacing ${name}`}
+          saveLabel="Replace"
+          onCancel={onCancel}
+          onSave={onReplace}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function SiteStep({ client, location, visit, rooms, readOnly, config, canManage, onBack, onChanged, onReopen }) {
   const { setDetail } = useOutletContext()
   useEffect(() => {
@@ -102,6 +142,8 @@ export default function SiteStep({ client, location, visit, rooms, readOnly, con
   const [troubleshooting, setTroubleshooting] = useState(() => stored?.troubleshooting ?? {})
   const [comments, setComments] = useState(() => stored?.comments ?? '')
   const [adding, setAdding] = useState(null)
+  // The failed alarm being replaced from its note.
+  const [replacing, setReplacing] = useState(null)
   const [pending, setPending] = useState(null)
 
   // Another device's answers merged in: catch up, as a room does.
@@ -198,12 +240,18 @@ export default function SiteStep({ client, location, visit, rooms, readOnly, con
     persist({ sections: next })
   }
 
+  // An item's name in the step. One replaced keeps its name for the new one, so
+  // the old one says what happened to it.
+  const itemTitle = (item, i, section) =>
+    (item.label || `${assetTypeLabel(section.assetType)} ${i + 1}`) +
+    (!item.removedAt ? '' : replacementOf(item, assets) ? ' (replaced)' : ' (removed)')
+
   // The fails that show, in the order the step asks them.
   const failed = []
   for (const section of siteSections.filter(on)) {
     const places =
       scopeOf(section) === 'item'
-        ? itemsFor(section, assets, results[section.id]).map((item, i) => ({ itemId: item.id, name: item.label || `${assetTypeLabel(section.assetType)} ${i + 1}` }))
+        ? itemsFor(section, assets, results[section.id]).map((item, i) => ({ itemId: item.id, name: itemTitle(item, i, section) }))
         : [{ itemId: null, name: null }]
     for (const { itemId, name } of places) {
       for (const test of section.tests ?? []) {
@@ -289,6 +337,7 @@ export default function SiteStep({ client, location, visit, rooms, readOnly, con
                   )}
                   {items.map((item, i) => {
                     const name = item.label || `${what} ${i + 1}`
+                    const title = itemTitle(item, i, section)
                     const where = rooms.find(r => r.id === item.roomId)?.name
                     return (
                       <div key={item.id} className="border-hair border-b last:border-0">
@@ -297,7 +346,7 @@ export default function SiteStep({ client, location, visit, rooms, readOnly, con
                           {where && <span className="text-ink-soft ml-2 text-[12.5px] font-medium">{where}</span>}
                           {item.removedAt && <span className="text-ink-soft ml-2 text-[12.5px] font-medium">Removed</span>}
                         </h4>
-                        <div className="pl-3" role="group" aria-label={name}>
+                        <div className="pl-3" role="group" aria-label={title}>
                           {section.tests.map(t => (
                             <TestRow
                               key={t.id}
@@ -359,9 +408,21 @@ export default function SiteStep({ client, location, visit, rooms, readOnly, con
                     placeholder={prompt}
                   >
                     {test.onFail === 'replace' && (
-                      <p className="border-fail/30 bg-fail/5 text-fail mb-2 rounded-lg border px-3 py-2 text-[13px] font-semibold">
-                        Has to be replaced. Note why it failed.
-                      </p>
+                      <ReplaceNote
+                        item={assets.find(a => a.id === itemId)}
+                        assets={assets}
+                        rooms={rooms}
+                        name={name}
+                        canReplace={!readOnly && !!visit}
+                        open={replacing === itemId}
+                        onOpen={() => setReplacing(itemId)}
+                        onCancel={() => setReplacing(null)}
+                        onReplace={details => {
+                          replaceAsset(client.id, location.id, itemId, details)
+                          setReplacing(null)
+                          onChanged()
+                        }}
+                      />
                     )}
                   </FailNote>
                 )

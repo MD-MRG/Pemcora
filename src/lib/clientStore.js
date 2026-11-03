@@ -517,27 +517,29 @@ export function listAssets(clientId, locationId) {
   return findLoc(read(), clientId, locationId)?.assets ?? []
 }
 
-export function addAsset(clientId, locationId, { assetType, roomId = null, label = '', ...details }) {
+const newAsset = ({ assetType, roomId = null, label = '', ...details }, now) => ({
+  id: uid(),
+  assetType,
+  roomId,
+  label: String(label ?? '').trim(),
+  make: '',
+  model: '',
+  serial: '',
+  attributes: {},
+  installedOn: null,
+  expiresOn: null,
+  removedAt: null,
+  ...details,
+  // When it was added decides which reports it appears in, so it is the
+  // device's own clock, not whenever the database first hears of it.
+  createdAt: now,
+})
+
+export function addAsset(clientId, locationId, details) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
-  if (!location || !assetType) return null
-  const asset = {
-    id: uid(),
-    assetType,
-    roomId,
-    label: String(label ?? '').trim(),
-    make: '',
-    model: '',
-    serial: '',
-    attributes: {},
-    installedOn: null,
-    expiresOn: null,
-    removedAt: null,
-    ...details,
-    // When it was added decides which reports it appears in, so it is the
-    // device's own clock, not whenever the database first hears of it.
-    createdAt: new Date().toISOString(),
-  }
+  if (!location || !details?.assetType) return null
+  const asset = newAsset(details, new Date().toISOString())
   location.assets = [...(location.assets ?? []), asset]
   write(clients)
   return asset
@@ -549,6 +551,39 @@ export function updateAsset(clientId, locationId, assetId, patch) {
   if (!asset) return null
   const { id: _id, createdAt: _createdAt, ...allowed } = patch
   Object.assign(asset, allowed)
+  write(clients)
+  return asset
+}
+
+/** Taken out of service, not deleted: the reports that tested it still name it. */
+export const removeAsset = (clientId, locationId, assetId) =>
+  updateAsset(clientId, locationId, assetId, { removedAt: new Date().toISOString() })
+
+/**
+ * Replacing an item: the old one is removed and the new one added in its place,
+ * at the same moment, so every report has exactly one of them standing. The new
+ * one takes the old one's type, and its room and name unless `details` say
+ * otherwise. It remembers what it replaced (attributes.replaces), which the
+ * panel and the report name.
+ */
+export function replaceAsset(clientId, locationId, assetId, details = {}) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  const old = location?.assets?.find(a => a.id === assetId)
+  if (!old || old.removedAt) return null
+  const now = new Date().toISOString()
+  old.removedAt = now
+  const asset = newAsset(
+    {
+      label: old.label,
+      roomId: old.roomId,
+      ...details,
+      assetType: old.assetType,
+      attributes: { ...(details.attributes ?? {}), replaces: old.id },
+    },
+    now,
+  )
+  location.assets = [...location.assets, asset]
   write(clients)
   return asset
 }

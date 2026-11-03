@@ -1257,6 +1257,15 @@ step:
     Removed ones stay on record under "Removed".
   - A field set back to "Not recorded" is cleared, and an attribute the form doesn't know about,
     such as one a later version adds, survives an edit.
+- How C2b (replacing) came out:
+  - Replace, in the panel's edit form or on a failed alarm's note, asks for the new item's
+    details, starting from the old one's name and room. The old one is removed and the new one
+    added at the same moment, so a report always has exactly one of them standing. The new one
+    remembers what it replaced (`attributes.replaces`).
+  - In the whole-site step the old alarm keeps its fail and its note, named "(replaced)", and
+    the new one is there to test. Its note then says what replaced it.
+  - The panel can also remove an item with nothing in its place, after asking, for one taken
+    away or added by mistake. It stays on record as removed, never deleted.
 
 #### C3. Settings and client pages
 

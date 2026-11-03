@@ -1,5 +1,5 @@
 /**
- * Step C2: the equipment panel on a site's page.
+ * Steps C2 and C2b: the equipment panel on a site's page, and replacing an item.
  *
  * Runs the rules in Node first, then a Queensland smoke alarm site in a browser
  * in test mode: alarms added, edited and listed with their expiry, before any
@@ -17,6 +17,10 @@
  *   - an expired alarm, and one expiring within three months, say so
  *   - a removed alarm stays on record under "Removed"
  *   - an alarm added in the panel is the one the whole-site step tests
+ *   - replacing an alarm removes it and adds the new one in its place, at the
+ *     same moment, from the panel or from a failed alarm's note; the old one's
+ *     answers stay with it
+ *   - removing one keeps it on record
  */
 import { chromium } from 'playwright-core'
 import { testContext } from './harness.mjs'
@@ -190,11 +194,73 @@ try {
   loc = await stored()
   log('cancelling changes nothing', JSON.stringify(loc.assets.find(a => a.id === 'soon')) === JSON.stringify(SEED[0].locations[0].assets[1]))
 
+  // Replacing one from the panel (C2b).
+  await row('Hallway alarm').click()
+  await panel().getByRole('button', { name: 'Replace', exact: true }).click()
+  const replaceForm = () => panel().getByRole('form', { name: 'Replace Hallway alarm' })
+  log('the new alarm starts with the old one\'s name and room, and nothing else',
+    (await replaceForm().getByLabel('Name').inputValue()) === 'Hallway alarm' && (await replaceForm().getByLabel('Room').inputValue()) === 'h' &&
+      (await replaceForm().getByLabel('Expires').inputValue()) === '')
+  await replaceForm().getByLabel('Sensor').selectOption({ label: 'Photoelectric' })
+  await replaceForm().getByLabel('Manufactured').fill('2026-01-15')
+  await replaceForm().getByRole('button', { name: 'Replace' }).click()
+  loc = await stored()
+  const hallOld = loc.assets.find(a => a.id === 'soon')
+  const hallNew = loc.assets.find(a => a.attributes?.replaces === 'soon')
+  log('replacing removes the old alarm', !!hallOld?.removedAt)
+  log('and adds the new one in its place, at the same moment',
+    hallNew?.label === 'Hallway alarm' && hallNew.roomId === 'h' && !hallNew.removedAt && hallNew.createdAt === hallOld?.removedAt && hallNew.expiresOn === '2036-01-15',
+    JSON.stringify(hallNew))
+  text = await panel().textContent()
+  log('the panel lists the new one, and the old one as replaced',
+    /Smoke alarms \(3\)/.test(text) && /Photoelectric/.test(await row('Hallway alarm').textContent()) && /Removed smoke alarms \(2\)/.test(text))
+  // The removed list is still open from before.
+  log('the old one says it was replaced', /Hallway alarm · Hallway · replaced/.test(await panel().textContent()))
+
+  // Removing one.
+  await row('Kitchen alarm (old)').click()
+  await panel().getByRole('button', { name: 'Remove', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+  log('a removal can be cancelled', !(await stored()).assets.find(a => a.id === 'old').removedAt)
+  await panel().getByRole('button', { name: 'Remove', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click()
+  loc = await stored()
+  text = await panel().textContent()
+  log('removing keeps it on record, as removed', !!loc.assets.find(a => a.id === 'old')?.removedAt && loc.assets.length === 5 && /Smoke alarms \(2\)/.test(text))
+  log('and it\'s listed as removed, not replaced', /Kitchen alarm \(old\) · removed/.test(text))
+
   // The whole-site step tests the same alarms.
   await page.getByRole('button', { name: 'Start smoke alarm inspection' }).click()
   await page.getByRole('button', { name: /^Whole site/ }).click()
   log('the whole-site step tests the alarm added in the panel', (await page.getByRole('group', { name: 'Bedroom 1 alarm', exact: true }).count()) === 1)
   log('and not the removed one', (await page.getByRole('group', { name: 'Laundry alarm', exact: true }).count()) === 0)
+
+  // Replacing a failed alarm from its note (C2b).
+  const WORKS = 'Works when tested (replaced immediately if not)'
+  const bed = () => page.getByRole('group', { name: 'Bedroom 1 alarm', exact: true })
+  await bed().getByRole('button', { name: `${WORKS}: FAIL`, exact: true }).click()
+  await page.getByRole('textbox', { name: `Bedroom 1 alarm — ${WORKS}`, exact: true }).fill('No sound when tested')
+  log('a failed alarm\'s note offers to replace it', (await page.getByRole('button', { name: 'Replace Bedroom 1 alarm' }).count()) === 1)
+  await page.getByRole('button', { name: 'Replace Bedroom 1 alarm' }).click()
+  const noteForm = page.getByRole('form', { name: 'Replacing Bedroom 1 alarm' })
+  await noteForm.getByLabel('Make').fill('Emerald')
+  await noteForm.getByLabel('Power').selectOption({ label: 'Sealed 10-year battery' })
+  await page.screenshot({ path: `${DIR}/equipment-replace.png`, fullPage: true })
+  await noteForm.getByRole('button', { name: 'Replace' }).click()
+  loc = await stored()
+  const bedOld = loc.assets.find(a => a.id === added.id)
+  const bedNew = loc.assets.find(a => a.attributes?.replaces === added.id)
+  log('the failed alarm is replaced', !!bedOld?.removedAt && bedNew?.label === 'Bedroom 1 alarm' && bedNew.roomId === 'b1' && bedNew.make === 'Emerald')
+  text = await page.textContent('main')
+  log('its note says what replaced it', /Replaced with Bedroom 1 alarm\. Note why the old one failed\./.test(text) && (await page.getByRole('button', { name: /^Replace Bedroom 1 alarm/ }).count()) === 0)
+  const each = loc.visits[0].siteResults.template.sections.find(s => s.assetType === 'smoke_alarm')
+  const worksId = each.tests.find(t => t.label === WORKS).id
+  log('the old alarm keeps its fail and its note, under its name',
+    loc.visits[0].siteResults.results[each.id][added.id][worksId] === 'FAIL' &&
+      loc.visits[0].siteResults.troubleshooting[`${added.id}:${worksId}`] === 'No sound when tested' &&
+      (await page.getByRole('group', { name: 'Bedroom 1 alarm (replaced)', exact: true }).count()) === 1)
+  log('and the new one is there to test', (await bed().count()) === 1 && (await bed().getByRole('button', { name: `${WORKS}: PASS`, exact: true }).getAttribute('aria-pressed')) !== 'true')
+  log('Bedroom 1 is still covered', !/Bedroom 1 has no smoke alarm/.test(text))
 
   // An AV page.
   await openSite('#/maintenance')

@@ -69,5 +69,8 @@ export const itemSummary = asset =>
     .filter(Boolean)
     .join(' · ')
 
+/** The item put in to replace this one, if it was replaced rather than just removed. */
+export const replacementOf = (asset, assets) => (assets ?? []).find(a => a.attributes?.replaces === asset.id) ?? null
+
 /** An item's name, or its type and place among the site's items of that type. */
 export const itemName = (asset, index) => asset.label || `${assetTypeLabel(asset.assetType)} ${index + 1}`

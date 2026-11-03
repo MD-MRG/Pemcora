@@ -7,10 +7,12 @@ import { expiryFrom } from '../lib/equipment.js'
 // date fills in its expiry, which stays editable; a later change to the date
 // moves an expiry that was worked out from it, and leaves a typed one alone.
 //
-//   asset    the item, or { assetType } for a new one
+//   asset    the item, or { assetType } for a new one, with anything to start from
+//   name     what the form is called, when it isn't "New smoke alarm" or "Edit …"
+//   children more buttons, beside Cancel: the panel's Replace and Remove
 //   onSave(patch)   every field, blanks as null; attributes keep any this form
 //                   doesn't know about
-export default function ItemForm({ asset, rooms, saveLabel, onSave, onCancel }) {
+export default function ItemForm({ asset, rooms, name, saveLabel, onSave, onCancel, children }) {
   const type = asset.assetType
   const fields = assetFields(type)
   const [form, setForm] = useState(() => ({
@@ -51,7 +53,7 @@ export default function ItemForm({ asset, rooms, saveLabel, onSave, onCancel }) 
   return (
     <form
       className="border-hair border-t bg-slate-50 px-4 py-3"
-      aria-label={asset.id ? `Edit ${asset.label || assetTypeNoun(type)}` : `New ${assetTypeNoun(type)}`}
+      aria-label={name ?? (asset.id ? `Edit ${asset.label || assetTypeNoun(type)}` : `New ${assetTypeNoun(type)}`)}
       onSubmit={e => {
         e.preventDefault()
         save()
@@ -81,7 +83,8 @@ export default function ItemForm({ asset, rooms, saveLabel, onSave, onCancel }) 
         <Input label="Expires" type="date" value={form.expiresOn} onChange={set('expiresOn')} />
       </div>
 
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        {children && <div className="mr-auto flex flex-wrap gap-2">{children}</div>}
         <button
           type="button"
           onClick={onCancel}

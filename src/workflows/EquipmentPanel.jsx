@@ -1,25 +1,33 @@
 import { useState } from 'react'
 import ItemForm from '../components/ItemForm.jsx'
-import { addAsset, listAssets, updateAsset } from '../lib/clientStore.js'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import { addAsset, listAssets, removeAsset, replaceAsset, updateAsset } from '../lib/clientStore.js'
 import { assetTypeLabel, assetTypeNoun, assetTypePlural } from '../data/packs/shared/assetTypes.js'
-import { expiryState, itemName, itemSummary, showDate } from '../lib/equipment.js'
+import { expiryState, itemName, itemSummary, replacementOf, showDate } from '../lib/equipment.js'
 
 // The equipment at a site (build plan C2), on the site's page in each workflow
 // whose list tests items one by one. Items belong to the site, so this is the
 // same list whichever visit is open, or none. A removed item stays on record
-// under "Removed", since the reports that tested it still name it.
+// under "Removed", since the reports that tested it still name it. Replacing one
+// removes it and adds the new one in its place.
 //
 //   types   the item types the workflow's list tests, in its order
 export default function EquipmentPanel({ client, location, rooms, types, onChanged }) {
-  // { id } editing an item, or { assetType } adding one.
+  // { id } editing an item, { replace: id } replacing it, or { assetType } adding one.
   const [open, setOpen] = useState(null)
+  const [askRemove, setAskRemove] = useState(null)
   const [showRemoved, setShowRemoved] = useState({})
   const assets = listAssets(client.id, location.id)
   const roomName = id => rooms.find(r => r.id === id)?.name
 
-  const form = (asset, saveLabel, onSave) => (
-    <ItemForm asset={asset} rooms={rooms} saveLabel={saveLabel} onCancel={() => setOpen(null)} onSave={onSave} />
+  const form = (asset, saveLabel, onSave, extra = {}) => (
+    <ItemForm asset={asset} rooms={rooms} saveLabel={saveLabel} onCancel={() => setOpen(null)} onSave={onSave} {...extra} />
   )
+  const done = () => {
+    setOpen(null)
+    onChanged()
+  }
+  const SIDE = 'border-hair min-h-[40px] rounded-lg border bg-white px-3 text-[13px] font-semibold hover:bg-slate-50'
 
   return (
     <section className="border-hair mb-4 overflow-hidden rounded-xl border bg-white" aria-label="Equipment">
@@ -41,11 +49,41 @@ export default function EquipmentPanel({ client, location, rooms, types, onChang
               {current.map((asset, i) =>
                 open?.id === asset.id ? (
                   <li key={asset.id}>
-                    {form(asset, 'Save', patch => {
-                      updateAsset(client.id, location.id, asset.id, patch)
-                      setOpen(null)
-                      onChanged()
-                    })}
+                    {form(
+                      asset,
+                      'Save',
+                      patch => {
+                        updateAsset(client.id, location.id, asset.id, patch)
+                        done()
+                      },
+                      {
+                        children: (
+                          <>
+                            <button type="button" onClick={() => setOpen({ replace: asset.id })} className={`${SIDE} text-navy`}>
+                              Replace
+                            </button>
+                            <button type="button" onClick={() => setAskRemove({ asset, name: itemName(asset, i) })} className={`${SIDE} text-fail`}>
+                              Remove
+                            </button>
+                          </>
+                        ),
+                      },
+                    )}
+                  </li>
+                ) : open?.replace === asset.id ? (
+                  <li key={asset.id}>
+                    <p className="border-hair border-t px-4 pt-3 text-[13.5px] font-semibold">
+                      Replacing {itemName(asset, i)}. Enter the new {assetTypeNoun(type)}'s details.
+                    </p>
+                    {form(
+                      { assetType: type, label: asset.label, roomId: asset.roomId },
+                      'Replace',
+                      patch => {
+                        replaceAsset(client.id, location.id, asset.id, patch)
+                        done()
+                      },
+                      { name: `Replace ${itemName(asset, i)}` },
+                    )}
                   </li>
                 ) : (
                   <li key={asset.id}>
@@ -76,8 +114,7 @@ export default function EquipmentPanel({ client, location, rooms, types, onChang
             {open?.assetType === type ? (
               form({ assetType: type }, `Add ${assetTypeNoun(type)}`, patch => {
                 addAsset(client.id, location.id, { assetType: type, ...patch })
-                setOpen(null)
-                onChanged()
+                done()
               })
             ) : (
               <button
@@ -104,8 +141,8 @@ export default function EquipmentPanel({ client, location, rooms, types, onChang
                     {removed.map(asset => (
                       <li key={asset.id} className="text-ink-soft py-1 text-[13px]">
                         {asset.label || assetTypeLabel(type)}
-                        {roomName(asset.roomId) && ` · ${roomName(asset.roomId)}`} · removed{' '}
-                        {new Date(asset.removedAt).toLocaleDateString()}
+                        {roomName(asset.roomId) && ` · ${roomName(asset.roomId)}`} ·{' '}
+                        {replacementOf(asset, assets) ? 'replaced' : 'removed'} {new Date(asset.removedAt).toLocaleDateString()}
                       </li>
                     ))}
                   </ul>
@@ -115,6 +152,24 @@ export default function EquipmentPanel({ client, location, rooms, types, onChang
           </div>
         )
       })}
+
+      {askRemove && (
+        <ConfirmDialog
+          danger
+          title={`Remove ${askRemove.name}?`}
+          confirmLabel="Remove"
+          onCancel={() => setAskRemove(null)}
+          onConfirm={() => {
+            removeAsset(client.id, location.id, askRemove.asset.id)
+            setAskRemove(null)
+            done()
+          }}
+        >
+          It's no longer at this site, so it stops being tested and counted. It stays on record under
+          Removed, and the reports that tested it still name it. To put a new one in its place, use
+          Replace instead.
+        </ConfirmDialog>
+      )}
     </section>
   )
 }
