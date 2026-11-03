@@ -119,6 +119,12 @@ const locationToRow = l => ({
 const clientFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
+  // Who reports and re-check reminders go to, and whether this client gets
+  // reminders at all (0007).
+  contactName: r.contact_name ?? '',
+  contactEmail: r.contact_email ?? '',
+  contactPhone: r.contact_phone ?? '',
+  remindersEnabled: r.reminders_enabled ?? true,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   locations: (r.locations ?? []).map(locationFromRow),
@@ -684,6 +690,33 @@ export async function renameClient(clientId, name) {
     .update({ name: String(name ?? '').trim() })
     .eq('id', clientId)
   if (isDuplicate(error)) throw coded(`A client named "${name}" already exists.`, '23505')
+  if (error) throw error
+}
+
+// A client's contact and reminders switch, each with what a blank is stored as.
+// The name has renameClient, which names a duplicate.
+export const CLIENT_DETAILS = {
+  contactName: ['contact_name', ''],
+  contactEmail: ['contact_email', ''],
+  contactPhone: ['contact_phone', ''],
+  remindersEnabled: ['reminders_enabled', true],
+}
+
+/**
+ * Sends only the details in `patch`, trimmed, so two devices changing different
+ * ones both keep theirs. A client deleted on another device has nothing left to
+ * save, as with renameClient: it is gone from the next load.
+ */
+export async function updateClientDetails(clientId, patch) {
+  const row = Object.fromEntries(
+    Object.entries(CLIENT_DETAILS)
+      .filter(([key]) => key in patch)
+      .map(([key, [column, blank]]) => {
+        const value = patch[key] ?? blank
+        return [column, typeof value === 'string' ? value.trim() : value]
+      }),
+  )
+  const { error } = await supabase.from('clients').update(row).eq('id', clientId)
   if (error) throw error
 }
 

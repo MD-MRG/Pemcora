@@ -1319,6 +1319,14 @@ step:
   - "Send re-check reminders" switches reminders off for the whole team
     (`team_settings.reminders_enabled`), admins only, as the company details are. It says
     the emails start in a later update, since F sends them.
+- How C3b (a client's contact) came out:
+  - Picking a client on Edit Client shows a Contact card above its sites: the contact's
+    name, email and phone, and "Send this client re-check reminders". They save as they're
+    typed, offline too, through the cache like the rest of the client.
+  - Only what changed is sent, trimmed, so two devices changing different details both keep
+    theirs. A new client's contact follows it in.
+  - An address that doesn't look like an email says so, but is kept: it's the technician's
+    to fix. With the team's reminders off, the card says none go out.
 
 #### C4. Due page
 

@@ -803,6 +803,16 @@ try {
       out = await call('getTeamSettings', ['t'])
       log('and read back, on unless the team switched it off, with the company\'s numbers',
         out.data?.remindersEnabled === true && out.data.company.rec_number === 'R1', JSON.stringify(out))
+
+      // A client's contact and reminders switch (C3b).
+      script = [{ status: 204, body: null }]
+      out = await call('updateClientDetails', ['c1', { contactEmail: ' jane@example.com ', remindersEnabled: false }])
+      log('a client\'s details go in trimmed, only those given',
+        !out.error && JSON.stringify(sent.at(-1).body) === '{"contact_email":"jane@example.com","reminders_enabled":false}', JSON.stringify(sent.at(-1).body))
+      script = [{ status: 200, body: [{ id: 'c1', name: 'Rental Co', contact_name: 'Jane', contact_email: 'jane@example.com', contact_phone: '', reminders_enabled: false, locations: [] }] }]
+      out = await call('listClients', ['t'])
+      log('and come back in the app\'s shape',
+        out.data?.[0]?.contactName === 'Jane' && out.data[0].contactEmail === 'jane@example.com' && out.data[0].remindersEnabled === false, JSON.stringify(out))
     }
     await ctx.close()
   }

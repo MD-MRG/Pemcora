@@ -1074,6 +1074,45 @@ const items = () => store.listAssets('c1', 'l1')
   log('a member can\'t switch them back on for everybody', server.settings.remindersEnabled === false)
 }
 
+// ── A client's contact and reminders switch (C3b) ───────────────────────────
+{
+  const server = setup()
+  const device = await boot(server)
+  // The stand-in's client has no switch at all, which the app reads as on.
+  log('a client gets reminders until it is switched off', readClients()[0].remindersEnabled !== false && !readClients()[0].contactEmail)
+  store.updateClientDetails('c1', { contactName: 'Jane Citizen', contactEmail: ' jane@example.com ' })
+  await flush()
+  const sent = server.lastClientDetails?.[1]
+  log('only what changed is sent', JSON.stringify(Object.keys(sent ?? {}).sort()) === '["contactEmail","contactName"]', JSON.stringify(sent))
+  log('and it reaches the client', server.clients[0].contactName === 'Jane Citizen' && server.clients[0].contactEmail === ' jane@example.com ')
+  const writes = server.countCalls('updateClientDetails')
+  await flush()
+  log('nothing is sent again', server.countCalls('updateClientDetails') === writes)
+  store.updateClientDetails('c1', { remindersEnabled: false })
+  await flush()
+  log('switching its reminders off is saved', server.clients[0].remindersEnabled === false && server.countCalls('updateClientDetails') === writes + 1)
+
+  // Two devices, two different details.
+  const other = await boot(server)
+  store.updateClientDetails('c1', { contactPhone: '0400 111 222' })
+  await flush()
+  await boot(server, device)
+  store.updateClientDetails('c1', { contactName: 'Jane Smith' })
+  await flush()
+  log('two devices changing different details both keep theirs',
+    server.clients[0].contactPhone === '0400 111 222' && server.clients[0].contactName === 'Jane Smith', JSON.stringify(server.clients[0]))
+  await boot(server, other)
+  log('and each device reads both', readClients()[0].contactPhone === '0400 111 222' && readClients()[0].contactName === 'Jane Smith')
+
+  // A new client with a contact from the start.
+  writeClients([...readClients(), { id: 'c9', name: 'New Co', locations: [], contactEmail: 'ops@new.co', remindersEnabled: true }])
+  await flush()
+  const fresh = server.lastClientDetails
+  log('a new client\'s contact follows it in, without the switch it left on',
+    fresh?.[0] === 'c9' && JSON.stringify(fresh[1]) === '{"contactEmail":"ops@new.co"}' && server.clients.find(c => c.id === 'c9')?.contactEmail === 'ops@new.co',
+    JSON.stringify(fresh))
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()

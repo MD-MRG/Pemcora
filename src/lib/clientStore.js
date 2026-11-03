@@ -66,6 +66,21 @@ export function listClients() {
   return read()
 }
 
+const CLIENT_DETAIL_KEYS = ['contactName', 'contactEmail', 'contactPhone', 'remindersEnabled']
+
+/**
+ * A client's contact, who reports and re-check reminders go to, and whether it
+ * gets reminders at all. Saved as typed; the database copy is trimmed.
+ */
+export function updateClientDetails(clientId, patch) {
+  const clients = read()
+  const client = clients.find(c => c.id === clientId)
+  if (!client) return null
+  for (const key of CLIENT_DETAIL_KEYS) if (key in patch) client[key] = patch[key]
+  write(clients)
+  return client
+}
+
 export function findClientByName(name) {
   const n = normalise(name)
   return read().find(c => normalise(c.name) === n) ?? null

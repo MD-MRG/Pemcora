@@ -479,6 +479,15 @@ async function pushClient(ctx, client, before) {
     await db.renameClient(client.id, client.name)
   }
 
+  // Its contact and reminders switch: only what changed, or for a new client
+  // what differs from a blank one.
+  const details = Object.fromEntries(
+    Object.entries(api.CLIENT_DETAILS)
+      .filter(([key, [, blank]]) => (client[key] ?? blank) !== (before ? (before[key] ?? blank) : blank))
+      .map(([key, [, blank]]) => [key, client[key] ?? blank]),
+  )
+  if (Object.keys(details).length) await db.updateClientDetails(client.id, details)
+
   const locsBefore = byId(before?.locations)
   const locations = []
   for (const location of client.locations ?? []) {

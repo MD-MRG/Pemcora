@@ -296,6 +296,11 @@ export class FakeServer {
         const client = this.clients.find(c => c.id === id)
         if (client) client.name = name
       },
+      updateClientDetails: async (id, patch) => {
+        this.lastClientDetails = [id, patch]
+        const client = this.clients.find(c => c.id === id)
+        if (client) Object.assign(client, patch)
+      },
       deleteClient: async id => {
         const client = this.clients.find(c => c.id === id)
         for (const l of client?.locations ?? []) this.removeLocation(l.id)

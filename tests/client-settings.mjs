@@ -137,6 +137,37 @@ try {
   wb.worksheets[0].eachRow(r => rows.push(String(r.getCell(1).value ?? '')))
   log('the report prints the business\'s licence and REC numbers beside its contact details',
     rows.some(r => /Licence LIC-4410 {2}· {2}REC REC-2201/.test(r)), rows.slice(0, 4).join(' / '))
+
+  // ── A client's contact and reminders (C3b) ─────────────────────────────────
+  const client = () => page.evaluate(() => JSON.parse(localStorage.getItem('fc.clients'))[0])
+  const card = () => page.getByRole('region', { name: 'Rental Co details' })
+  await goto('#/edit-client')
+  await page.locator('tbody tr').filter({ hasText: 'Rental Co' }).click()
+  log('a client picked on Edit Client shows its contact, above its sites',
+    (await card().count()) === 1 && (await page.locator('tbody tr').filter({ hasText: '10 Smith St' }).count()) === 1)
+  await card().getByLabel('Contact name').fill('Jane Citizen')
+  await card().getByLabel('Contact phone').fill('0400 111 222')
+  await card().getByLabel('Contact email').fill('jane.example.com')
+  log('an address that isn\'t an email says so', /doesn't look like an email address/.test(await card().textContent()))
+  await card().getByLabel('Contact email').fill('jane@example.com')
+  log('and stops once it is', !/doesn't look like an email address/.test(await card().textContent()))
+  let c = await client()
+  log('the contact is saved with the client as it\'s typed',
+    c.contactName === 'Jane Citizen' && c.contactPhone === '0400 111 222' && c.contactEmail === 'jane@example.com', JSON.stringify(c))
+  log('with the team\'s reminders off, the card says none go out',
+    /switched off for the whole team in Settings/.test(await card().textContent()))
+  await card().getByLabel('Send this client re-check reminders').uncheck()
+  c = await client()
+  log('a client\'s reminders can be switched off on their own', c.remindersEnabled === false)
+  await page.screenshot({ path: `${DIR}/client-settings-client.png` })
+  await goto('#/edit-client')
+  await page.locator('tbody tr').filter({ hasText: 'Rental Co' }).click()
+  log('it all stays after a reload',
+    (await card().getByLabel('Contact name').inputValue()) === 'Jane Citizen' && !(await card().getByLabel('Send this client re-check reminders').isChecked()))
+  await page.locator('tbody tr').filter({ hasText: '10 Smith St' }).click()
+  log('and the site still opens to edit', (await page.getByLabel('Address', { exact: true }).inputValue()) === '10 Smith St')
+  await goto('#/new-client')
+  log('New Client is unchanged: no contact fields', (await page.getByLabel('Contact email').count()) === 0)
 } catch (e) {
   log('suite threw before finishing', false, e.message)
 } finally {
