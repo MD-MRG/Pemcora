@@ -59,6 +59,9 @@ const roomFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
   planNumber: r.plan_number ?? '',
+  // A key from the pack, such as 'bedroom': it switches sections on and is what
+  // coverage rules count by. Blank on a room nobody has typed.
+  roomType: r.room_type ?? '',
   position: r.position ?? 0,
 })
 
@@ -68,6 +71,7 @@ const roomToRow = (r, floorId, teamId, position) => ({
   team_id: teamId,
   name: r.name ?? '',
   plan_number: r.planNumber ?? '',
+  room_type: r.roomType ?? '',
   position: position ?? r.position ?? 0,
 })
 
@@ -129,6 +133,7 @@ const visitRoomFromRow = r => ({
   floorLabel: r.floor_label ?? '',
   position: r.position ?? 0,
   results: r.results ?? {},
+  readings: r.readings ?? {},
   troubleshooting: r.troubleshooting ?? {},
   // `sections` in the app, `sections_enabled` in the database — the column name
   // says what the value means, the app name is what the components already use.
@@ -146,6 +151,7 @@ const visitRoomToRow = e => ({
   floor_label: e.floorLabel ?? '',
   position: e.position ?? 0,
   results: e.results ?? {},
+  readings: e.readings ?? {},
   troubleshooting: e.troubleshooting ?? {},
   sections_enabled: e.sections ?? {},
   comments: e.comments ?? '',
@@ -166,6 +172,9 @@ const visitFromRow = r => ({
   firstCompletedAt: r.first_completed_at ?? null,
   createdBy: r.created_by,
   exportPreference: r.export_preference ?? null,
+  // The whole-site step: sections done once per visit, and those repeated for
+  // each item at the site. Shaped like a room (testTypes.js).
+  siteResults: r.site_results ?? {},
   rooms: Object.fromEntries(
     (r.visit_rooms ?? [])
       .filter(vr => vr.room_id)
@@ -750,6 +759,7 @@ export async function updateRoom(roomId, patch) {
   const row = {}
   if ('name' in patch) row.name = patch.name ?? ''
   if ('planNumber' in patch) row.plan_number = patch.planNumber ?? ''
+  if ('roomType' in patch) row.room_type = patch.roomType ?? ''
   if ('position' in patch) row.position = patch.position ?? 0
   const { error } = await supabase.from('rooms').update(row).eq('id', roomId)
   if (error) throw error
@@ -928,11 +938,30 @@ export async function updateVisit(visitId, patch) {
   if ('technician' in patch) row.technician = patch.technician ?? ''
   if ('completedAt' in patch) row.completed_at = patch.completedAt
   if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
-  const { data, error } = await supabase.from('visits').update(row).eq('id', visitId).select('id')
+  if ('siteResults' in patch) row.site_results = patch.siteResults ?? {}
+  const { data, error } = await supabase
+    .from('visits')
+    .update(row)
+    .eq('id', visitId)
+    .select('id, completed_at')
   if (error) throw error
   // Every member can write a visit, so no row back means it isn't there any more:
   // deleted on another device, while this one held changes to it.
   if (!data?.length) throw coded('This visit has been deleted on another device.', 'VISIT_GONE')
+  // A reopened visit finished again keeps the date it was first finished (0006),
+  // whatever this device sent.
+  return { completedAt: data[0].completed_at }
+}
+
+/** A visit's whole-site step as the database holds it now, or null if the visit has gone. */
+export async function getVisitSite(visitId) {
+  const { data, error } = await supabase
+    .from('visits')
+    .select('site_results')
+    .eq('id', visitId)
+    .maybeSingle()
+  if (error) throw error
+  return data ? (data.site_results ?? {}) : null
 }
 
 export const completeVisit = visitId =>
@@ -965,7 +994,7 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
 }
 
 // Without its test list, which only matters if there is something to merge.
-const ROOM_ANSWERS = 'results, troubleshooting, sections_enabled, comments, status, fails, updated_at'
+const ROOM_ANSWERS = 'results, readings, troubleshooting, sections_enabled, comments, status, fails, updated_at'
 
 /** One room as the database holds it now, or null if it holds no such row. */
 export async function getVisitRoom(visitId, roomId, { withTemplate = false } = {}) {

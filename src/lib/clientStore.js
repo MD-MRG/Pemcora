@@ -384,11 +384,20 @@ export function setVisitTechnician(clientId, locationId, visitId, technician) {
   return true
 }
 
+// Finishing a visit. A reopened one was a correction, and keeps the date it was
+// first finished, so its report and due dates stay as they were (2.2). The
+// database keeps it regardless; this is so the screen says so straight away,
+// offline too.
+function finish(visit) {
+  visit.completedAt = visit.firstCompletedAt ?? new Date().toISOString()
+  visit.firstCompletedAt = visit.completedAt
+}
+
 export function completeVisit(clientId, locationId, visitId) {
   const clients = read()
   const visit = findVisit(clients, clientId, locationId, visitId)
   if (!visit) return false
-  visit.completedAt = new Date().toISOString()
+  finish(visit)
   write(clients)
   return true
 }
@@ -525,6 +534,26 @@ export function saveRoomEntry(clientId, locationId, visitId, roomId, patch) {
   return entry
 }
 
+// ── The whole-site step ─────────────────────────────────────────────────────
+//
+// Sections done once per visit, and those repeated for each item at the site,
+// kept on the visit as one entry shaped like a room's (testTypes.js). It has no
+// status or fail count of its own: a visit's fails are counted from the answers.
+
+export function getSiteEntry(clientId, locationId, visitId) {
+  const site = findVisit(read(), clientId, locationId, visitId)?.siteResults
+  return site && Object.keys(site).length ? site : null
+}
+
+export function saveSiteEntry(clientId, locationId, visitId, patch) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return null
+  visit.siteResults = { ...(visit.siteResults ?? {}), ...patch, touchedAt: new Date().toISOString() }
+  write(clients)
+  return visit.siteResults
+}
+
 // ── Report exports ──────────────────────────────────────────────────────────
 //
 // Only the revision record is kept, never the file. The visit holds everything
@@ -556,7 +585,7 @@ export function recordExport(clientId, locationId, visitId, { mode, filename }) 
   if (existing >= 0) visit.exports[existing] = record
   else visit.exports.push(record)
 
-  if (!visit.completedAt) visit.completedAt = new Date().toISOString()
+  if (!visit.completedAt) finish(visit)
 
   write(clients)
   return record

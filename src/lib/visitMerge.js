@@ -11,9 +11,13 @@
 // answer stay cleared. Free text is the exception. Two different comments are both
 // somebody's words, so both are kept, newest first.
 //
+// A visit's whole-site step is merged the same way (`mergeSite`). Its sections
+// repeated per item hold one level more, each item's answers under its id, and
+// the merge goes item by item and then test by test.
+//
 // Pure, and needs nothing but its arguments.
 
-import { roomFails } from './testTypes.js'
+import { roomFails, scopeOf } from './testTypes.js'
 
 const isPlain = v => v !== null && typeof v === 'object' && !Array.isArray(v)
 
@@ -63,6 +67,17 @@ function mergeMap(base, ours, theirs, leaf) {
   return out
 }
 
+// The sections whose answers sit under an item's id: results[sectionId][itemId][testId].
+const itemGroups = template =>
+  new Set((template?.sections ?? []).filter(s => scopeOf(s) === 'item').map(s => s.id))
+
+// Has anyone answered this test in this group: in a section repeated per item,
+// for any item.
+const isAnswered = (results, group, testId, items) =>
+  items.has(group)
+    ? Object.values(results?.[group] ?? {}).some(answers => answers?.[testId] !== undefined)
+    : results?.[group]?.[testId] !== undefined
+
 const testIds = template => [
   ...(template?.tests ?? []).map(t => t.id),
   ...(template?.sections ?? []).flatMap(s => (s.tests ?? []).map(t => t.id)),
@@ -71,7 +86,8 @@ const testIds = template => [
 // The room keeps one test list, the one first opened. If the other device worked
 // from a list with different tests (it was edited, or reset, in between), its
 // answered tests join that list, or their answers would be kept but never shown.
-function joinTemplates(kept, other, results) {
+// renamed is sameTests' map: the other list's ids as the answers now hold them.
+function joinTemplates(kept, other, results, renamed = new Map()) {
   if (!kept || !Object.keys(kept).length) return other ?? kept
   if (!other || !Object.keys(other).length || deepEqual(kept, other)) return kept
 
@@ -79,15 +95,19 @@ function joinTemplates(kept, other, results) {
   template.tests = template.tests ?? []
   template.sections = template.sections ?? []
   const known = new Set(testIds(template))
-  const answered = (group, t) => !known.has(t.id) && results?.[group]?.[t.id] !== undefined
+  const idOf = id => renamed.get(id) ?? id
+  const items = new Set([...itemGroups(other)].map(idOf))
+  const answered = (group, t) =>
+    !known.has(t.id) && !renamed.has(t.id) && isAnswered(results, group, t.id, items)
 
   template.tests.push(...(other.tests ?? []).filter(t => answered('main', t)))
   for (const section of other.sections ?? []) {
-    const missing = (section.tests ?? []).filter(t => answered(section.id, t))
+    const id = idOf(section.id)
+    const missing = (section.tests ?? []).filter(t => answered(id, t))
     if (!missing.length) continue
-    const target = template.sections.find(s => s.id === section.id)
+    const target = template.sections.find(s => s.id === id)
     if (target) target.tests.push(...missing)
-    else template.sections.push({ ...section, tests: missing })
+    else template.sections.push({ ...section, id, tests: missing })
   }
   return template
 }
@@ -116,18 +136,36 @@ function sameTests(kept, other) {
 
 function underIds(entry, map) {
   if (!entry || !map.size) return entry
+  const items = itemGroups(entry.template)
   const rename = obj =>
     Object.fromEntries(Object.entries(obj ?? {}).map(([k, v]) => [map.get(k) ?? k, v]))
+  const perItem = obj =>
+    Object.fromEntries(
+      Object.entries(obj ?? {}).map(([itemId, tests]) => [itemId, isPlain(tests) ? rename(tests) : tests]),
+    )
   const groups = obj =>
     Object.fromEntries(
-      Object.entries(obj ?? {}).map(([g, tests]) => [map.get(g) ?? g, isPlain(tests) ? rename(tests) : tests]),
+      Object.entries(obj ?? {}).map(([g, tests]) => [
+        map.get(g) ?? g,
+        !isPlain(tests) ? tests : items.has(g) ? perItem(tests) : rename(tests),
+      ]),
+    )
+  // A note on a test repeated per item is keyed `itemId:testId` (noteKey).
+  const notes = obj =>
+    Object.fromEntries(
+      Object.entries(obj ?? {}).map(([k, v]) => {
+        const at = k.lastIndexOf(':')
+        if (at < 0) return [map.get(k) ?? k, v]
+        const testId = k.slice(at + 1)
+        return [`${k.slice(0, at)}:${map.get(testId) ?? testId}`, v]
+      }),
     )
   return {
     ...entry,
     results: groups(entry.results),
     ...(entry.readings ? { readings: groups(entry.readings) } : {}),
     sections: rename(entry.sections),
-    troubleshooting: rename(entry.troubleshooting),
+    troubleshooting: notes(entry.troubleshooting),
   }
 }
 
@@ -138,9 +176,8 @@ export function mergeRoom(baseEntry, oursEntry, theirs) {
   if (!theirs) return oursEntry
   if (!oursEntry) return theirs
 
-  const ours = hasTemplate(theirs)
-    ? underIds(oursEntry, sameTests(theirs.template, oursEntry.template))
-    : oursEntry
+  const renamed = hasTemplate(theirs) ? sameTests(theirs.template, oursEntry.template) : new Map()
+  const ours = underIds(oursEntry, renamed)
   const base = hasTemplate(theirs) && hasTemplate(baseEntry)
     ? underIds(baseEntry, sameTests(theirs.template, baseEntry.template))
     : baseEntry
@@ -165,11 +202,25 @@ export function mergeRoom(baseEntry, oursEntry, theirs) {
         : deepEqual(ours.status, base?.status) || !oursNewer
           ? theirs.status
           : ours.status,
-    template: joinTemplates(theirs.template, ours.template, results),
+    template: joinTemplates(theirs.template, ours.template, results, renamed),
     touchedAt: oursNewer ? ours.touchedAt : (theirs.touchedAt ?? theirs.updatedAt),
   }
   if (!ours.readings && !theirs.readings) delete merged.readings
   merged.fails = roomFails(merged).length
+  return merged
+}
+
+/**
+ * A visit's whole-site step: the same merge as a room. It has no status and no
+ * fail count of its own; Home and the report count its fails from the answers.
+ */
+export function mergeSite(baseSite, oursSite, theirs) {
+  const has = site => !!site && Object.keys(site).length > 0
+  if (!has(theirs)) return oursSite
+  if (!has(oursSite)) return theirs
+  const merged = mergeRoom(has(baseSite) ? baseSite : undefined, oursSite, theirs)
+  delete merged.fails
+  if (merged.status === undefined) delete merged.status
   return merged
 }
 
@@ -194,6 +245,7 @@ export function mergeVisit(local, server) {
     completedAt: server.completedAt ?? local.completedAt ?? null,
     exportPreference: server.exportPreference ?? local.exportPreference ?? null,
     rooms,
+    siteResults: mergeSite(undefined, local.siteResults, server.siteResults) ?? {},
     exports: exports.sort((a, b) => a.revision - b.revision),
   }
 }

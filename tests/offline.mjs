@@ -528,11 +528,13 @@ try {
     const ctx = await testContext(browser, { viewport: { width: 1280, height: 900 } })
     const page = await ctx.newPage()
     const requests = []
+    const sent = [] // what went with each request: its query and its body
     let script = []
     await ctx.route('**/*', async route => {
       const request = route.request()
       const url = new URL(request.url())
       if (url.hostname === localhost) return route.continue()
+      sent.push({ search: decodeURIComponent(url.search), body: request.postData() ? JSON.parse(request.postData()) : null })
       requests.push(`${request.method()} ${url.pathname.replace('/rest/v1', '')}${request.method() === 'DELETE' ? url.search : ''}`)
       const next = script.shift()
       if (!next) return route.abort()
@@ -697,6 +699,50 @@ try {
       log('a room comes back in the app\'s shape',
         out.data?.results?.main?.t1 === 'PASS' && out.data.status === 'in-progress' && out.data.updatedAt && out.data.comments === 'Hi', JSON.stringify(out.error))
       log('every request stayed on this machine', requests.every(r => r.startsWith('GET /visit_rooms')), requests.join(' | '))
+
+      // Readings, the whole-site step and room types (C1).
+      script = [{
+        status: 200,
+        body: [{ results: {}, readings: { main: { t1: { value: '0.4', unit: 'Ω' } } }, troubleshooting: {}, sections_enabled: {}, comments: '', status: 'in_progress', fails: 0, updated_at: '2026-10-01T00:00:00+00:00' }],
+      }]
+      out = await call('getVisitRoom', ['v1', 'r1'])
+      log('a room\'s readings are asked for, and come back with it',
+        out.data?.readings?.main?.t1?.value === '0.4' && /readings/.test(sent.at(-1).search), sent.at(-1).search)
+
+      script = [{ status: 201, body: { id: 'x', visit_id: 'v1', room_id: 'r1', results: {}, readings: { main: { t1: { value: '1', unit: 'ms' } } } } }]
+      out = await call('saveVisitRoom', ['t', 'v1', 'r1', { ...entry, readings: { main: { t1: { value: '1', unit: 'ms' } } } }])
+      log('and are saved with it', sent.at(-1).body?.readings?.main?.t1?.unit === 'ms' && out.data?.readings?.main?.t1?.value === '1', JSON.stringify(sent.at(-1).body))
+
+      script = [{ status: 200, body: [{ id: 'v1', completed_at: '2025-01-01T00:00:00+00:00' }] }]
+      out = await call('updateVisit', ['v1', { siteResults: { results: { ss: { w1: 'PASS' } } }, completedAt: '2026-10-01T00:00:00Z' }])
+      log('the whole-site step is saved on the visit', sent.at(-1).body?.site_results?.results?.ss?.w1 === 'PASS', JSON.stringify(sent.at(-1).body))
+      log('and the completion date the database kept comes back',
+        out.data?.completedAt === '2025-01-01T00:00:00+00:00' && /completed_at/.test(sent.at(-1).search), JSON.stringify(out))
+      script = [{ status: 200, body: [{ id: 'v1', completed_at: null }] }]
+      out = await call('updateVisit', ['v1', { technician: 'Sam' }])
+      log('a visit saved without one sends no whole-site step', !('site_results' in (sent.at(-1).body ?? {})), JSON.stringify(sent.at(-1).body))
+
+      script = [{ status: 200, body: [{ site_results: { results: { ss: { w1: 'NA' } } } }] }]
+      out = await call('getVisitSite', ['v1'])
+      log('the whole-site step reads back on its own', out.data?.results?.ss?.w1 === 'NA' && /site_results/.test(sent.at(-1).search), JSON.stringify(out))
+      script = [{ status: 200, body: [] }]
+      out = await call('getVisitSite', ['gone'])
+      log('from a visit that has gone, as nothing', out.data === null, JSON.stringify(out))
+
+      script = [{ status: 201, body: row('mine', { site_results: { results: { ss: { w1: 'PASS' } } } }) }]
+      out = await call('startVisit', startArgs)
+      log('a visit comes back with its whole-site step', out.data?.siteResults?.results?.ss?.w1 === 'PASS', JSON.stringify(out.error))
+
+      script = [{ status: 201, body: { id: 'r1', name: 'Bedroom 1', plan_number: '', room_type: 'bedroom', position: 0 } }]
+      out = await call('addRoom', ['t', 'f1', { id: 'r1', name: 'Bedroom 1', roomType: 'bedroom' }, 0])
+      log('a room goes in with its type, and comes back with it',
+        sent.at(-1).body?.room_type === 'bedroom' && out.data?.roomType === 'bedroom', JSON.stringify(sent.at(-1).body))
+      script = [{ status: 204, body: null }]
+      out = await call('updateRoom', ['r1', { roomType: 'hallway' }])
+      log('a changed type is sent', sent.at(-1).body?.room_type === 'hallway', JSON.stringify(sent.at(-1).body))
+      script = [{ status: 204, body: null }]
+      out = await call('updateRoom', ['r1', { name: 'Bedroom 2' }])
+      log('and only when it changed', !('room_type' in (sent.at(-1).body ?? {})), JSON.stringify(sent.at(-1).body))
     }
     await ctx.close()
   }

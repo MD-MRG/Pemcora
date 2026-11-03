@@ -44,7 +44,7 @@
 
 import * as api from '../api.js'
 import { classifySaveError } from '../saveErrors.js'
-import { deepEqual, mergeRoom, mergeVisit } from '../visitMerge.js'
+import { deepEqual, mergeRoom, mergeSite, mergeVisit } from '../visitMerge.js'
 
 const byId = xs => new Map((xs ?? []).map(x => [x.id, x]))
 const idsOf = xs => new Set((xs ?? []).map(x => x.id))
@@ -63,12 +63,17 @@ const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference']
 // nobody has finished as in_progress, so not-started reads the same as that.
 const roomContent = e => ({
   results: e?.results ?? {},
+  readings: e?.readings ?? {},
   troubleshooting: e?.troubleshooting ?? {},
   sections: e?.sections ?? {},
   comments: e?.comments ?? '',
   status: e?.status === 'complete' ? 'complete' : 'in-progress',
 })
 const sameRoom = (a, b) => deepEqual(roomContent(a), roomContent(b))
+
+// The whole-site step has no status, and its test list travels with it.
+const siteContent = s => ({ ...roomContent(s), status: null, template: s?.template ?? {} })
+const sameSite = (a, b) => deepEqual(siteContent(a), siteContent(b))
 
 // The database hangs visits off a location; the app expects them nested inside
 // it, keyed by room. Reshape here so nothing above this file has to know the
@@ -81,11 +86,13 @@ const treeVisit = v => ({
   completedAt: v.completedAt,
   firstCompletedAt: v.firstCompletedAt,
   exportPreference: v.exportPreference,
+  siteResults: v.siteResults ?? {},
   rooms: Object.fromEntries(
     Object.entries(v.rooms).map(([roomId, r]) => [
       roomId,
       {
         results: r.results,
+        readings: r.readings,
         sections: r.sections,
         troubleshooting: r.troubleshooting,
         comments: r.comments,
@@ -198,7 +205,7 @@ export function supabaseAdapter(teamId, userId, source = api) {
         unsavedClients: [...new Set(ctx.unsavedClients)],
         aliases: ctx.aliases,
       }
-      if (ctx.joins.length || ctx.merges.length || ctx.arrivals.length) {
+      if (ctx.joins.length || ctx.merges.length || ctx.arrivals.length || ctx.kept.length) {
         report.rebase = data => rebase(data, ctx)
       }
       return report
@@ -278,6 +285,7 @@ const freshRun = () => ({
   joins: [],
   merges: [],
   arrivals: [],
+  kept: [],
 })
 
 function findLocation(data, locationId) {
@@ -320,10 +328,21 @@ function rebase(data, ctx) {
     if (at >= 0) location.visits[at] = mergeVisit(location.visits[at], server)
   }
 
-  for (const { visitId, roomId, pushed, merged } of ctx.merges) {
+  for (const { visitId, roomId, site, pushed, merged } of ctx.merges) {
     const visit = findVisit(data, visitId)
+    if (site) {
+      if (visit) visit.siteResults = mergeSite(pushed, visit.siteResults, merged)
+      continue
+    }
     if (!visit?.rooms?.[roomId]) continue
     visit.rooms[roomId] = mergeRoom(pushed, visit.rooms[roomId], merged)
+  }
+
+  // A correction finished again: the date is the one the database kept, unless
+  // it has been reopened here since.
+  for (const { visitId, completedAt } of ctx.kept) {
+    const visit = findVisit(data, visitId)
+    if (visit?.completedAt) visit.completedAt = completedAt
   }
   return data
 }
@@ -512,7 +531,7 @@ async function pushLocation(ctx, client, location, locBefore) {
       if (!roomBefore) {
         await db.addRoom(teamId, floor.id, room, j)
       } else if (
-        changed(roomBefore, room, ['name', 'planNumber']) ||
+        changed(roomBefore, room, ['name', 'planNumber', 'roomType']) ||
         roomBefore.position !== j
       ) {
         await db.updateRoom(room.id, { ...room, position: j })
@@ -599,7 +618,26 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
     brandNew = Object.keys(base.rooms).length === 0
   }
 
-  if (changed(base, visit, VISIT_KEYS)) await db.updateVisit(visit.id, visit)
+  // Only what changed, so the whole-site step goes only when it has, and merged.
+  const patch = Object.fromEntries(
+    VISIT_KEYS.filter(k => changed(base, visit, [k])).map(k => [k, visit[k]]),
+  )
+  let site = visit.siteResults
+  if (!deepEqual(base.siteResults ?? {}, site ?? {})) {
+    site = await siteToSave(ctx, visit, base.siteResults, brandNew)
+    patch.siteResults = site ?? {}
+  }
+
+  let completedAt = visit.completedAt
+  if (Object.keys(patch).length) {
+    const saved = await db.updateVisit(visit.id, patch)
+    // A reopened visit finished again keeps its first date. This device may not
+    // have known it had one, if it was reopened somewhere else.
+    if (completedAt && saved?.completedAt && Date.parse(saved.completedAt) !== Date.parse(completedAt)) {
+      completedAt = saved.completedAt
+      ctx.kept.push({ visitId: visit.id, completedAt })
+    }
+  }
 
   const settledRooms = {}
   for (const [roomId, entry] of Object.entries(visit.rooms ?? {})) {
@@ -627,7 +665,21 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
     await db.recordExport(teamId, visit.id, record.revision, record.filename, userId)
   }
 
-  return { ...visit, rooms: settledRooms }
+  return { ...visit, completedAt, ...(site ? { siteResults: site } : {}), rooms: settledRooms }
+}
+
+/**
+ * The whole-site step, as a room is: if another device has changed it since this
+ * one last read it, the two are merged test by test, item by item.
+ */
+async function siteToSave(ctx, visit, siteBefore, brandNew) {
+  if (ctx.strict || brandNew) return visit.siteResults
+  const server = await ctx.api.getVisitSite(visit.id)
+  if (!server || sameSite(server, siteBefore)) return visit.siteResults
+  const merged = mergeSite(siteBefore, visit.siteResults, server)
+  if (sameSite(merged, visit.siteResults)) return visit.siteResults
+  ctx.merges.push({ visitId: visit.id, site: true, pushed: visit.siteResults, merged })
+  return merged
 }
 
 /**

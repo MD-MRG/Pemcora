@@ -1142,6 +1142,30 @@ step:
   pad; saved to `visits.signoff`.
 - After completing a reopened visit, show the completion date the database kept (its first
   one), not the device's.
+- Decided with M.D. before building it (3 November):
+  - Six commits: C1 readings, whole-site results, room types and the kept completion date
+    through the cache and the Supabase adapter; C1b equipment items through the same; C1c
+    room types in the editors, and routes, navigation and Home's labels from the pack
+    registry; C1d typed answers and fail notes; C1e the whole-site step; C1f sign-off.
+  - Nothing in the app read or wrote `assets` before C1, and "Add item" and the coverage
+    warnings need it, so C1b adds reading items, adding them and pinning them to a room.
+    C2 builds the equipment panel on top.
+  - A failed test with `onFail: 'replace'` says the alarm has to be replaced. The Replace
+    button arrives with C2's replace flow.
+  - Only the electrical and smoke alarm workflows ask for an outcome and a sign-off. AV and
+    Custom List finish exactly as today.
+  - The room type field shows only for a team holding a pack that defines room types, so an
+    AV team's editors are unchanged.
+  - The licence number fills in from the technician's own `member_prefs.licence_number`,
+    which C3 lets them set. Until then it starts blank and is typed at sign-off.
+- How C1 (the data) came out:
+  - The whole-site step is saved on the visit only when it changed, and merged first if
+    another device changed it, as a room is: item by item, then test by test.
+  - Finishing a reopened visit shows its first completion date straight away, offline too.
+    The database's answer has the last word, for a device that didn't know the visit had
+    one.
+  - Found while testing: when two devices' lists named a section differently underneath, a
+    test only the other device's list had was kept but never shown. It now joins the list.
 
 #### C2. Equipment panel per site
 

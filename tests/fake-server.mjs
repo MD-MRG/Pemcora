@@ -186,6 +186,7 @@ export class FakeServer {
       completedAt: null,
       firstCompletedAt: null,
       exportPreference: null,
+      siteResults: {},
       rooms: {},
       exports: [],
       ...rest,
@@ -208,6 +209,7 @@ export class FakeServer {
       floorLabel: entry.floorLabel ?? '',
       position: entry.position ?? 0,
       results: entry.results ?? {},
+      readings: entry.readings ?? {},
       troubleshooting: entry.troubleshooting ?? {},
       sections: entry.sections ?? {},
       comments: entry.comments ?? '',
@@ -354,7 +356,13 @@ export class FakeServer {
             const floor = location.floors.find(f => f.id === floorId)
             if (!floor) continue
             if (floor.rooms.some(r => r.id === room.id)) return room
-            floor.rooms.push({ id: room.id, name: room.name ?? '', planNumber: room.planNumber ?? '', position })
+            floor.rooms.push({
+              id: room.id,
+              name: room.name ?? '',
+              planNumber: room.planNumber ?? '',
+              roomType: room.roomType ?? '',
+              position,
+            })
             return room
           }
         }
@@ -398,6 +406,7 @@ export class FakeServer {
           completedAt: completedAt ?? null,
           firstCompletedAt: completedAt ?? null,
           exportPreference: null,
+          siteResults: {},
           rooms: {},
           exports: [],
         }
@@ -410,6 +419,7 @@ export class FakeServer {
         if (!visit) throw coded('This visit has been deleted on another device.', 'VISIT_GONE')
         if ('technician' in patch) visit.technician = patch.technician ?? ''
         if ('exportPreference' in patch) visit.exportPreference = patch.exportPreference ?? null
+        if ('siteResults' in patch) visit.siteResults = patch.siteResults ?? {}
         if ('completedAt' in patch && patch.completedAt !== visit.completedAt) {
           if (!patch.completedAt) {
             const open = this.openVisitAt(visit.locationId, visit.kind)
@@ -424,7 +434,10 @@ export class FakeServer {
             visit.firstCompletedAt = visit.firstCompletedAt ?? patch.completedAt
           }
         }
+        return { completedAt: visit.completedAt }
       },
+
+      getVisitSite: async id => this.visits.get(id)?.siteResults ?? null,
 
       deleteVisit: async id => {
         this.visits.delete(id)

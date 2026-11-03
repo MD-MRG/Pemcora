@@ -62,8 +62,8 @@ visit continued the next day, two devices on the same visit, a refused offline s
 
 | Suite | Runs against | Checks |
 |---|---|---|
-| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 171 |
-| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 101 |
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 205 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 113 |
 | `offline-e2e.mjs` | The live project. Not in `npm test` | |
 
 `offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
