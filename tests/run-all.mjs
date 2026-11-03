@@ -45,6 +45,7 @@ const SUITES = [
   'site-step',
   'signoff',
   'equipment',
+  'label-photo',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

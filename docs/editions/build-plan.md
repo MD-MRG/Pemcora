@@ -1266,6 +1266,18 @@ step:
     the new one is there to test. Its note then says what replaced it.
   - The panel can also remove an item with nothing in its place, after asking, for one taken
     away or added by mistake. It stays on record as removed, never deleted.
+- How C2c (the label photo) came out:
+  - The first file the app uploads. Editing an item that's already saved offers "Add label
+    photo". The photo is made small on the device first (1600 px on its long edge, JPEG at
+    about 70%, as D1 embeds them), then its `attachments` record goes in, then the file, to
+    `evidence/<team>/assets/<item>/…`. A file that fails to upload takes its record with it.
+  - The record goes first because that's where the plan refuses, with the code the upgrade
+    sheet looks for (2.11); the bucket's own refusal is a bare 403. The sheet says the item
+    itself is saved.
+  - A "Pro" tag shows beside it only once the limits are on (E6) and the team isn't Pro.
+  - The page shows the newest photo through a link that lasts five minutes.
+  - With no signal it says it needs a connection and sends nothing. An item not yet saved is
+    sent first; a photo can't point at an item the database doesn't have.
 
 #### C3. Settings and client pages
 
@@ -1536,6 +1548,9 @@ Northern Territory, and for Queensland's electrical check:
   device it's pressed on. M.D. can end every login of one account in the SQL editor with
   `delete from auth.sessions where user_id = (select id from auth.users where email = '…');`.
   That device's current token still works for up to an hour.
+- A label photo needs a connection when it's taken: the device keeps no copy to send later
+  (M.D.'s choice for C2). Everything else about the item saves offline. A photo replaced by a
+  newer one stays in the bucket, and the screens show only the newest.
 
 ## 7. Sources for the pack lists
 

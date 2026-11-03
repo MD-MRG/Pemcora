@@ -10,9 +10,10 @@ import { expiryFrom } from '../lib/equipment.js'
 //   asset    the item, or { assetType } for a new one, with anything to start from
 //   name     what the form is called, when it isn't "New smoke alarm" or "Edit …"
 //   children more buttons, beside Cancel: the panel's Replace and Remove
+//   footer   under the fields: the panel's label photo
 //   onSave(patch)   every field, blanks as null; attributes keep any this form
 //                   doesn't know about
-export default function ItemForm({ asset, rooms, name, saveLabel, onSave, onCancel, children }) {
+export default function ItemForm({ asset, rooms, name, saveLabel, onSave, onCancel, children, footer }) {
   const type = asset.assetType
   const fields = assetFields(type)
   const [form, setForm] = useState(() => ({
@@ -82,6 +83,8 @@ export default function ItemForm({ asset, rooms, name, saveLabel, onSave, onCanc
         <Input label="Installed" type="date" value={form.installedOn} onChange={set('installedOn')} />
         <Input label="Expires" type="date" value={form.expiresOn} onChange={set('expiresOn')} />
       </div>
+
+      {footer && <div className="mt-3">{footer}</div>}
 
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         {children && <div className="mr-auto flex flex-wrap gap-2">{children}</div>}

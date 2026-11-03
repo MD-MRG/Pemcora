@@ -63,6 +63,9 @@ export async function refreshEntitlements() {
   return state.value
 }
 
+/** The team whose plan is open: the one the app is working in. Null with no team, as in local-only mode. */
+export const entitledTeam = () => state.teamId
+
 export function closeEntitlements() {
   Object.assign(state, { teamId: null, userId: null, source: api, value: null, confirmation: null })
   emit()
@@ -201,6 +204,15 @@ function allowanceSheet(e, now) {
     ask: 'to upgrade',
   }
 }
+
+/** A photo the plan refused. The item itself saved: only the photo didn't. */
+export const photoSheet = () => ({
+  title: 'Photos are part of Pro',
+  lines: ['A photo of the label keeps its details with the item. The item itself is saved without it.'],
+  adds: PRO_ADDS,
+  action: 'Upgrade to Pro',
+  ask: 'to upgrade',
+})
 
 function packSheet(e, packId) {
   const label = packById(packId)?.label ?? packId

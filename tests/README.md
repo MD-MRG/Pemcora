@@ -178,6 +178,17 @@ panel on an AV page (53 checks).
 node tests/equipment.mjs
 ```
 
+`label-photo.mjs` is step C2c. A photo of a smoke alarm's label, in a browser that answers every
+request off the machine itself, as the database and the photo bucket would: the photo made small
+before it goes, its record first in the team's own folder and then the file, a failed upload
+taking its record with it, the plan's refusal getting the upgrade sheet, no signal sending
+nothing, and the Pro tag once the limits are on (26 checks). The photo checks need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/label-photo.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

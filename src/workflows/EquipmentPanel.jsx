@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import ItemForm from '../components/ItemForm.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import LabelPhoto from '../components/LabelPhoto.jsx'
 import { addAsset, listAssets, removeAsset, replaceAsset, updateAsset } from '../lib/clientStore.js'
 import { assetTypeLabel, assetTypeNoun, assetTypePlural } from '../data/packs/shared/assetTypes.js'
 import { expiryState, itemName, itemSummary, replacementOf, showDate } from '../lib/equipment.js'
@@ -57,6 +58,7 @@ export default function EquipmentPanel({ client, location, rooms, types, onChang
                         done()
                       },
                       {
+                        footer: <LabelPhoto asset={asset} name={itemName(asset, i)} />,
                         children: (
                           <>
                             <button type="button" onClick={() => setOpen({ replace: asset.id })} className={`${SIDE} text-navy`}>

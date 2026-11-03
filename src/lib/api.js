@@ -921,6 +921,65 @@ export async function updateAsset(assetId, patch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Photos (Pro)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A photo is a record in attachments and a file in the private 'evidence'
+// bucket, under the team's own folder. Unlike everything above, photos go
+// straight to the database: they need a connection (build plan C2), and the
+// device keeps no copy of them.
+
+const EVIDENCE = 'evidence'
+
+const photoFromRow = r => ({ id: r.id, assetId: r.asset_id, path: r.storage_path, takenAt: r.taken_at })
+
+/** An item's photos, newest first. */
+export async function listAssetPhotos(teamId, assetId) {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, asset_id, storage_path, taken_at')
+    .eq('team_id', teamId)
+    .eq('asset_id', assetId)
+    .order('taken_at', { ascending: false })
+  if (error) throw error
+  return data.map(photoFromRow)
+}
+
+/**
+ * Adds a photo of an item, already made small enough (photo.js). The item has
+ * to be in the database first.
+ *
+ * The record goes first, because that is where the plan says no, with the code
+ * the upgrade sheet looks for. The bucket's own refusal is a bare 403 that
+ * can't be told from any other. A file that then fails to upload takes its
+ * record with it, so no record names a file that isn't there.
+ */
+export async function addAssetPhoto(teamId, assetId, blob) {
+  const path = `${teamId}/assets/${assetId}/${crypto.randomUUID()}.jpg`
+  const { data, error } = await supabase
+    .from('attachments')
+    .insert({ team_id: teamId, asset_id: assetId, storage_path: path, caption: 'Label' })
+    .select('id, asset_id, storage_path, taken_at')
+    .single()
+  if (error) throw error
+  const { error: failed } = await supabase.storage
+    .from(EVIDENCE)
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: false })
+  if (failed) {
+    await supabase.from('attachments').delete().eq('id', data.id)
+    throw failed
+  }
+  return photoFromRow(data)
+}
+
+/** A link to look at a photo, good for five minutes: the bucket is private. */
+export async function photoUrl(path) {
+  const { data, error } = await supabase.storage.from(EVIDENCE).createSignedUrl(path, 300)
+  if (error) throw error
+  return data.signedUrl
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Visits
 // ─────────────────────────────────────────────────────────────────────────────
 
