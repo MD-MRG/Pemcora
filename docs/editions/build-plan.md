@@ -1301,6 +1301,24 @@ step:
 - AV settings: "Regular PM visit: every N months" (the team default).
 - Client page: "PM visits every N months" or "Use team default", the client's reminders
   switch, and the contact name, email and phone that reports and reminders go to.
+- Decided with M.D. before building it (4 November):
+  - Three commits: C3 the licence numbers and the team's reminders switch in Settings; C3b
+    each client's contact and reminders switch; C3c how often recurring checks are due, as a
+    team default and per client.
+  - "Every N months" is offered for every check whose interval the law doesn't fix and that
+    recurs: PM, QLD electrical safety, and the baseline electrical and smoke alarm checks,
+    each only to a team using it. Commissioning and Custom List never recur.
+  - A client's contact, reminders and intervals are set on Edit Client, once the client is
+    picked. New Client is unchanged.
+- How C3 (Settings) came out:
+  - A team with a check that's signed off records the business's licence and REC numbers
+    with its company details (`team_settings.company.licence_number`, `rec_number`). They
+    print beside its contact details on every report. An AV team isn't asked for them.
+  - Each technician's own licence number is set under Technician (`member_prefs`), and fills
+    in the sign-off. Saving it never blanks their technician name, or the other way round.
+  - "Send re-check reminders" switches reminders off for the whole team
+    (`team_settings.reminders_enabled`), admins only, as the company details are. It says
+    the emails start in a later update, since F sends them.
 
 #### C4. Due page
 

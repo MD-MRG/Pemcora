@@ -1052,6 +1052,28 @@ const items = () => store.listAssets('c1', 'l1')
   log('a joined visit keeps this device\'s sign-off', merged.outcome === 'compliant' && merged.signoff?.signature === 'M1 1L2 2')
 }
 
+// ── Licence numbers and the team's reminders switch (C3) ────────────────────
+{
+  const server = setup()
+  server.prefs = { defaultTechnician: 'Sam', licenceNumber: '' }
+  await boot(server)
+  log('reminders are on until the team switches them off', cache.readSettings()?.remindersEnabled === true)
+  const prefsWrites = server.countCalls('saveMemberPrefs')
+  cache.writeSettings({ ...cache.readSettings(), licenceNumber: 'QLD-77' })
+  await flush()
+  log('a technician\'s licence number reaches their own row, with only what changed',
+    server.prefs.licenceNumber === 'QLD-77' && server.prefs.defaultTechnician === 'Sam' &&
+      server.countCalls('saveMemberPrefs') === prefsWrites + 1 && server.countCalls('updateTeamSettings') === 0)
+  cache.writeSettings({ ...cache.readSettings(), remindersEnabled: false, company: { name: 'Sparks', licence_number: 'L1', rec_number: 'R1' } })
+  await flush()
+  log('the reminders switch and the company\'s numbers reach the team\'s settings',
+    server.settings.remindersEnabled === false && server.settings.company.rec_number === 'R1' && server.countCalls('saveMemberPrefs') === prefsWrites + 1)
+  server.admin = false
+  cache.writeSettings({ ...cache.readSettings(), remindersEnabled: true })
+  await flush()
+  log('a member can\'t switch them back on for everybody', server.settings.remindersEnabled === false)
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()

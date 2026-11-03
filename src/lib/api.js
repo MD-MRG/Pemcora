@@ -203,6 +203,7 @@ const visitFromRow = r => ({
 
 const settingsFromRow = r => ({
   company: r.company ?? {},
+  remindersEnabled: r.reminders_enabled ?? true,
   logoFull: r.logo_full ?? null,
   logoCollapsed: r.logo_collapsed ?? null,
   plate: r.plate ?? 'brass',
@@ -214,6 +215,7 @@ const settingsToRow = s => {
   if ('logoFull' in s) row.logo_full = s.logoFull ?? null
   if ('logoCollapsed' in s) row.logo_collapsed = s.logoCollapsed ?? null
   if ('plate' in s) row.plate = s.plate ?? 'brass'
+  if ('remindersEnabled' in s) row.reminders_enabled = s.remindersEnabled !== false
   return row
 }
 
@@ -313,18 +315,18 @@ export async function getMemberPrefs(teamId, userId) {
     .eq('user_id', userId)
     .maybeSingle()
   if (error) throw error
-  // The licence number is the member's own (0007). C3 lets them set it; until
-  // then it is read, to fill in the sign-off.
+  // The licence number is the member's own (0007): set in Settings, filled in
+  // at sign-off.
   return { defaultTechnician: data?.default_technician ?? '', licenceNumber: data?.licence_number ?? '' }
 }
 
+// Only the fields in `patch` are written, so saving the licence number never
+// blanks the technician's name, or the other way round.
 export async function saveMemberPrefs(teamId, userId, patch) {
-  const { error } = await supabase
-    .from('member_prefs')
-    .upsert(
-      { team_id: teamId, user_id: userId, default_technician: patch.defaultTechnician ?? '' },
-      { onConflict: 'team_id,user_id' },
-    )
+  const row = { team_id: teamId, user_id: userId }
+  if ('defaultTechnician' in patch) row.default_technician = patch.defaultTechnician ?? ''
+  if ('licenceNumber' in patch) row.licence_number = patch.licenceNumber ?? ''
+  const { error } = await supabase.from('member_prefs').upsert(row, { onConflict: 'team_id,user_id' })
   if (error) throw error
 }
 

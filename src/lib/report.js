@@ -146,7 +146,13 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     merge(r)
     r.getCell(1).font = { bold: true, size: 13, color: { argb: NAVY } }
   }
-  const contact = [company.abn && `ABN ${company.abn}`, company.phone, company.email]
+  const contact = [
+    company.abn && `ABN ${company.abn}`,
+    company.licence_number && `Licence ${company.licence_number}`,
+    company.rec_number && `REC ${company.rec_number}`,
+    company.phone,
+    company.email,
+  ]
     .filter(Boolean)
     .join('  ·  ')
   if (contact) {

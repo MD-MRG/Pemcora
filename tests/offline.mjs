@@ -786,6 +786,23 @@ try {
       script = [{ status: 200, body: [{ default_technician: 'Sam', licence_number: 'A1' }] }]
       out = await call('getMemberPrefs', ['t', 'u'])
       log('the technician\'s own licence number is read', out.data?.licenceNumber === 'A1' && out.data.defaultTechnician === 'Sam', JSON.stringify(out))
+
+      // Licence numbers and the reminders switch (C3).
+      script = [{ status: 201, body: null }]
+      out = await call('saveMemberPrefs', ['t', 'u', { licenceNumber: 'A2' }])
+      log('saving the licence number sends only it, so the technician\'s name is kept',
+        !out.error && sent.at(-1).body?.licence_number === 'A2' && !('default_technician' in (sent.at(-1).body ?? {})), JSON.stringify(sent.at(-1).body))
+      script = [{ status: 201, body: null }]
+      out = await call('saveMemberPrefs', ['t', 'u', { defaultTechnician: 'Sam' }])
+      log('and the other way round', sent.at(-1).body?.default_technician === 'Sam' && !('licence_number' in (sent.at(-1).body ?? {})), JSON.stringify(sent.at(-1).body))
+      script = [{ status: 200, body: [{ team_id: 't', company: {}, reminders_enabled: false, plate: 'brass' }] }]
+      out = await call('updateTeamSettings', ['t', { remindersEnabled: false }])
+      log('the team\'s reminders switch is saved on its own',
+        JSON.stringify(sent.at(-1).body) === '{"reminders_enabled":false}' && out.data?.remindersEnabled === false, JSON.stringify(sent.at(-1).body))
+      script = [{ status: 200, body: { team_id: 't', company: { licence_number: 'L1', rec_number: 'R1' }, plate: 'brass' } }]
+      out = await call('getTeamSettings', ['t'])
+      log('and read back, on unless the team switched it off, with the company\'s numbers',
+        out.data?.remindersEnabled === true && out.data.company.rec_number === 'R1', JSON.stringify(out))
     }
     await ctx.close()
   }

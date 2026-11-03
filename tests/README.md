@@ -190,6 +190,15 @@ nothing, and the Pro tag once the limits are on (26 checks). The photo checks ne
 node tests/label-photo.mjs
 ```
 
+`client-settings.mjs` is step C3. In a browser, with the team's packs put in place as the app
+reads them: an AV team's Settings with no licence numbers, a team doing electrical checks
+recording the business's licence and REC numbers and the technician's own, the sign-off
+filling it in, the report printing the business's, and the team's reminders switch (9 checks).
+
+```
+node tests/client-settings.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

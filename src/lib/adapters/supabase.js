@@ -10,6 +10,8 @@
 //   clients                → the client tree and its visits, any member's to write
 //   settings.company/logo/plate → team_settings, admin-only
 //   settings.technician    → member_prefs, the signed-in member's own row
+//   settings.licenceNumber → member_prefs too
+//   settings.remindersEnabled → team_settings, admin-only
 //   templates              → team_templates, admin-only
 //
 // They are written separately and in that knowledge: a plain member editing
@@ -173,6 +175,7 @@ export function supabaseAdapter(teamId, userId, source = api) {
           logoFull: settings.logoFull,
           logoCollapsed: settings.logoCollapsed,
           plate: settings.plate,
+          remindersEnabled: settings.remindersEnabled ?? true,
           technician: prefs.defaultTechnician ?? '',
           licenceNumber: prefs.licenceNumber ?? '',
         },
@@ -376,13 +379,14 @@ function note(ctx, what, e) {
 async function pushSettings(ctx, next, previous) {
   if (!next) return previous ?? next
 
-  if (!same(next.technician, previous?.technician)) {
+  const mine = {}
+  if (!same(next.technician, previous?.technician)) mine.defaultTechnician = next.technician
+  if (!same(next.licenceNumber, previous?.licenceNumber)) mine.licenceNumber = next.licenceNumber
+  if (Object.keys(mine).length) {
     try {
-      await ctx.api.saveMemberPrefs(ctx.teamId, ctx.userId, {
-        defaultTechnician: next.technician,
-      })
+      await ctx.api.saveMemberPrefs(ctx.teamId, ctx.userId, mine)
     } catch (e) {
-      note(ctx, 'Saving your technician name', e)
+      note(ctx, 'Saving your technician name and licence number', e)
     }
   }
 
@@ -393,6 +397,9 @@ async function pushSettings(ctx, next, previous) {
     teamPatch.logoCollapsed = next.logoCollapsed
   }
   if (next.plate !== previous?.plate) teamPatch.plate = next.plate
+  if ((next.remindersEnabled ?? true) !== (previous?.remindersEnabled ?? true)) {
+    teamPatch.remindersEnabled = next.remindersEnabled ?? true
+  }
   if (Object.keys(teamPatch).length === 0) return next
 
   // updateTeamSettings turns a zero-row update into a thrown error, which is

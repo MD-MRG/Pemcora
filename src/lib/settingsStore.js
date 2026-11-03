@@ -11,9 +11,14 @@
 //   company, logos, plate  → team_settings, shared by the whole team and
 //                            writable only by an admin. They print on every
 //                            report, so they describe the company, not you.
-//   technician             → member_prefs, your own row. Two technicians
-//                            sharing a team must not overwrite each other's
+//   technician,            → member_prefs, your own row. Two technicians
+//   licenceNumber            sharing a team must not overwrite each other's
 //                            name every time one of them starts a visit.
+//   remindersEnabled       → team_settings: re-check reminders for the whole
+//                            team, admin-only like the company.
+//
+// The company's licence and REC numbers are in `company` as the database
+// keeps them (licence_number, rec_number), beside its name and ABN.
 //
 // The app still sees one flat settings object, because that is what the pages
 // were written against; the adapter splits it on the way out.
@@ -33,9 +38,10 @@ const LEGACY_PLATE_KEY = 'fc.brand.plate' // where the plate colour used to live
 export const MAX_LOGO_BYTES = 200 * 1024
 
 const empty = () => ({
-  company: { name: '', abn: '', phone: '', email: '' },
+  company: { name: '', abn: '', phone: '', email: '', licence_number: '', rec_number: '' },
   technician: '',
-  licenceNumber: '', // the member's own, from member_prefs; set in Settings from C3
+  licenceNumber: '', // the member's own, from member_prefs
+  remindersEnabled: true,
   plate: 'brass',
   logoFull: null, // { src, reportSrc, name }
   logoCollapsed: null,
