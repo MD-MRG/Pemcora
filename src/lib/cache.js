@@ -42,6 +42,8 @@
 import { isNetworkFailure } from './saveErrors.js'
 
 const listeners = new Set()
+// Set while a write made during a render runs: see put().
+let quiet = false
 
 const emptyState = () => ({
   clients: [],
@@ -75,6 +77,7 @@ const state = {
 const clone = v => structuredClone(v)
 
 function emit() {
+  if (quiet) return
   for (const fn of listeners) fn()
 }
 
@@ -221,18 +224,30 @@ function scheduleWrite() {
 
 // Refresh before applying, or a write to one slice persists whatever stale
 // copy of the other two was in memory — silently reverting them.
-function put(name, next) {
+//
+// `duringRender` is for a write a component makes while it draws, as a template
+// filled in on first read is. Telling the listeners then would update the header's
+// save status in the middle of another component's render, which React warns about.
+// The data is in memory at once, so every read sees the same ids; only the news
+// waits until the render is over.
+function put(name, next, { duringRender = false } = {}) {
   current()
   if (next !== undefined) state.data[name] = next
   state.revision += 1
-  keepOnDevice()
-  emit()
-  scheduleWrite()
+  quiet = duringRender
+  try {
+    keepOnDevice()
+    emit()
+    scheduleWrite()
+  } finally {
+    quiet = false
+  }
+  if (duringRender) queueMicrotask(emit)
 }
 
 export const writeClients = next => put('clients', next)
 export const writeSettings = next => put('settings', next)
-export const writeTemplates = next => put('templates', next)
+export const writeTemplates = (next, options) => put('templates', next, options)
 
 const pushWith = (adapter, next, previous, held) =>
   adapter.push ? adapter.push(next, previous, held) : adapter.persist(next, previous)

@@ -993,6 +993,11 @@ step:
   `tests/offline-open.mjs` holds the app to it, and `tests/offline-e2e.mjs` checks against the
   real Auth server that the account's other logins still renew. Signing out a lost device from
   another one is step C5.
+- Found by the live runs of `tests/supabase-e2e.mjs` and `tests/migrate-e2e.mjs`: a team's test
+  lists are filled in from the pack file on first read, which happens while a page draws, and
+  that write told the header's save status at once. React logged it as an update during another
+  component's render. The data was always right. The write now keeps its news until the render
+  is over, and `tests/offline.mjs` fails on anything the app logs as an error.
 
 #### B3b. Opening with no signal
 

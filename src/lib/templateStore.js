@@ -62,11 +62,13 @@ const isBlank = t => !t || Object.keys(t).length === 0
 // first read fills them in. If a plain member gets there first the write is
 // refused by RLS — the template is still correct in memory for their session,
 // and the next admin to open the app persists it.
+//
+// That first read happens while a page draws, so the write says so.
 export function getTemplate(kind) {
   const all = readAll()
   if (isBlank(all[kind])) {
     all[kind] = seed(kind)
-    writeTemplates(all)
+    writeTemplates(all, { duringRender: true })
   }
   return all[kind]
 }

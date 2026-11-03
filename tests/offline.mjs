@@ -32,6 +32,14 @@ const log = (k, v, extra = '') =>
 
 const browser = await launch()
 const pageErrors = []
+// What the app logs as an error. Requests this suite refuses on purpose log one too,
+// as does a save tried with the connection off, so those are left out.
+const consoleErrors = []
+const expected = /^Failed to load resource|^\[cache\] save failed .*Failed to fetch/
+const watchConsole = page =>
+  page.on('console', m => {
+    if (m.type() === 'error' && !expected.test(m.text())) consoleErrors.push(m.text())
+  })
 const localhost = new URL(BASE).hostname
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -91,6 +99,7 @@ async function connect(page) {
 async function open(ctx) {
   const page = await ctx.newPage()
   page.on('pageerror', e => pageErrors.push(e.message))
+  watchConsole(page)
   await page.goto(BASE + '#/', { waitUntil: 'networkidle' })
   await connect(page)
   return page
@@ -450,6 +459,7 @@ try {
     const ctx = await testContext(browser, { viewport: { width: 1280, height: 900 } })
     const page = await ctx.newPage()
     page.on('pageerror', e => pageErrors.push(e.message))
+    watchConsole(page)
     await page.goto(BASE + '#/', { waitUntil: 'networkidle' })
 
     const mount = unsaved =>
@@ -692,6 +702,10 @@ try {
   }
 
   log('no page errors along the way', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
+  // A team's lists are blank until first read, and the read that fills them in comes
+  // while a page is being drawn. Only React's own warning shows if that tells the
+  // header too soon.
+  log('and nothing logged as an error', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
 } catch (e) {
   console.log('FAIL  suite threw before finishing — ' + e.message)
 } finally {
