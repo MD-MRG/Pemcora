@@ -956,6 +956,37 @@ export async function updateAsset(assetId, patch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// How often checks are due (C3)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Straight to the database, like photos: setting one recalculates the due dates
+// of every site it covers, which only the database can do. Owner or admin.
+
+/** The team's chosen intervals: its defaults (clientId null) and each client's own. */
+export async function listWorkflowIntervals(teamId) {
+  const { data, error } = await supabase
+    .from('workflow_intervals')
+    .select('workflow_id, client_id, interval_months')
+    .eq('team_id', teamId)
+  if (error) throw error
+  return data.map(r => ({ workflowId: r.workflow_id, clientId: r.client_id ?? null, months: r.interval_months }))
+}
+
+/**
+ * Sets how often a check is due: the team default (clientId null) or one
+ * client's own. Null months removes it: for a client, "use the team default".
+ */
+export async function setWorkflowInterval(teamId, workflowId, clientId, months) {
+  const { error } = await supabase.rpc('set_workflow_interval', {
+    p_team_id: teamId,
+    p_workflow_id: workflowId,
+    p_client_id: clientId ?? null,
+    p_months: months ?? null,
+  })
+  if (error) throw error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Photos (Pro)
 // ─────────────────────────────────────────────────────────────────────────────
 //

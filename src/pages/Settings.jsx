@@ -8,9 +8,11 @@ import TemplateEditor from '../components/TemplateEditor.jsx'
 import ImportLocalData from '../components/ImportLocalData.jsx'
 import AccountPanel from '../components/AccountPanel.jsx'
 import StarterPackCard from '../components/StarterPackCard.jsx'
+import IntervalSettings from '../components/IntervalSettings.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 import { useEntitlements } from '../context/team.js'
 import { isProvider, usesPack } from '../lib/entitlements.js'
+import { recurringWorkflows } from '../lib/intervals.js'
 import { WORKFLOWS, workflow } from '../data/packs/index.js'
 
 const TEMPLATES = [
@@ -263,6 +265,19 @@ export default function Settings() {
             off stops them for every client; each client can also be switched off on its own.
             Reminder emails start in a later update.
           </p>
+        </section>
+      )}
+
+      {inspects && recurringWorkflows(entitlements).length > 0 && (
+        <section className="border-hair rounded-xl border bg-white p-6">
+          <h2 className="text-[19px] font-bold tracking-[-.01em]">How often checks are due</h2>
+          <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+            The team's default for every client. A client can have its own on Edit Client. Changing
+            one moves the due dates of the sites it covers, from each site's last visit.
+          </p>
+          <div className="mt-4">
+            <IntervalSettings />
+          </div>
         </section>
       )}
 

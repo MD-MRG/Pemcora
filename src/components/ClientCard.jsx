@@ -1,11 +1,30 @@
 import { useState } from 'react'
 import Field from './Field.jsx'
+import IntervalSettings from './IntervalSettings.jsx'
 import { updateClientDetails } from '../lib/clientStore.js'
 import { getSettings } from '../lib/settingsStore.js'
+import { useEntitlements } from '../context/team.js'
+import { recurringWorkflows } from '../lib/intervals.js'
 
 // A client's own details on Edit Client, above its sites (build plan C3): who
 // its reports and re-check reminders go to, and whether it gets reminders. They
 // save as they're typed, offline too, like the rest of the client.
+// This client's own intervals, under its contact: only for a team with a
+// recurring check.
+function IntervalsHere({ client }) {
+  const entitlements = useEntitlements()
+  if (!recurringWorkflows(entitlements).length) return null
+  return (
+    <div className="border-hair mt-5 border-t pt-4">
+      <h3 className="text-[14px] font-bold">How often checks are due here</h3>
+      <p className="text-ink-soft mt-0.5 mb-3 text-[13px]">
+        Left blank, {client.name}'s sites follow the team default in Settings.
+      </p>
+      <IntervalSettings clientId={client.id} />
+    </div>
+  )
+}
+
 export default function ClientCard({ client, children }) {
   const [details, setDetails] = useState(() => ({
     contactName: client.contactName ?? '',
@@ -59,6 +78,7 @@ export default function ClientCard({ client, children }) {
           : 'Emailed to the contact as a check at one of their sites comes due.'}
       </p>
 
+      <IntervalsHere client={client} />
       {children}
     </section>
   )

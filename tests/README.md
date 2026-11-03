@@ -37,7 +37,8 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 registry (`src/data/packs/`) and `templateStore.js` straight into Node and holds
 them to the catalogue in `supabase/migrations/` — every pack and workflow there
 has an entry, the AV lists are the ones Pemcora shipped with, and every seed
-becomes a template with only the fields step B2 defines (36 checks).
+becomes a template with only the fields step B2 defines, and each workflow's interval is the
+catalogue's (38 checks).
 
 ```
 node tests/packs.mjs
@@ -62,8 +63,8 @@ visit continued the next day, two devices on the same visit, a refused offline s
 
 | Suite | Runs against | Checks |
 |---|---|---|
-| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 229 |
-| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 124 |
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 241 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 130 |
 | `offline-e2e.mjs` | The live project. Not in `npm test` | |
 
 `offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
@@ -190,11 +191,13 @@ nothing, and the Pro tag once the limits are on (26 checks). The photo checks ne
 node tests/label-photo.mjs
 ```
 
-`client-settings.mjs` is steps C3 and C3b. In a browser, with the team's packs put in place as
-the app reads them: an AV team's Settings with no licence numbers, a team doing electrical checks
-recording the business's licence and REC numbers and the technician's own, the sign-off filling
-it in, the report printing the business's, the team's reminders switch, and a client's contact
-and reminders switch on Edit Client (16 checks).
+`client-settings.mjs` is steps C3, C3b and C3c. The interval rules in Node, then a browser with
+the team's packs put in place as the app reads them, answering every request off the machine
+itself: an AV team's Settings with no licence numbers, a team doing electrical checks recording
+the business's licence and REC numbers and the technician's own, the sign-off filling it in, the
+report printing the business's, the team's reminders switch, a client's contact and reminders
+switch on Edit Client, and how often checks are due for the team and for one client, refused,
+offline, and never for one the law fixes (36 checks).
 
 ```
 node tests/client-settings.mjs

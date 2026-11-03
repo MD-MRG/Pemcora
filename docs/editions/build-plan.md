@@ -1327,6 +1327,17 @@ step:
     theirs. A new client's contact follows it in.
   - An address that doesn't look like an email says so, but is kept: it's the technician's
     to fix. With the team's reminders off, the card says none go out.
+- How C3c (how often checks are due) came out:
+  - Each recurring workflow's pack file now gives its interval as the catalogue has it
+    (`interval: { months, fixed }`), and `tests/packs.mjs` holds the two to each other. PM
+    recurs with no default; Commissioning and Custom List have none.
+  - Settings has "How often checks are due": every N months for each recurring check the team
+    uses, left blank for the pack's default. A check the law fixes says so, with its interval,
+    and can't be changed. Edit Client's card has the same for that client, left blank for the
+    team's default.
+  - Saving calls `set_workflow_interval()`, which moves the due dates of every site it covers.
+    So it needs a connection and an owner or admin, like Teams, and says so; a client added
+    offline is sent first. Nothing is saved on the device.
 
 #### C4. Due page
 

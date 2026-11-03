@@ -22,6 +22,8 @@ export default {
       // (decision D10). The report doubles as the compliance certificate.
       id: 'qld_smoke_alarm',
       label: 'Smoke alarm compliance inspection',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 12, fixed: true },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/qld-smoke-alarm',
@@ -88,6 +90,8 @@ export default {
       // Starts with the baseline list; step G2 adds Queensland's own rules.
       id: 'qld_electrical_safety',
       label: 'Electrical safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 24, fixed: false },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/qld-electrical-safety',

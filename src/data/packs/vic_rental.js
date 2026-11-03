@@ -19,6 +19,8 @@ export default {
       // Mirrors Energy Safe Victoria's report form section for section.
       id: 'vic_electrical_safety',
       label: 'Electrical safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 24, fixed: true },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/vic-electrical-safety',
@@ -45,6 +47,8 @@ export default {
       // check's due date comes from Pemcora's records, not from the list.
       id: 'vic_smoke_alarm',
       label: 'Smoke alarm safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 12, fixed: true },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/vic-smoke-alarm',

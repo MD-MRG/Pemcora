@@ -20,6 +20,8 @@ export default {
     {
       id: 'electrical_safety',
       label: 'Electrical safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 24, fixed: false },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/electrical-safety',
@@ -45,6 +47,8 @@ export default {
       // The next check's due date comes from Pemcora's records, not the list.
       id: 'smoke_alarm_check',
       label: 'Smoke alarm check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 12, fixed: false },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/smoke-alarm-check',

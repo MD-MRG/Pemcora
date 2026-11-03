@@ -110,6 +110,9 @@ export default {
       // only the test template and the wording differ.
       id: 'maintenance',
       label: 'Preventative maintenance',
+      // How often it recurs, as the database catalogue says (0006). PM has no
+      // default: its cadence is the service contract's, set by the team (C3).
+      interval: { months: null, fixed: false },
       // Its page in the navigation, and where Home's Resume goes.
       nav: {
         path: '/maintenance',
