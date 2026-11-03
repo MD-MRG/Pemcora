@@ -34,6 +34,7 @@ export class FakeServer {
   constructor() {
     this.clients = []
     this.visits = new Map()
+    this.assets = new Map()
     this.settings = { company: {}, logoFull: null, logoCollapsed: null, plate: 'brass' }
     this.templates = { maintenance: {}, commissioning: {}, custom: {} }
     this.prefs = { defaultTechnician: '' }
@@ -234,6 +235,7 @@ export class FakeServer {
     return {
       listClients: async () => this.clients,
       listVisitsForTeam: async () => [...this.visits.values()],
+      listAssets: async () => [...this.assets.values()],
       getTeamSettings: async () => this.settings,
       getTemplates: async () => this.templates,
       getMemberPrefs: async () => this.prefs,
@@ -443,6 +445,40 @@ export class FakeServer {
         this.visits.delete(id)
       },
 
+      // As the security rules and foreign keys have it: an item goes in under a site,
+      // and a room, that still exist.
+      addAsset: async (_team, locationId, asset) => {
+        if (this.assets.has(asset.id)) return this.assets.get(asset.id)
+        if (!this.findLocation(locationId) || (asset.roomId && !this.findRoom(asset.roomId))) {
+          throw pg('23503', 'insert or update on table "assets" violates foreign key constraint')
+        }
+        const row = {
+          id: asset.id,
+          locationId,
+          roomId: asset.roomId ?? null,
+          assetType: asset.assetType,
+          label: asset.label ?? '',
+          make: asset.make ?? '',
+          model: asset.model ?? '',
+          serial: asset.serial ?? '',
+          attributes: asset.attributes ?? {},
+          installedOn: asset.installedOn ?? null,
+          expiresOn: asset.expiresOn ?? null,
+          removedAt: asset.removedAt ?? null,
+          createdAt: asset.createdAt ?? this.now(),
+        }
+        this.assets.set(asset.id, row)
+        return row
+      },
+      updateAsset: async (id, patch) => {
+        const asset = this.assets.get(id)
+        if (!asset) throw pg('23503', 'This item has been deleted on another device.')
+        if (patch.roomId && !this.findRoom(patch.roomId)) {
+          throw pg('23503', 'insert or update on table "assets" violates foreign key constraint')
+        }
+        Object.assign(asset, patch)
+      },
+
       visitExists: async id => this.visits.has(id),
 
       getVisitRoom: async (visitId, roomId, { withTemplate = false } = {}) => {
@@ -492,6 +528,9 @@ export class FakeServer {
     for (const [visitId, visit] of this.visits) {
       if (visit.locationId === id) this.visits.delete(visitId)
     }
+    for (const [assetId, asset] of this.assets) {
+      if (asset.locationId === id) this.assets.delete(assetId)
+    }
   }
 
   removeRoom(id) {
@@ -502,7 +541,11 @@ export class FakeServer {
         }
       }
     }
-    // on delete set null: the answers stay, against no room.
+    // on delete set null: the items stay at the site, and the answers stay,
+    // against no room.
+    for (const asset of this.assets.values()) {
+      if (asset.roomId === id) asset.roomId = null
+    }
     for (const visit of this.visits.values()) {
       if (visit.rooms[id]) {
         visit.roomless = [...(visit.roomless ?? []), visit.rooms[id]]

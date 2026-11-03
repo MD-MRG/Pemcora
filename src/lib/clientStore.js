@@ -139,6 +139,7 @@ export function saveFloors(clientId, locationId, floors) {
   const location = client?.locations.find(l => l.id === locationId)
   if (!location) return false
   location.floors = pruneFloors(floors)
+  unpinFromGoneRooms(location)
   write(clients)
   return true
 }
@@ -465,6 +466,7 @@ export function deleteRoom(clientId, locationId, roomId) {
     const i = floor.rooms.findIndex(r => r.id === roomId)
     if (i >= 0) {
       floor.rooms.splice(i, 1)
+      unpinFromGoneRooms(location)
       write(clients)
       return true
     }
@@ -479,6 +481,63 @@ export function deleteRoom(clientId, locationId, roomId) {
 export function roomResultCount(clientId, locationId, roomId) {
   const location = findLoc(read(), clientId, locationId)
   return (location?.visits ?? []).filter(v => v.rooms?.[roomId]).length
+}
+
+// ── Equipment ───────────────────────────────────────────────────────────────
+//
+// The items at a site: smoke alarms, RCDs, displays. They belong to the site, so
+// they carry over from visit to visit, and each may be pinned to a room. A replaced
+// item is marked removed, never deleted, so the reports that tested it still name
+// it. C2 builds the equipment panel; the whole-site step adds items as it goes.
+
+/** The site's items, removed ones included. */
+export function listAssets(clientId, locationId) {
+  return findLoc(read(), clientId, locationId)?.assets ?? []
+}
+
+export function addAsset(clientId, locationId, { assetType, roomId = null, label = '', ...details }) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location || !assetType) return null
+  const asset = {
+    id: uid(),
+    assetType,
+    roomId,
+    label: String(label ?? '').trim(),
+    make: '',
+    model: '',
+    serial: '',
+    attributes: {},
+    installedOn: null,
+    expiresOn: null,
+    removedAt: null,
+    ...details,
+    // When it was added decides which reports it appears in, so it is the
+    // device's own clock, not whenever the database first hears of it.
+    createdAt: new Date().toISOString(),
+  }
+  location.assets = [...(location.assets ?? []), asset]
+  write(clients)
+  return asset
+}
+
+export function updateAsset(clientId, locationId, assetId, patch) {
+  const clients = read()
+  const asset = findLoc(clients, clientId, locationId)?.assets?.find(a => a.id === assetId)
+  if (!asset) return null
+  const { id: _id, createdAt: _createdAt, ...allowed } = patch
+  Object.assign(asset, allowed)
+  write(clients)
+  return asset
+}
+
+// A room deleted from the floor plan leaves its items at the site, unpinned, as
+// the database does.
+function unpinFromGoneRooms(location) {
+  const rooms = new Set((location.floors ?? []).flatMap(f => (f.rooms ?? []).map(r => r.id)))
+  for (const asset of location.assets ?? []) {
+    if (asset.roomId && !rooms.has(asset.roomId)) asset.roomId = null
+  }
 }
 
 // ── Room entries within a visit ─────────────────────────────────────────────

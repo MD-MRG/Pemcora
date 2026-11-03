@@ -58,6 +58,7 @@ const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
 const LOCATION_KEYS = ['address', 'suburb', 'city', 'state', 'postcode']
 const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference']
+const ASSET_KEYS = ['roomId', 'assetType', 'label', 'make', 'model', 'serial', 'attributes', 'installedOn', 'expiresOn', 'removedAt']
 
 // What someone entered in a room, from either side. The database stores a room
 // nobody has finished as in_progress, so not-started reads the same as that.
@@ -133,9 +134,10 @@ export function supabaseAdapter(teamId, userId, source = api) {
     immediate: false,
 
     async load() {
-      const [clients, visits, settings, templates, prefs] = await Promise.all([
+      const [clients, visits, assets, settings, templates, prefs] = await Promise.all([
         source.listClients(teamId),
         source.listVisitsForTeam(teamId),
+        source.listAssets(teamId),
         source.getTeamSettings(teamId),
         source.getTemplates(teamId),
         source.getMemberPrefs(teamId, userId),
@@ -148,9 +150,15 @@ export function supabaseAdapter(teamId, userId, source = api) {
         byLocation.set(v.locationId, list)
       }
 
+      const assetsAt = new Map()
+      for (const { locationId, ...asset } of assets) {
+        assetsAt.set(locationId, [...(assetsAt.get(locationId) ?? []), asset])
+      }
+
       for (const c of clients) {
         for (const l of c.locations) {
           l.visits = byLocation.get(l.id) ?? []
+          l.assets = assetsAt.get(l.id) ?? []
         }
       }
 
@@ -539,6 +547,13 @@ async function pushLocation(ctx, client, location, locBefore) {
     }
   }
 
+  // Equipment, once the rooms it can be pinned to are in. Removed, never deleted,
+  // so there is nothing to delete here.
+  const assetsBefore = byId(locBefore?.assets)
+  for (const asset of location.assets ?? []) {
+    await pushAsset(ctx, location, asset, assetsBefore.get(asset.id))
+  }
+
   // One visit at a time, so a refused one stops there. It stays on the device,
   // and whatever it was before stays in the snapshot.
   const visitsBefore = byId(locBefore?.visits)
@@ -564,6 +579,45 @@ async function pushLocation(ctx, client, location, locBefore) {
     }
   }
   return { ...location, visits }
+}
+
+/**
+ * One item. Only the fields that changed are sent, so two devices editing different
+ * things about the same alarm both keep theirs. An item pinned to a room deleted on
+ * another device stays at the site, unpinned, as the database leaves the items of a
+ * room it deletes.
+ */
+async function pushAsset(ctx, location, asset, before) {
+  const { api: db, teamId } = ctx
+  const gone = e => !ctx.strict && classifySaveError(e) === 'gone'
+
+  if (!before) {
+    try {
+      await db.addAsset(teamId, location.id, asset)
+    } catch (e) {
+      if (!gone(e) || !asset.roomId) throw e
+      await db.addAsset(teamId, location.id, { ...asset, roomId: null })
+    }
+    return
+  }
+
+  const patch = Object.fromEntries(
+    ASSET_KEYS.filter(k => !deepEqual(before[k] ?? null, asset[k] ?? null)).map(k => [k, asset[k] ?? null]),
+  )
+  if (!Object.keys(patch).length) return
+  try {
+    await db.updateAsset(asset.id, patch)
+  } catch (e) {
+    if (!gone(e)) throw e
+    // Its room has gone, or the item itself has, with its site. Unpinned, it
+    // saves in the first case; there is nothing left to save in the second.
+    if (!patch.roomId) return
+    try {
+      await db.updateAsset(asset.id, { ...patch, roomId: null })
+    } catch (again) {
+      if (!gone(again)) throw again
+    }
+  }
 }
 
 function hold(ctx, client, location, visit, reason, error) {

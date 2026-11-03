@@ -465,6 +465,32 @@ try {
   const typeRow = (await sb.from('rooms').select('room_type').eq('id', ids.r1).single()).data
   log(!typed && typeRow?.room_type === 'bedroom', 'a room\'s type is saved', typed ?? typeRow?.room_type)
 
+  // Equipment (C1b): added on one device, through its store, onto the real table.
+  const alarmId = await a.page.evaluate(async w => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    const added = store.addAsset(w.clientId, w.locationId, { assetType: 'smoke_alarm', roomId: w.roomId, label: 'Room r1 alarm' })
+    await cache.flush()
+    return added.id
+  }, where)
+  const assetRow = async () => (await sb.from('assets').select('*').eq('id', alarmId).maybeSingle()).data
+  const alarmRow = await assetRow()
+  log(alarmRow?.room_id === ids.r1 && alarmRow.asset_type === 'smoke_alarm' && alarmRow.location_id === ids.location,
+    'an item reaches the real database, pinned to its room', JSON.stringify(alarmRow))
+  await a.page.evaluate(async ({ w, id }) => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    store.updateAsset(w.clientId, w.locationId, id, { removedAt: new Date().toISOString() })
+    return cache.flush()
+  }, { w: where, id: alarmId })
+  log(!!(await assetRow())?.removed_at, 'removing it marks it removed')
+  await b.page.reload({ waitUntil: 'networkidle' })
+  await goToSite(b.page)
+  log(await b.page.evaluate(async ({ w, id }) => {
+    const store = await import('/src/lib/clientStore.js')
+    return !!store.listAssets(w.clientId, w.locationId).find(x => x.id === id)?.removedAt
+  }, { w: where, id: alarmId }), 'and the other device reads it, removed, on its next load')
+
   // Finished, reopened for a correction, finished again: the first date stands.
   const finishOn = page => page.evaluate(async w => {
     const store = await import('/src/lib/clientStore.js')

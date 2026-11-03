@@ -943,6 +943,88 @@ const saveSite = (visitId, patch) => store.saveSiteEntry('c1', 'l1', visitId, pa
   log('reopened and finished by exporting, it keeps that date', Date.parse(localVisit('new').completedAt) === done)
 }
 
+// ── Equipment (C1b) ─────────────────────────────────────────────────────────
+const items = () => store.listAssets('c1', 'l1')
+{
+  const server = setup()
+  const device = await boot(server)
+  const alarm = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r1', label: 'Bedroom 1 alarm' })
+  log('an item is added at the site, pinned to a room', items().length === 1 && items()[0].roomId === 'r1' && !!alarm.createdAt)
+  await flush()
+  const row = server.assets.get(alarm.id)
+  log('it reaches the database under its own id', row?.locationId === 'l1' && row.roomId === 'r1' && row.assetType === 'smoke_alarm')
+  log('with the date it was added on the device', row?.createdAt === alarm.createdAt)
+  log('and nothing more to send', !cache.hasUnsavedWork() && saveStatus() === 'saved')
+
+  await boot(server, device)
+  log('it comes back after a reload', items()[0]?.label === 'Bedroom 1 alarm' && items()[0].roomId === 'r1')
+
+  // Two devices edit different things about the same alarm.
+  server.assets.get(alarm.id).serial = 'SN-THEIRS'
+  store.updateAsset('c1', 'l1', alarm.id, { label: 'Main bedroom alarm', attributes: { power: 'hardwired' } })
+  await flush()
+  const both = server.assets.get(alarm.id)
+  log('an edit sends only what changed, so another device\'s edit stays',
+    both.label === 'Main bedroom alarm' && both.attributes.power === 'hardwired' && both.serial === 'SN-THEIRS', JSON.stringify(both))
+  log('an item\'s id and added date can\'t be edited',
+    store.updateAsset('c1', 'l1', alarm.id, { id: 'x', createdAt: 'then' }).id === alarm.id && items()[0].createdAt === alarm.createdAt)
+
+  store.updateAsset('c1', 'l1', alarm.id, { removedAt: new Date().toISOString() })
+  await flush()
+  log('removing it marks it removed, never deletes it', !!server.assets.get(alarm.id)?.removedAt && items().length === 1)
+
+  // Offline, then a reload, then back.
+  server.down = true
+  const rcd = store.addAsset('c1', 'l1', { assetType: 'rcd', label: 'RCD 1' })
+  await flush()
+  await boot(server, device)
+  log('an item added offline survives a reload', items().some(a => a.id === rcd.id))
+  server.down = false
+  await flush()
+  log('and goes when the connection returns', server.assets.has(rcd.id) && !cache.hasUnsavedWork())
+
+  // Its answer lost on the way back: sent again, no second item.
+  const lost = store.addAsset('c1', 'l1', { assetType: 'rcd', label: 'RCD 2' })
+  server.loseAnswer('addAsset')
+  const first = await flush()
+  const second = await flush()
+  log('an item whose answer was lost is sent again without a duplicate',
+    first === false && second === true && [...server.assets.values()].filter(a => a.label === 'RCD 2').length === 1 && server.assets.has(lost.id))
+}
+{
+  // A room deleted: its items stay at the site, unpinned.
+  const server = setup()
+  await boot(server)
+  const alarm = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r2' })
+  await flush()
+  store.deleteRoom('c1', 'l1', 'r2')
+  log('deleting a room here unpins its items', items()[0].roomId === null)
+  await flush()
+  log('and the database agrees', server.assets.get(alarm.id)?.roomId === null && !cache.hasUnsavedWork())
+
+  // Pinned on this device to a room another device deleted meanwhile.
+  const late = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r1' })
+  const moved = items()[0]
+  store.updateAsset('c1', 'l1', moved.id, { roomId: 'r1' })
+  server.removeRoom('r1')
+  await flush()
+  log('an item added under a room deleted elsewhere is kept at the site, unpinned',
+    server.assets.get(late.id)?.roomId === null, JSON.stringify(server.assets.get(late.id)))
+  log('so is one moved into it', server.assets.get(moved.id)?.roomId === null)
+  log('and saving carries on', saveStatus() === 'saved' && !cache.hasUnsavedWork(), saveStatus())
+
+  // Its site deleted elsewhere: nothing left to save, and nothing stuck.
+  const ghost = setup()
+  ghost.seedClient({ id: 'c2', name: 'Other', locationId: 'l2', rooms: ['r9'] })
+  await boot(ghost)
+  const kept = store.addAsset('c2', 'l2', { assetType: 'rcd' })
+  await flush()
+  ghost.assets.delete(kept.id)
+  store.updateAsset('c2', 'l2', kept.id, { label: 'Renamed' })
+  await flush()
+  log('an edit to an item deleted with its site elsewhere doesn\'t jam saving', saveStatus() === 'saved', saveStatus())
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()

@@ -31,7 +31,14 @@ const byPosition = (a, b) => (a.position ?? 0) - (b.position ?? 0)
 // A friendlier message that keeps its code, which is what saveErrors.js goes by.
 const coded = (message, code) => Object.assign(new Error(message), { code })
 
-const PARENT = { clients: 'client', locations: 'site', floors: 'floor', rooms: 'room', visits: 'visit' }
+const PARENT = {
+  clients: 'client',
+  locations: 'site',
+  floors: 'floor',
+  rooms: 'room',
+  visits: 'visit',
+  assets: 'item',
+}
 
 /**
  * The security rules check that a new row hangs off a parent in the same team, and
@@ -815,6 +822,96 @@ export async function saveFloorPlan(teamId, locationId, floors) {
       else await addRoom(teamId, floorId, room, j)
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Equipment
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The items at a site, such as smoke alarms and RCDs, each optionally pinned to a
+// room. Removed, never deleted, so a past report still names the alarm it tested.
+
+const assetFromRow = r => ({
+  id: r.id,
+  locationId: r.location_id,
+  roomId: r.room_id ?? null,
+  assetType: r.asset_type,
+  label: r.label ?? '',
+  make: r.make ?? '',
+  model: r.model ?? '',
+  serial: r.serial ?? '',
+  // The pack's own fields for this type, such as a smoke alarm's power source.
+  attributes: r.attributes ?? {},
+  installedOn: r.installed_on ?? null,
+  expiresOn: r.expires_on ?? null,
+  removedAt: r.removed_at ?? null,
+  createdAt: r.created_at,
+})
+
+// What an edit can change, each with what a blank is stored as. Which site an
+// item is at, and when it was added, never change.
+const ASSET_COLUMNS = {
+  roomId: ['room_id', null],
+  assetType: ['asset_type', ''],
+  label: ['label', ''],
+  make: ['make', ''],
+  model: ['model', ''],
+  serial: ['serial', ''],
+  attributes: ['attributes', {}],
+  installedOn: ['installed_on', null],
+  expiresOn: ['expires_on', null],
+  removedAt: ['removed_at', null],
+}
+
+const assetToRow = patch =>
+  Object.fromEntries(
+    Object.entries(ASSET_COLUMNS)
+      .filter(([key]) => key in patch)
+      .map(([key, [column, blank]]) => [column, patch[key] ?? blank]),
+  )
+
+// Every item in the team, removed ones included, in one round trip.
+export async function listAssets(teamId) {
+  const { data, error } = await supabase
+    .from('assets')
+    .select('*')
+    .eq('team_id', teamId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return data.map(assetFromRow)
+}
+
+/**
+ * Adds an item under its own id. Its added date is the device's, so an item added
+ * offline during a visit still stood at the site when that visit finished.
+ */
+export async function addAsset(teamId, locationId, asset) {
+  const { data, error } = await supabase
+    .from('assets')
+    .insert({
+      id: asset.id,
+      team_id: teamId,
+      location_id: locationId,
+      ...(asset.createdAt ? { created_at: asset.createdAt } : {}),
+      ...assetToRow(asset),
+    })
+    .select()
+    .single()
+  // Sent again after its answer was lost: it's already in.
+  if (isDuplicate(error)) return asset
+  if (error) throw await whenParentGone(error, [['locations', locationId], ['rooms', asset.roomId]])
+  return assetFromRow(data)
+}
+
+export async function updateAsset(assetId, patch) {
+  const { data, error } = await supabase
+    .from('assets')
+    .update(assetToRow(patch))
+    .eq('id', assetId)
+    .select('id')
+  if (error) throw await whenParentGone(error, [['assets', assetId], ['rooms', patch.roomId]])
+  // Gone with its site, deleted on another device.
+  if (!data?.length) throw coded('This item has been deleted on another device.', '23503')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

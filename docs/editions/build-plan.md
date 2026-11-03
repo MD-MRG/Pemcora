@@ -1166,6 +1166,16 @@ step:
     one.
   - Found while testing: when two devices' lists named a section differently underneath, a
     test only the other device's list had was kept but never shown. It now joins the list.
+- How C1b (equipment items) came out:
+  - Each site in the app's data holds its items, removed ones included, read for the whole
+    team in one request when the app loads.
+  - An edit sends only the fields that changed, so two devices editing different things
+    about the same alarm both keep theirs. On the same field, the last save wins.
+  - An item's added date is the device's, so one added offline during a visit still stood
+    at the site when that visit finished.
+  - A room deleted on this device or another leaves its items at the site, unpinned, as the
+    database's foreign key does. An edit to an item deleted with its site is dropped, so it
+    can't jam saving.
 
 #### C2. Equipment panel per site
 

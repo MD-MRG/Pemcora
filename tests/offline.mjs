@@ -743,6 +743,36 @@ try {
       script = [{ status: 204, body: null }]
       out = await call('updateRoom', ['r1', { name: 'Bedroom 2' }])
       log('and only when it changed', !('room_type' in (sent.at(-1).body ?? {})), JSON.stringify(sent.at(-1).body))
+
+      // Equipment (C1b).
+      const alarm = { id: 'a1', assetType: 'smoke_alarm', roomId: 'r1', label: 'Hall', attributes: { power: 'hardwired' }, createdAt: '2026-10-01T00:00:00Z' }
+      script = [{ status: 201, body: { id: 'a1', location_id: 'l1', room_id: 'r1', asset_type: 'smoke_alarm', label: 'Hall', attributes: { power: 'hardwired' }, created_at: '2026-10-01T00:00:00+00:00' } }]
+      out = await call('addAsset', ['t', 'l1', alarm])
+      const added = sent.at(-1).body
+      log('an item goes in under its own id, site, room and type',
+        added?.id === 'a1' && added.location_id === 'l1' && added.room_id === 'r1' && added.asset_type === 'smoke_alarm' && added.team_id === 't', JSON.stringify(added))
+      log('with the date it was added on the device, and its pack fields',
+        added?.created_at === '2026-10-01T00:00:00Z' && added.attributes?.power === 'hardwired')
+      log('and comes back in the app\'s shape', out.data?.assetType === 'smoke_alarm' && out.data.roomId === 'r1' && out.data.removedAt === null, JSON.stringify(out))
+      script = [duplicate]
+      out = await call('addAsset', ['t', 'l1', alarm])
+      log('an item sent again is fine', out.data?.id === 'a1', JSON.stringify(out.error))
+      script = [notAllowed('assets'), found, missing]
+      out = await call('addAsset', ['t', 'l1', alarm])
+      log('an item under a room deleted elsewhere is reported as gone',
+        out.error?.code === '23503' && requests.at(-1) === 'GET /rooms', JSON.stringify(out.error) + ' ' + requests.at(-1))
+
+      script = [{ status: 200, body: [{ id: 'a1' }] }]
+      out = await call('updateAsset', ['a1', { label: 'Landing', removedAt: '2026-10-02T00:00:00Z' }])
+      log('an edit sends only what changed',
+        !out.error && JSON.stringify(Object.keys(sent.at(-1).body).sort()) === '["label","removed_at"]', JSON.stringify(sent.at(-1).body))
+      script = [{ status: 200, body: [] }]
+      out = await call('updateAsset', ['a1', { label: 'Landing' }])
+      log('an edit to an item that has gone says so', out.error?.code === '23503', JSON.stringify(out.error))
+
+      script = [{ status: 200, body: [{ id: 'a1', location_id: 'l1', room_id: null, asset_type: 'rcd', label: '', make: '', model: '', serial: '', attributes: {}, installed_on: null, expires_on: '2036-01-01', removed_at: null, created_at: '2026-10-01T00:00:00+00:00' }] }]
+      out = await call('listAssets', ['t'])
+      log('the team\'s items are read in one go', out.data?.[0]?.locationId === 'l1' && out.data[0].expiresOn === '2036-01-01' && out.data[0].roomId === null, JSON.stringify(out))
     }
     await ctx.close()
   }
