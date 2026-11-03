@@ -167,6 +167,16 @@ exported as it always was (22 checks).
 node tests/signoff.mjs
 ```
 
+`equipment.mjs` is step C2. The rules for item types and expiry dates in Node, then a Queensland
+smoke alarm site in a browser: the equipment panel before any visit, alarms added and edited with
+their own fields, a manufacture date filling in the expiry, expired and soon-to-expire alarms
+flagged, a removed one kept under Removed, the whole-site step testing the alarms the panel
+added, and no panel on an AV page (39 checks).
+
+```
+node tests/equipment.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

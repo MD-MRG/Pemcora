@@ -509,7 +509,8 @@ export function roomResultCount(clientId, locationId, roomId) {
 // The items at a site: smoke alarms, RCDs, displays. They belong to the site, so
 // they carry over from visit to visit, and each may be pinned to a room. A replaced
 // item is marked removed, never deleted, so the reports that tested it still name
-// it. C2 builds the equipment panel; the whole-site step adds items as it goes.
+// it. The equipment panel (C2) lists and edits them; the whole-site step adds
+// items as it goes.
 
 /** The site's items, removed ones included. */
 export function listAssets(clientId, locationId) {

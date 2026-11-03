@@ -1235,6 +1235,28 @@ step:
 - Give the report snapshot and the Excel export all the site's assets, removed ones
   included, with `createdAt` and `removedAt`, so they can work out what stood there at the
   visit.
+- Decided with M.D. before building it (3 November):
+  - Four commits: C2 each item type's own fields and the equipment panel; C2b replacing an
+    item, in the panel and from a failed alarm's note; C2c the label photo; C2d every item in
+    the report and the Excel export.
+  - The panel is on the site's page of each workflow whose list tests items one by one. AV
+    pages and Edit Client are unchanged.
+  - A label photo needs a connection for now. Everything else about an item saves offline as
+    usual (section 6).
+  - No AV item types yet: smoke alarms and RCDs are the only ones, so AV is unchanged.
+- How C2 (fields and the panel) came out:
+  - Each type's own fields are in `shared/assetTypes.js`, kept in `assets.attributes` under
+    their id. A smoke alarm records its sensor, power, whether it's interconnected, whether
+    it's marked AS 3786-2014, and its manufacture date; an RCD the circuits it protects, its
+    rated trip current and whether it's an RCBO. They're proposals, like the lists, and go to
+    the electrician with them.
+  - Entering a smoke alarm's manufacture date fills in its expiry ten years on. A typed expiry
+    is left alone.
+  - The panel lists the site's items of each type the list tests, with their room and expiry.
+    One expired, or expiring within three months, is flagged as the Due page will flag it.
+    Removed ones stay on record under "Removed".
+  - A field set back to "Not recorded" is cleared, and an attribute the form doesn't know about,
+    such as one a later version adds, survives an edit.
 
 #### C3. Settings and client pages
 

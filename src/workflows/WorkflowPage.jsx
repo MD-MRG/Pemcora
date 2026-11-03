@@ -10,7 +10,9 @@ import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
 import SiteStep from './SiteStep.jsx'
+import EquipmentPanel from './EquipmentPanel.jsx'
 import { SITE, gapLines, isSiteOnly, siteSectionsOf } from '../lib/siteStep.js'
+import { panelTypes } from '../lib/equipment.js'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
@@ -340,6 +342,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const siteStarted = Object.values(site?.results ?? {}).some(g => Object.keys(g ?? {}).length > 0)
   const assets = listAssets(client.id, location.id)
   const gaps = hasSiteStep ? gapLines(list, rooms, assets) : []
+  // The item types the list tests one by one: none on an AV list.
+  const itemTypes = panelTypes(list)
 
   // Group rooms under their floor, preserving floor order.
   const grouped = useMemo(() => {
@@ -665,6 +669,12 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
               </ul>
             </section>
           ))}
+        </div>
+      )}
+
+      {itemTypes.length > 0 && (
+        <div className="mt-4">
+          <EquipmentPanel client={client} location={location} rooms={rooms} types={itemTypes} onChanged={onChanged} />
         </div>
       )}
 

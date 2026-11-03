@@ -44,6 +44,7 @@ const SUITES = [
   'answers',
   'site-step',
   'signoff',
+  'equipment',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another
