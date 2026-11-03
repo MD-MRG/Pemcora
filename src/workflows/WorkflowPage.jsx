@@ -9,6 +9,8 @@ import FailNote from '../components/FailNote.jsx'
 import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
+import SiteStep from './SiteStep.jsx'
+import { SITE, gapLines, isSiteOnly, siteSectionsOf } from '../lib/siteStep.js'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
@@ -27,6 +29,7 @@ import {
   roomResultCount,
   deleteExport,
   reopenVisit,
+  listAssets,
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
 import { getSettings } from '../lib/settingsStore.js'
@@ -34,7 +37,7 @@ import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
-import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, typeOf } from '../lib/testTypes.js'
+import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
@@ -62,7 +65,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
   const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
@@ -79,7 +82,7 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, u
         <>
           <h3 className="text-[15px] font-bold">{config.progressNoun} in progress</h3>
           <p className="text-ink-soft mt-1 text-[13px] tabular-nums">
-            Started {fmt(visit.startedAt)} · {doneCount} of {roomCount} rooms complete
+            Started {fmt(visit.startedAt)} · {progress ?? `${doneCount} of ${roomCount} rooms complete`}
           </p>
         </>
       ) : (
@@ -317,6 +320,20 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const rooms = roomsWithStatus(client.id, location.id, current)
   const done = rooms.filter(r => r.status === 'complete').length
 
+  // The whole-site step, when the list has one: as the visit snapshotted it, or
+  // as it stands for a visit that hasn't opened it yet.
+  const list = current?.siteResults?.template && Object.keys(current.siteResults.template).length
+    ? current.siteResults.template
+    : getTemplate(config.templateKind)
+  const hasSiteStep = siteSectionsOf(list).length > 0
+  // Nothing to do room by room: Continue goes straight to the whole-site step.
+  const siteOnly = isSiteOnly(list)
+  const site = current?.siteResults
+  const siteFailCount = siteFails(site).length
+  const siteStarted = Object.values(site?.results ?? {}).some(g => Object.keys(g ?? {}).length > 0)
+  const assets = listAssets(client.id, location.id)
+  const gaps = hasSiteStep ? gapLines(list, rooms, assets) : []
+
   // Group rooms under their floor, preserving floor order.
   const grouped = useMemo(() => {
     const map = new Map()
@@ -338,6 +355,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     const filename = await downloadReport({
       client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
       sheetName: config.sheetName,
+      assets,
       settings: getSettings(),
     })
     recordExport(client.id, location.id, current.id, { mode, filename })
@@ -440,6 +458,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         visit={current}
         roomCount={rooms.length}
         doneCount={done}
+        // A check done in the whole-site step has no rooms to complete.
+        progress={siteOnly ? (siteStarted ? 'whole site in progress' : 'whole site not started') : null}
         starting={starting}
         usage={usageLine(entitlements)}
         needsUpgrade={startNeedsUpgrade(entitlements, config.kind)}
@@ -478,6 +498,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           onChanged()
         }}
         onContinue={() => {
+          if (siteOnly) return onOpenRoom(SITE)
           const first = rooms.find(r => r.status !== 'complete') ?? rooms[0]
           if (first) onOpenRoom(first.id)
         }}
@@ -543,6 +564,40 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         </button>
       )}
 
+      {gaps.length > 0 && (
+        <div className="mb-4">
+          <Notice title="Coverage">
+            <ul className="m-0 list-disc pl-5">
+              {gaps.map(line => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </Notice>
+        </div>
+      )}
+
+      {hasSiteStep && (
+        <section className="border-hair mb-4 overflow-hidden rounded-xl border bg-white">
+          <button
+            type="button"
+            onClick={() => onOpenRoom(SITE)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+          >
+            <span className="min-w-0">
+              <span className="block text-[14px] font-semibold">Whole site</span>
+              <span className="text-ink-soft block truncate text-[12px]">
+                {siteSectionsOf(list).map(s => s.label).join(' · ')}
+              </span>
+            </span>
+            {/* Its fails show as a finished room's do, whatever else it says. */}
+            <StatusChip
+              status={siteFailCount ? 'complete' : siteStarted ? 'in-progress' : 'not-started'}
+              fails={siteFailCount}
+            />
+          </button>
+        </section>
+      )}
+
       {rooms.length === 0 ? (
         <p className="text-ink-soft text-[14px]">
           No rooms recorded for this location yet — add them as you work through the site.
@@ -581,7 +636,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
                           </span>
                         )}
                       </span>
-                      <StatusChip status={room.status} fails={room.fails} />
+                      {/* Nothing to do in a room on a whole-site check: the rooms are
+                          there to pin its items to. */}
+                      {!siteOnly && <StatusChip status={room.status} fails={room.fails} />}
                     </button>
                     <button
                       type="button"
@@ -960,7 +1017,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
                   onChange={text => setNote(t.id, text)}
                   suggestions={snapshot.failNotes}
                   readOnly={readOnly}
-                  placeholder="Describe the issue / action taken"
+                  placeholder={config.notePrompt ?? 'Describe the issue / action taken'}
                 />
               ))}
             </div>
@@ -1091,6 +1148,32 @@ export default function WorkflowPage({ config }) {
             refresh()
           }}
           onOpen={setLocationId}
+        />
+      </div>
+    )
+  }
+
+  if (roomId === SITE) {
+    const visit = currentVisit(listVisits(client.id, location.id, config.kind))
+    return (
+      <div className="flex h-full flex-col p-4 sm:p-6">
+        <SiteStep
+          client={client}
+          location={location}
+          visit={visit}
+          rooms={roomsWithStatus(client.id, location.id, visit)}
+          readOnly={!visit || !!visit.completedAt}
+          config={config}
+          canManage={canManage}
+          onReopen={() => {
+            if (visit) reopenVisit(client.id, location.id, visit.id)
+            refresh()
+          }}
+          onBack={() => {
+            setRoomId(null)
+            refresh()
+          }}
+          onChanged={refresh}
         />
       </div>
     )

@@ -1200,6 +1200,19 @@ step:
   - Settings shows a tab for every list the team uses, and the suggestions under a list that
     has them. Each typed test shows what it asks for, such as "Reading (Ω)". The editor
     renames, reorders and removes tests; their types are the pack's.
+- How C1e (the whole-site step) came out:
+  - The visit's room list starts with a "Whole site" row whenever the list has whole-site or
+    per-item sections, with its fails on it. A check with nothing to do room by room opens
+    straight onto it from Continue, and Home's flag for its unnoted fails goes there too.
+  - Each section repeated per item lists the site's items of its type, and any removed
+    since that this visit answered for. "Add smoke alarm" (or RCD) adds one there and then,
+    named and pinned to a room or not. C2's equipment panel edits and replaces them.
+  - The rooms a coverage rule names, with too few items pinned to them, are listed on the
+    room list and in the whole-site step: "Bedroom 2 has no smoke alarm".
+  - On the smoke alarm checks every fail's note asks "Why did it fail?" (`notePrompt`), and
+    a test with `onFail: 'replace'` says the alarm has to be replaced. The report already
+    printed that (B2c).
+  - The report gets the site's items, removed ones included, so it names each alarm.
 
 #### C2. Equipment panel per site
 

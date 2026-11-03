@@ -148,6 +148,16 @@ one that asks for a timeframe, finishing and exporting refused while a note stil
 node tests/answers.mjs
 ```
 
+`site-step.mjs` is step C1e. The rules for coverage and items in Node, then a Queensland smoke
+alarm inspection walked in a browser: the whole-site step from the room list, alarms added as
+they're tested and pinned to their rooms, a bedroom left without one named, a failed alarm
+asked why and told it has to be replaced, its fails on the room list and Home, the report, and
+an AV visit unchanged (36 checks).
+
+```
+node tests/site-step.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

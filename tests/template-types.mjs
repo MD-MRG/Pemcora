@@ -357,8 +357,8 @@ const homeClients = visit => [{
   locations: [{ id: 'l1', address: '1 High St', suburb: 'Town', floors: [{ id: 'f1', label: 'Ground', rooms: [{ id: 'garage', name: 'Garage' }] }], visits: [visit] }],
 }]
 const homeRow = attention(homeClients(homeVisit)).find(r => r.type === 'fails')
-log('Home flags whole-site fails with no finished note',
-  homeRow?.count === 2 && homeRow.roomName === 'Whole site' && homeRow.roomId === null, JSON.stringify(homeRow))
+log('Home flags whole-site fails with no finished note, and opens the whole-site step for them',
+  homeRow?.count === 2 && homeRow.roomName === 'Whole site' && homeRow.roomId === 'site', JSON.stringify(homeRow))
 log('Home counts them as the visit\'s fails', openWork(homeClients(homeVisit))[0].fails === 2)
 const noted = structuredClone(homeVisit)
 noted.siteResults.troubleshooting = {

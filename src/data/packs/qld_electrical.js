@@ -37,6 +37,8 @@ export default {
         emptyLine: 'No smoke alarm inspection recorded for this location',
         reportTitle: 'Smoke Alarm Compliance Inspection',
         sheetName: 'Smoke Alarm Inspection',
+        // A failed smoke alarm's note is the reason it failed (M.D.'s note in B2).
+        notePrompt: 'Why did it fail?',
       },
       seed: {
         main: [],

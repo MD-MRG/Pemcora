@@ -7,6 +7,7 @@
 import { normalise } from './clientStore.js'
 import { noteIsFinished, noteKey, roomFails, siteFails } from './testTypes.js'
 import { WORKFLOWS } from '../data/packs/index.js'
+import { SITE } from './siteStep.js'
 
 // Visits stored before Commissioning existed carry no kind; they were all PM.
 // Same fallback as clientStore.js — if that one changes, this must too.
@@ -188,7 +189,8 @@ export function attention(clients, held = {}) {
         ...base,
         type: 'fails',
         key: `f-${visit.id}-site`,
-        roomId: null,
+        // Straight to the whole-site step, where the notes go.
+        roomId: SITE,
         roomName: 'Whole site',
         count: siteUnnoted,
         at: visit.siteResults.touchedAt ?? visit.startedAt,
