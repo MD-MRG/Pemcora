@@ -33,6 +33,97 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 | `pm-export.mjs` | Excel export, revisions, remembered choice | 26 |
 | `custom-list.mjs` | the unbuilt gate, own template, own visit history | 18 |
 
+`packs.mjs` is not a browser suite and needs no dev server: it imports the pack
+registry (`src/data/packs/`) and `templateStore.js` straight into Node and holds
+them to the catalogue in `supabase/migrations/` — every pack and workflow there
+has an entry, the AV lists are the ones Pemcora shipped with, and every seed
+becomes a template with only the fields step B2 defines (36 checks).
+
+```
+node tests/packs.mjs
+```
+
+`template-types.mjs` is the same kind of suite, for step B2's test and section
+types (`src/lib/testTypes.js`): what each answer type keeps and when it is a
+fail, a template using every type round-tripping through the store, coverage
+gaps, the report snapshot (`src/lib/reportSnapshot.js`) for a whole-site visit
+with items and readings, whole-site fails reaching Home, and the Excel export —
+including an AV visit, which must export exactly as before (72 checks).
+
+```
+node tests/template-types.mjs
+```
+
+## Offline and multiple devices
+
+Three suites, from the rules up to the real thing. All three cover the five cases
+step B3 asks for: a reload with unsaved changes, a dropped connection mid-visit, a
+visit continued the next day, two devices on the same visit, a refused offline start.
+
+| Suite | Runs against | Checks |
+|---|---|---|
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 171 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 101 |
+| `offline-e2e.mjs` | The live project. Not in `npm test` | |
+
+`offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
+service worker, so it builds one under `node_modules/.cache` (not `dist/`) and serves it
+itself, with a backend address that doesn't exist, so nothing can reach the live project.
+It covers an expired login, working a whole visit and exporting its report with no
+connection, a network that goes nowhere, signing out offline, a deploy getting through, and
+how the app reads what a team has, and a new person going through the real gate (57 checks). The suite runs in `npm test`, or on its own with no dev server:
+
+```
+node tests/offline-open.mjs
+```
+
+`fake-server.mjs` is the stand-in. It keeps the database rules that matter to saving;
+the rules themselves are proved against real Postgres in `docs/editions/test/`.
+
+```
+node tests/save-queue.mjs
+node tests/offline.mjs
+```
+
+`offline-e2e.mjs` proves the stand-in told the truth: real Postgres, real triggers, two
+real browser sessions on one account. **It writes to the live project.** It makes a team
+of its own and deletes it at the end. It needs the dev server and a confirmed account:
+
+```
+node tests/offline-e2e.mjs <email> <password>
+```
+
+## What a team has
+
+`entitlements.mjs` is step B4. It runs the rules and the store in Node, then the real screens
+in a browser against the stand-in: pages hidden by pack, a landlord's own navigation, the usage
+line, the upgrade sheet, the banners, and what happens after paying. A refusal has to be told
+by its code, so it checks that a 402 saying anything gets the sheet and anything else saying
+"upgrade" doesn't (187 checks). The Teams page and who to ask need a signed-in team, so
+`fixtures/mount-plan-pages.jsx` puts them on the page with one, with real requests behind them.
+Those checks need `VITE_SUPABASE_URL` in `.env` and are skipped without it.
+
+```
+node tests/entitlements.mjs
+```
+
+`offline-open.mjs` checks how `DataBoot` reads them in a production build, since test mode
+never runs it: with a good login, with no signal, with no such function on the project, and
+with an answer that never comes. `offline-e2e.mjs` checks the real `team_entitlements()`.
+
+## Signing up
+
+`signup.mjs` is step B5. The rules run in Node first: every row of the starter table in 2.3,
+and what can be chosen yet. Then Team Setup, the Teams page's form and the "Your pack" card run
+in a browser, both with everything open and as the live site has them, and the suite reads back
+what they asked the server to create (136 checks). What the server does with it is in the SQL
+suite, and `offline-open.mjs` walks a new person through the real gate in a production build,
+including a team made with its answer lost.
+
+```
+node tests/signup.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does
@@ -45,9 +136,10 @@ point is to prove the data reached Postgres.
 node tests/supabase-e2e.mjs [email] [password]
 ```
 
-Needs the dev server and a confirmed account; sign-up is closed on the project,
-so it defaults to reusing one of the RLS suite's accounts rather than creating
-more. It creates a team and deletes it, and everything under it, at the end.
+Needs the dev server and a confirmed account with no team of its own: Team Setup asks
+what its team does, and the suite answers AV integration. Sign-up is open on the project
+with Confirm email on, so pass an account you've already confirmed. It creates a team
+and deletes it, and everything under it, at the end.
 
 The assertion that matters most is that **the floor id the app minted is the
 same id the row has in Postgres**. Ids are generated client-side and sent with

@@ -1,19 +1,16 @@
-// Seed test lists for the new console.
+// AV maintenance and commissioning — the lists Pemcora started with.
 //
 // Ordered arrays of labels — stable ids and `order` are assigned when a team's
 // lists are first created, so renaming a test never orphans existing results
 // (the rule carried over from the previous app).
 //
-// These are seeds only. Once a team exists, its lists are edited in-app through
-// the test-list editor, and edits never alter already-completed work.
-
 // Each workflow owns its own copy of every list. Commissioning and Maintenance
 // start with identical sub-lists but are seeded separately, so editing one never
 // touches the other — they are free to diverge.
-//
+
 // Source: "Updated commisioning List.xlsx" (Desktop\Claude\Apps\App version 3).
 // Handover verification — the fuller list, covering setup and configuration.
-export const COMMISSIONING = {
+const COMMISSIONING = {
   main: [
     'Correct Time and Date',
     'Room Wake On Touch',
@@ -57,7 +54,7 @@ export const COMMISSIONING = {
 
 // Supplied 2026-07-29. Recurring service visit — drops the one-off setup checks
 // and runs the in-room/remote pairs in a different order to commissioning.
-export const MAINTENANCE = {
+const MAINTENANCE = {
   main: [
     'Correct Time and Date',
     'Room Wake On Touch',
@@ -93,29 +90,51 @@ export const MAINTENANCE = {
   additionalSources: ['Signage', 'Apple TV', 'Foxtel', 'FTA STB', 'Sonos'],
 }
 
-// Custom List seeds nothing — a job starts with an empty main section and the
-// technician adds named sections as needed.
-export const CUSTOM = { main: [], sections: [] }
+// Both workflows ship with the same two optional sections, each switched on per
+// room (see the note in ./index.js).
+const seed = src => ({
+  main: src.main,
+  sections: [
+    { label: 'Room controls', tests: src.roomControls },
+    { label: 'Additional AV Sources', tests: src.additionalSources },
+  ],
+})
 
-/* ── Structural note ─────────────────────────────────────────────────────────
-   Custom List needs an arbitrary number of user-named sections, and the section
-   headings themselves ("Main test list", "Room specifics") must be renameable.
-   That is more general than the previous app's fixed three lists, so the schema
-   should model a template as:
-
-       template = { mainLabel, sections: [ { id, label, order, tests[] } ] }
-
-   Commissioning and Maintenance are then just templates that ship with two
-   sections pre-named "Room controls" and "Additional AV Sources" — no special
-   casing, and one editor serves all three workflows.
-
-   Section gating (decided): the old YES/NO "Room specifics" gate is dropped.
-   Each section carries its own per-room toggle, defaulting to whatever the
-   previous room in the same job used. A room with nothing extra therefore costs
-   zero taps, and on a 20-room site the common configuration is set once rather
-   than repeated. Any room is still free to differ.
-
-   Unchanged from before: switching a section off preserves its results in
-   storage and merely excludes them from the export, so toggling is never
-   destructive.
-   ────────────────────────────────────────────────────────────────────────── */
+export default {
+  id: 'av',
+  label: 'AV maintenance and commissioning',
+  tagline: 'AV Service',
+  workflows: [
+    {
+      // Recurring service visits. Shares its whole workflow with Commissioning —
+      // only the test template and the wording differ.
+      id: 'maintenance',
+      label: 'Preventative maintenance',
+      page: {
+        title: 'Preventative Maintenance',
+        progressNoun: 'Preventative Maintenance',
+        startLabel: 'Start PM',
+        newLabel: 'Start new visit',
+        emptyLine: 'No PM recorded for this location',
+        reportTitle: 'Preventative Maintenance',
+      },
+      seed: seed(MAINTENANCE),
+    },
+    {
+      // Handover verification. Same workflow as Preventative Maintenance, its own
+      // test template, and its own visit history — `kind` is what keeps the two
+      // apart, so a commissioning in progress never blocks or gets confused with a PM.
+      id: 'commissioning',
+      label: 'Commissioning',
+      page: {
+        title: 'Commissioning',
+        progressNoun: 'Commissioning',
+        startLabel: 'Start commissioning',
+        newLabel: 'Start new commissioning',
+        emptyLine: 'No commissioning recorded for this location',
+        reportTitle: 'Commissioning',
+      },
+      seed: seed(COMMISSIONING),
+    },
+  ],
+}

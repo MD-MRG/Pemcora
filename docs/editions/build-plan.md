@@ -58,6 +58,7 @@ use more tokens. `max` can overthink, so keep it for review passes.
 | B3 offline and multiple devices | `xhigh` | the hardest app change; a mistake here loses field data |
 | C1 workflow page | `high` | shared by every workflow, including today's AV visits |
 | C2–C4 equipment, settings, Due page | `medium` | screens on top of finished database functions |
+| C5 signed-in devices | `xhigh` | it ends logins: a mistake signs someone else out, or leaves a lost device signed in |
 | D1 PDF builder | `medium` | mostly layout |
 | D2–D3 sending, report links and saving | `xhigh` | public links, short-lived file links and the email check protect landlords' data |
 | D4 landlord side | `medium` | screens on top of finished functions |
@@ -881,6 +882,56 @@ step:
 - The Excel export and the report snapshot handle every type.
 - Done when: existing AV templates load and export exactly as before, and a test template
   using every type round-trips through the store.
+- Decided with M.D. before building it (`src/lib/testTypes.js` holds the rules):
+  - Answers: `check` keeps PASS/FAIL/N/A; `choice` the option's text, never a fail;
+    `yesno` YES/NO/N/A, and a **No is a fail** that opens the note box, as FAIL does in the
+    AV checks; `measure` keeps `{ value, unit }` under `readings`, plus PASS/FAIL when the
+    test has a min or max; `text` what was typed.
+  - Whole-site and per-item sections live in `visits.site_results`, one whole-site step.
+    An item may be pinned to a room, and coverage uses those pins with the rooms' types.
+    A2's per-room item path stays unused until a pack needs it.
+  - B2 adds a pure `buildReportSnapshot()` (`src/lib/reportSnapshot.js`); the Excel export
+    is built from it, and D2 sends it.
+  - B2 stops at the template, the helpers, the export and the snapshot. Loading and saving
+    readings and whole-site results, and room types, are in C1.
+
+> **M.D.'s note (fail notes on electrical checks):** a failed test's note box on an
+> electrical check offers suggested answers, and the electrician can change the wording:
+> "Test fail – does not comply, repair/replacement mandatory", "Test fail – still
+> complies, repair/replacement recommended within X days/months", and "Minor defect –
+> still complies, repair/replacement requires major work" (for a repair that needs other
+> trades such as renderers, painters or cabinet makers).
+
+- The suggestions are the template's `failNotes`, seeded on the electrical safety checks
+  (`ELECTRICAL_FAIL_NOTES`), so each team's copy can be reworded. Choosing one fills the
+  note, which the electrician then edits (C1).
+
+> **M.D.'s note (fail notes on smoke alarms):** a failed smoke alarm's note is for the
+> reason why it failed. If a smoke alarm fails, it has to be replaced. (M.D. then limited
+> "has to be replaced" to tests where the alarm itself is at fault.)
+
+- The smoke alarm checks have no suggested wording. Every failed test's note gives the
+  reason.
+- Tests where the alarm itself is at fault carry `onFail: 'replace'`, and the report prints
+  the reason and "Has to be replaced": the AS 3786 marking, photoelectric, no ionisation
+  sensor, under 10 years old, hard-wired or sealed battery, and works when tested.
+- Every other test takes an ordinary note, because something else fixes it: correctly
+  installed, the battery, interconnection, on the ceiling, the 300 mm and 400 mm distances,
+  and cleaned. So do the whole-property tests, such as an alarm on each level.
+- A licensed electrician's check of the lists should confirm this split, and whether the
+  placement tests should be able to fail at all.
+
+**B2 review (commit b5c30f4), fixed in B2b.** What the review changed:
+
+- A check done entirely in the whole-site step lists no unopened rooms, rather than calling
+  each one "Not tested". A check with room work still lists them all.
+- The snapshot and the export cover the items at the site when the visit finished, plus any
+  item answered during it, so a report exported later doesn't change. An open visit speaks
+  for now. The snapshot therefore takes all the site's assets, removed ones included.
+- Whole-site fails count in Home (`siteFails`). A note still holding `[timeframe]` counts as
+  unwritten, and the snapshot marks it `unfinished`.
+- The new workflows name their own Excel worksheet (`sheetName`). AV and custom reports stay
+  on "PM Report".
 
 #### B3. Offline and multiple devices (M.D.'s note in 2.2)
 
@@ -894,15 +945,71 @@ step:
   wouldn't save either.
 - **Starting a visit offline** is allowed, and it's checked when the device reconnects.
 - **Same visit started on another device** (duplicate error 23505): take the server's open
-  visit id, merge anything entered locally room by room (newest edit wins), and carry on.
-  But if that open visit is a reopened one (it has a `first_completed_at`), don't join it:
-  it keeps its first completion date, so this inspection would be recorded under last
-  year's. Say a correction to an earlier visit is still open, and finish that first.
+  visit id, merge anything entered locally test by test (newest edit wins on the same test),
+  and carry on. But if that open visit is a reopened one (it has a `first_completed_at`),
+  don't join it: it keeps its first completion date, so this inspection would be recorded
+  under last year's. Say a correction to an earlier visit is still open, and finish that
+  first.
 - **Refused start** (402): move the visit out of the save queue into a "Not saved" area on
   the device, keep everything else saving, and retry it after an upgrade.
 - Done when tests cover: a reload with unsaved changes, a dropped connection mid-visit, a
   visit continued the next day, two devices on the same visit, and a refused offline
   start.
+- Decided with M.D. before building it:
+  - **Merging is test by test, not room by room,** because entered data has to remain: ten
+    answers on one device and nine on another make nineteen. The newest edit wins only on
+    the same test, and two different comments or notes are both kept. The same merge runs
+    whenever a save finds a room someone else has changed, online or not.
+  - **Dates the database refuses** (more than 7 days back, or a device clock running fast)
+    go to "Not saved" with the reason. The date is never changed automatically, and Excel
+    export still works. The one-time import can't pick these up, so such a visit stays on
+    the device until it's discarded.
+  - **Signing out** with nothing unsaved wipes the device copy. With unsaved work it asks
+    whether to keep it (it's sent at the next sign-in on that device) or discard it, and says
+    that anyone using that browser could read it.
+  - **Opening with no signal** is added as step B3b.
+- What the code review of today's saving found, all fixed here: an edit made during a save was
+  never sent while the status said saved; a connection dropped partway through a new client
+  jammed saving for good; joining an open visit was half built; one refused write stopped all
+  the others (a plain member on a team with unseeded lists couldn't save field work at all);
+  and nothing on screen showed whether a save had worked.
+- A visit finished offline goes in finished, so the open-visit index has nothing to say about
+  it: it's an inspection of its own, even with another visit open at the site.
+- Found by the first live run of `tests/offline-e2e.mjs`, during B5: when a room, visit,
+  floor, site or client has been deleted on another device, the real database's security
+  rules refuse a save under it as "not allowed" before its foreign key can say "missing". The
+  device showed "Save failed" and tried again forever, where it should have kept the answers
+  without their room, or held the visit. `api.js` now looks for the parent when a save is
+  refused that way, and reports one that's gone as gone. The stand-in had answered "missing"
+  all along, which is why only the live run could find it.
+- Found by the same run: a device that held a visit as finished, while another device had
+  reopened it for a correction, kept its own finished copy when the database handed it the
+  open one. Its next save finished the visit again and sent its old answers back over the
+  correction. It now keeps the database's copy. `tests/save-queue.mjs` covers it.
+- Found by the second live run: Sign out ended the person's login on every device, because
+  the login library does that unless told otherwise. Signing out of the office PC signed the
+  same person out of a phone mid-visit within the hour. It now ends this device's login only
+  (M.D.'s decision, 3 November), and the dialog says the other devices stay signed in.
+  `tests/offline-open.mjs` holds the app to it, and `tests/offline-e2e.mjs` checks against the
+  real Auth server that the account's other logins still renew. Signing out a lost device from
+  another one is step C5.
+- Found by the live runs of `tests/supabase-e2e.mjs` and `tests/migrate-e2e.mjs`: a team's test
+  lists are filled in from the pack file on first read, which happens while a page draws, and
+  that write told the header's save status at once. React logged it as an update during another
+  component's render. The data was always right. The write now keeps its news until the render
+  is over, and `tests/offline.mjs` fails on anything the app logs as an error.
+
+#### B3b. Opening with no signal
+
+- A service worker keeps the app's own files, never data or logins, so the app opens with no
+  connection. The main page always comes from the network when there is one, so a deploy
+  still reaches people.
+- With no connection the app uses the last known team and data, and a login that can't be
+  renewed offline doesn't drop to the sign-in screen. Nothing about that is a login: it holds
+  no token and the database refuses it everything, so it only opens what the device has.
+- Fixed along the way: the team list reloaded every time the login token renewed, about once
+  an hour, which took the whole app down to a spinner and back in the middle of whatever
+  someone was doing.
 
 #### B4. Entitlements in the app
 
@@ -914,6 +1021,32 @@ step:
 - Done when: a team without a pack doesn't see its pages, and a 402 shows the upgrade sheet
   while any other error shows "Save failed".
 
+> **M.D.'s note (decided at B4):** while the limits are off, nothing talks about the
+> allowance: no usage line and no "Upgrade to start". Landlord and agency navigation gets its
+> three entries now, each with a holding page saying what will appear there. A visit refused
+> in the background never pops a sheet: the "Not saved" notice gets an "Upgrade" button. A
+> refusal right after pressing Start shows the sheet at once.
+
+- How it came out:
+  - **Hiding pages by pack doesn't depend on the limits.** It's about what a team does, not
+    what it pays. A hidden page's address goes Home, unless the team has visits of that kind
+    (2.3): then it opens so they can be read, and starting a new one gets the sheet.
+  - **"Upgrade to start" still asks the database.** A second device has to be able to join an
+    open visit with the allowance used up (2.5), and a refused attempt uses nothing. Offline,
+    it opens and is checked on reconnecting, like any offline start.
+  - **Not knowing hides nothing.** Until the first answer arrives, or on a project without
+    the function, every page shows. A device that has never seen the team's plan waits up to
+    3 seconds for it, so a landlord's first screen isn't an inspector's menu.
+  - **Allowance or pack** is told apart by what the team holds, never the message text.
+  - **Nobody can reach the sheet on the live site yet**, since nothing is refused until E6.
+    "Upgrade to Pro" calls `startUpgrade()` in `src/lib/entitlements.js`, and until E1
+    connects it to checkout it says upgrading isn't available yet. `afterUpgrade()` refreshes
+    the entitlements, saves what the plan refused and confirms "You're on Pro. Your visit is
+    saved." It's built and tested, and E1 calls it.
+  - **`send-invite` changed:** it now passes on the refusal's code and hint, which it used to
+    drop. Until M.D. deploys it, a full team gets the plain error message, not the sheet. That
+    can't happen until E6 either, so it's on the E6 list.
+
 #### B5. Sign-up (M.D.'s note in 2.3)
 
 - Team Setup calls `create_organisation()`.
@@ -924,6 +1057,12 @@ step:
   selected by default, and "You can add packs any time."
 - Until billing exists (Phase E), the add-on choices are shown but only noted. Step E1
   connects them to checkout.
+- The upgrade sheet offers to swap the starter pack while the team hasn't used it (2.11),
+  using the same picker. B4 left that for here.
+- Decide with M.D. whether landlords and agencies can sign up before D4, since their pages
+  only say what's coming until then (Due in C4, Properties and Reports in D4).
+- "AV Service" is hard-coded under the name on the brand plate and the sign-in screen
+  (`BrandPlate.jsx`, `GateLayout.jsx`). It needs changing once a team that isn't AV can exist.
 - Close the older `SECURITY DEFINER` functions to signed-out callers, in a new migration on
   top of 0007. The A4 security advisor found `anon` can still call `all_members_overview`,
   `create_team`, `is_team_admin`, `is_team_member`, `is_team_owner`, `move_member`,
@@ -939,6 +1078,40 @@ step:
   four public ones still answer, and the security advisor lists only those four as callable
   signed out.
 
+> **M.D.'s note (decided at B5):** until the rest is ready, only AV integration can be chosen
+> on the live site. Electrical work, Landlord and Property management show "Coming soon".
+> Add-ons show no prices until E1, and a choice is saved on the team for E1 to pick up.
+> Settings gets a "Your pack" card, for a team that took the wrong pack. Only owners and
+> admins can delete a report record.
+
+- How it came out:
+  - **What opens when.** An inspecting team's choice opens when `proposed` comes off its
+    pack, one state at a time, which also puts that pack on offer as an add-on and for
+    swapping. Landlords and property managers open at D4, by switching `receiving` on in
+    `OPEN_NOW` (`src/lib/signup.js`). Every path is built and tested with them open, so the
+    2.3 table is proved by the tests rather than on the live site.
+  - **Nobody who stops at "Coming soon" gets a team.** They have an account, and can sign out.
+  - **The Teams page's "Create a team" asks the same questions**, because it used to call
+    `create_team()` and silently give AV, which 2.3 forbids. Nothing in the app calls
+    `create_team()` now. It and its AV fallback stay until E6, since test suites still use
+    them and an open tab on an older build could too.
+  - **State** is only asked of electricians, the one row of the table that depends on it. It's
+    kept in `teams.state`, which G2 needs to find a state's teams when its own pack is released.
+  - **A team is no longer made without asking.** That also ends a quiet hazard: a team list
+    that came back empty for any reason used to make a second team.
+  - **The sign-up function is its own overload with no defaults**, so a call with up to four
+    arguments still means 0006's, and re-running 0006 can't leave two functions a call could
+    mean either of.
+  - **Swapping from the sheet is one button**, not the picker, because the sheet already knows
+    which pack is missing. The picker is on the "Your pack" card and at sign-up.
+  - **`0008` goes on before Phase B merges**, because the new sign-up screen calls it. Nothing
+    already live depends on what it closes. It closes `set_updated_at()` as well, which the
+    A4 list missed because it isn't `SECURITY DEFINER`. Revoking from `anon` alone would have
+    done nothing, since these functions were also open through `PUBLIC`.
+  - **After M.D. applies it:** run `tests/rls.mjs`, which checks through the real API that
+    signed-out calls are refused, and look at the security advisor, which is the last part of
+    "done when". Neither can run until then.
+
 ### Phase C — Field work
 
 #### C1. Workflow page
@@ -949,6 +1122,22 @@ step:
 - Inputs for readings, with units.
 - Coverage warnings, such as "Bedroom 3 has no smoke alarm".
 - An outcome declaration at sign-off (compliant or non-compliant).
+- Load and save `visit_rooms.readings` and `visits.site_results` through the cache and
+  the Supabase adapter (B2 left them out on purpose). Whole-site results need the same
+  merging as rooms (`mergeRoom`, B3), and `getVisitRoom` needs to read `readings`.
+- A room type on each room in the client and room editors, saved to `rooms.room_type`,
+  so `section.roomTypes` and the coverage warnings have something to read (B2).
+- A No, or a reading outside its limits, opens the note box as FAIL does. Where the
+  template has `failNotes`, the box offers them: choosing one fills the note, which stays
+  editable. The Settings list editor lets an admin reword the suggestions (M.D.'s note in
+  B2). Choosing the one with `[timeframe]` asks for the timeframe; finishing the visit
+  refuses a note that still holds it (`noteIsFinished`).
+- On the smoke alarm checks, the note box asks why it failed. On a test with
+  `onFail: 'replace'`, it also says the alarm has to be replaced and offers C2's replace
+  flow (M.D.'s note in B2).
+- Whole-site fails show on the visit's room list (`siteFails`). Home's `KIND_LABEL` and
+  `KIND_PATH` list only the three workflows today, so another workflow's visit would show as
+  Preventative Maintenance; take them from the pack registry.
 - Sign-off with the technician's name, their licence number filled in, and a signature
   pad; saved to `visits.signoff`.
 - After completing a reopened visit, show the completion date the database kept (its first
@@ -959,6 +1148,9 @@ step:
 - List, add and edit items, using the pack's fields for `attributes`.
 - Replacing an item marks the old one removed and adds the new one.
 - Expiry dates, and a photo of the label on Pro.
+- Give the report snapshot and the Excel export all the site's assets, removed ones
+  included, with `createdAt` and `removedAt`, so they can work out what stood there at the
+  visit.
 
 #### C3. Settings and client pages
 
@@ -979,6 +1171,46 @@ step:
   switch, which a team can make read "on" again by re-creating the check while the
   contact's email is blank.
 
+#### C5. Signed-in devices (M.D.'s note)
+
+**M.D.'s note (3 November):** Sign out ends the login on the device it's pressed on. Each
+person needs to see which devices are signed in to their account and sign one out from
+another: a phone or tablet that was lost, or a laptop or PC that was lost, stolen or damaged.
+
+- A "Signed-in devices" list on the Account card in Settings, one row per login:
+  - what it is, from the login's browser details, such as "Safari on iPhone" or "Edge on
+    Windows"
+  - when it signed in, and when it was last used
+  - "This device" on the one in use, matched by the `session_id` in its login token
+- Each other row has "Sign out", which asks first and names the device. There's also "Sign
+  out all other devices", which is `supabase.auth.signOut({ scope: 'others' })` and needs
+  no new function.
+- Two new database functions, in a new migration:
+  - `my_devices()` reads the caller's own rows from `auth.sessions`, which no client can
+    read. It returns the id, browser details, signed-in and last-used times, and nothing
+    else: no tokens and no IP address.
+  - `end_device(p_session_id)` deletes one of the caller's own logins and refuses anyone
+    else's. Deleting a session row deletes its refresh tokens with it (the live project's
+    foreign key is `on delete cascade`, checked 3 November), so that device can't renew.
+  - Both are `SECURITY DEFINER` with a fixed `search_path`, granted to `authenticated` only
+    and revoked from `public` and `anon`.
+- What it can't do, said on the screen and in section 6:
+  - The device's current login token keeps working until it runs out, up to an hour (the
+    project's token lifetime). A shorter lifetime narrows that window; making it immediate
+    would mean checking the session on every request.
+  - A device that never connects again keeps what it held. B3b opens the app with no signal,
+    so a lost laptop that stays offline still shows the team's data that was on it.
+- When the app finds its login was ended elsewhere, it goes to the sign-in screen and wipes
+  its copy of the team's data (decision D12 covers unsaved work). It tells this from the Auth
+  server's error code when renewing, never from the message text. A renewal that fails for
+  want of a connection is still B3b's case and changes nothing.
+- Done when:
+  - the SQL suite shows a person can list and end only their own logins, and that signed out
+    nobody can call either function
+  - an app suite covers the list, both sign-outs, and a device finding it was signed out
+  - a live run with two logins ends one from the other: the ended one can't renew and the
+    other still can
+
 ### Phase D — Reports and landlords
 
 #### D1. PDF builder
@@ -998,6 +1230,8 @@ step:
   token.
 - Upload the PDF to `reports/<team_id>/<uuid>.pdf`, call `send_report()`, and email the
   link `#/r/<token>` through Resend.
+- Refuse to send a report whose snapshot has a fail marked `unfinished`: a sent report can't
+  be edited, so `[timeframe]` must not reach one.
 - "Send again" calls `resend_report()`. "Withdraw" is available until the report is saved.
 - Before the function emails anything, cap how many reports a team can send a day:
   `send_report()` has no limit yet, so any Free account could send unlimited email from
@@ -1014,7 +1248,8 @@ step:
 
 #### D4. Landlord and agency side
 
-- Sign-up for landlords and agencies.
+- Sign-up for landlords and agencies: B5 built it, so this is switching `receiving` on in
+  `OPEN_NOW` (`src/lib/signup.js`), and replacing `src/pages/ReceivingHolding.jsx`.
 - Properties list with each property's due dates, received reports and PDFs.
 - Hand-entered checks, with a certificate upload on Pro (decision D6).
 - Remove a site link to stop automatic filing.
@@ -1036,7 +1271,10 @@ step:
 - Events: `checkout.session.completed`, `customer.subscription.created`, `.updated` and
   `.deleted`, `invoice.payment_failed` and `invoice.paid`.
 - Set Stripe's retries to finish within 7 days.
-- Connect the sign-up add-on choices (B5) to checkout.
+- Connect the sign-up add-on choices (B5) to checkout, and show their prices. Choices made
+  before this are in `teams.addons_wanted`.
+- Connect the upgrade sheet (B4): `startUpgrade()` in `src/lib/entitlements.js` goes to
+  checkout, for Pro, extra seats or a pack, and coming back having paid calls `afterUpgrade()`.
 
 #### E2. Downgrade (M.D.'s note in 2.6)
 
@@ -1047,12 +1285,14 @@ starter pack.
 #### E3. Cancellation (M.D.'s note in 2.6)
 
 - Cancellation only at the end of the paid period.
-- Banner: "Pro ends on [date]. Finish these open visits before then:" with the list.
+- Banner: "Pro ends on [date]. Finish these open visits before then:" with the list. Built
+  in B4.
 - Admin emails 7 days and 1 day before.
 
 #### E4. Declined card (M.D.'s note in 2.6)
 
-- Banner with the 7-day deadline and a link to update the card.
+- Banner with the 7-day deadline and a link to update the card. B4 built the banner, and
+  everyone in the team sees it. This adds the link, for owners and admins.
 - Admin emails on days 0, 3 and 6.
 - On day 7 the database treats the team as Free (A1 item 3).
 
@@ -1065,6 +1305,10 @@ starter pack.
 #### E6. Go live
 
 - Prices are final, and the webhook has been tested end to end in Stripe's test mode.
+- M.D. has deployed `send-invite` as changed in B4, so a full team gets the upgrade sheet.
+- Retire `create_team()` and the AV fallback in `provision_team()`, in a new migration. The
+  app stopped calling it at B5. Point the test suites that still use it at
+  `create_organisation()` first.
 - With M.D.'s go-ahead: `update public.app_settings set enforce_limits = true;`
 
 ### Phase F — Reminders (M.D.'s note in 2.8)
@@ -1150,6 +1394,7 @@ Northern Territory, and for Queensland's electrical check:
 | D9 | Who can upgrade and manage billing | owners and admins |
 | D10 | Store lease dates for Queensland rentals (due within 30 days before each lease) | not yet; the 12-month repeat stands in |
 | D11 | One person running several Free teams, each with its own inspection a month | allowed, since limits are per team; revisit before E6 |
+| D12 | Unsaved work on a device that finds it was signed out from another device (C5) | kept for the next sign-in there, as Sign out's "Keep it" does, since it exists nowhere else; confirm with M.D. at C5 |
 
 ## 6. Known limits
 
@@ -1162,6 +1407,20 @@ Northern Territory, and for Queensland's electrical check:
   can swap it, but it loses that work and the month's inspection isn't given back.
 - A file uploaded to `reports/` that no delivery names stays there: nothing can delete
   report files. A cleanup of unnamed ones would be a later step.
+- A device that was offline shows other devices' changes only after its next load, once it
+  has sent its own. An open session doesn't refresh itself, online or off.
+- A refused visit whose site has since been deleted can only be discarded. Its data stays on
+  the device until then, but there's no site page left to open it from.
+- The usage line is only as fresh as the last read, so it can lag behind a visit started on
+  another device. Nothing depends on it: Start always asks the database.
+- Only owners and admins can delete a report record, but any member can still reopen a
+  finished visit or delete a whole visit, with its records, by calling the database directly.
+  The screens don't offer either to a member. Reopening keeps the first completion date, and
+  a deleted visit's inspection isn't given back.
+- Until step C5, a lost device can't be signed out from another one: Sign out ends only the
+  device it's pressed on. M.D. can end every login of one account in the SQL editor with
+  `delete from auth.sessions where user_id = (select id from auth.users where email = '…');`.
+  That device's current token still works for up to an hour.
 
 ## 7. Sources for the pack lists
 

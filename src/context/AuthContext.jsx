@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
+import { prefs } from '../lib/prefs.js'
 import {
   supabase,
   isSupabaseConfigured,
@@ -8,6 +10,18 @@ import {
 import { AuthContext } from './auth.js'
 
 const notConfigured = { error: { message: 'Pemcora is not connected to a backend.' } }
+
+// A login token lasts an hour, and renewing it takes a connection. On a site with no
+// signal that is no reason to throw someone out with their work on the device, so
+// the app opens as whoever was last signed in here. This is not a login. It holds
+// no token and the database refuses it everything. It opens what this device already
+// has, and the real session takes over as soon as the token can be renewed. If it
+// can't (the login was revoked), that ends in the sign-in screen as usual.
+const offlineSession = user => ({ user, offline: true })
+
+// How long to wait to hear whether the login is still good. The library keeps
+// retrying for up to half a minute on a connection that goes nowhere.
+const AUTH_PATIENCE = 3000
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
@@ -22,15 +36,55 @@ export function AuthProvider({ children }) {
       setLoading(false)
       return
     }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
+
+    const remembered = prefs.getLastUser()
+    let heard = false
+    const openFromDevice = () => {
+      if (heard || !remembered) return
+      setSession(offlineSession(remembered))
+      setLoading(false)
+    }
+    if (navigator.onLine === false) openFromDevice()
+    const patience = setTimeout(openFromDevice, AUTH_PATIENCE)
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      heard = true
+      clearTimeout(patience)
+      // Couldn't reach the server to renew it isn't the same as signed out.
+      if (!data.session && remembered && isAuthRetryableFetchError(error)) {
+        setSession(offlineSession(remembered))
+      } else {
+        setSession(data.session)
+      }
       setLoading(false)
     })
+
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
-      setSession(s)
       if (event === 'PASSWORD_RECOVERY') setRecovering(true)
+      if (s?.user) {
+        prefs.setLastUser({ id: s.user.id, email: s.user.email })
+      } else if (event === 'SIGNED_OUT') {
+        prefs.setLastUser(null)
+        prefs.setLastTeams(null, null)
+        prefs.clearLastEntitlements()
+      } else if (event === 'INITIAL_SESSION') {
+        // The library reports null here when it just couldn't reach the server.
+        // getSession() above knows the difference, and decides.
+        return
+      }
+      setSession(s)
     })
-    return () => sub.subscription.unsubscribe()
+
+    // Back online: renew the token now rather than at the next timer tick. That
+    // arrives through onAuthStateChange above.
+    const renew = () => supabase.auth.getSession()
+    window.addEventListener('online', renew)
+
+    return () => {
+      clearTimeout(patience)
+      window.removeEventListener('online', renew)
+      sub.subscription.unsubscribe()
+    }
   }, [])
 
   const value = {
@@ -67,7 +121,22 @@ export function AuthProvider({ children }) {
     updatePassword: password =>
       supabase ? supabase.auth.updateUser({ password }) : Promise.resolve(notConfigured),
     endRecovery: () => setRecovering(false),
-    signOut: () => (supabase ? supabase.auth.signOut() : Promise.resolve({})),
+    signOut: async () => {
+      if (!supabase) return {}
+      // With no connection the library would spend half a minute trying to renew the
+      // token, then give up before doing anything. Signing out has to work regardless:
+      // the stored login goes, and the token runs out by itself.
+      const reachable = navigator.onLine !== false && !session?.offline
+      // This device only. Left to itself the library ends the login on every device,
+      // which signs the same person out of a phone mid-visit.
+      const result = reachable ? await supabase.auth.signOut({ scope: 'local' }) : { error: null }
+      if (!reachable || result.error) localStorage.removeItem(supabase.auth.storageKey)
+      prefs.setLastUser(null)
+      prefs.setLastTeams(null, null)
+      prefs.clearLastEntitlements()
+      setSession(null)
+      return result
+    },
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

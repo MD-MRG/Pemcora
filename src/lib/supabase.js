@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const url = import.meta.env?.VITE_SUPABASE_URL
+const anonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY
 
 // True only when both env vars are present. Lets the app boot and show a clear
 // "not configured" screen instead of crashing when env is missing — which is
@@ -24,7 +24,7 @@ export const isSupabaseConfigured = Boolean(url && anonKey)
 // build that lost its secrets must fail loudly with the not-configured screen,
 // not quietly become a local-only app whose data nobody else can see.
 export const isTestMode =
-  import.meta.env.DEV &&
+  import.meta.env?.DEV &&
   (() => {
     try {
       return localStorage.getItem('fc.testMode') === '1'
@@ -95,8 +95,24 @@ export const clearInviteFromUrl = () => {
 
 export const inviteUrl = token => `${emailRedirectUrl()}?invite=${encodeURIComponent(token)}`
 
+// A request on a dying connection can hang for minutes with no answer either way,
+// and the save queue waits for each one. Giving up turns that into a plain failed
+// request, which the queue knows how to try again. Only the database's own
+// requests: file uploads and Edge Functions have their own idea of how long is
+// reasonable.
+const DATABASE_PATIENCE = 30000
+
+const patientFetch = (input, init = {}) => {
+  const isDatabase = String(input?.url ?? input).includes('/rest/v1/')
+  if (!isDatabase || init.signal || typeof AbortSignal?.timeout !== 'function') {
+    return fetch(input, init)
+  }
+  return fetch(input, { ...init, signal: AbortSignal.timeout(DATABASE_PATIENCE) })
+}
+
 export const supabase = isSupabaseConfigured
   ? createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true },
+      global: { fetch: patientFetch },
     })
   : null

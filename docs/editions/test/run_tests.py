@@ -1,14 +1,14 @@
 """
-Proves 0006 and 0007 on a throwaway local Postgres with a Supabase stub.
+Proves 0006, 0007 and 0008 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app does today, then applies 0006 + 0007 twice (re-run safety) and drives every
+the app did, then applies 0006 + 0007 + 0008 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
-All seven files live in supabase/migrations. A second folder, if given, is where
-0006 and 0007 are read from instead (a copy with a fix being tried, say).
+All the files live in supabase/migrations. A second folder, if given, is where
+0006, 0007 and 0008 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -26,8 +26,8 @@ import psycopg
 
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
-EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql")
-STUB = Path(__file__).parent / "00_supabase_stub.sql"
+EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql")
+STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
 DSN = f"dbname={TEST_DB}"
@@ -105,7 +105,7 @@ def user(email, invite_token=None):
 
 
 # ── 0001-0005, and a team made the way the app makes one today ─────────────
-# Not 0006 or 0007, which sit in the same folder: the legacy team has to exist
+# Not 0006 onwards, which sit in the same folder: the legacy team has to exist
 # before they run, as the live team did.
 run_file(STUB)
 for f in sorted(OLD.glob("000*.sql")):
@@ -124,7 +124,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 + 0007, twice ─────────────────────────────────────────────────────
+# ── 0006 + 0007 + 0008, twice ──────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -1564,6 +1564,185 @@ check("S3: the check made there again comes back with the client's reminders off
 check("S3: …and the reminder job's own test says opted out",
       su("select public.reminder_opted_out(%s, %s, 'vic_smoke_alarm') is not null", [S3T, S3_L2])[0][0])
 
+# ── Step B5: signing up, and what a signed-out caller can reach ────────────
+print("\n— Step B5: every row of the starter table in 2.3 makes the right team")
+B5_U = user("b5-owner@signup.test")
+
+
+def b5_team(name, account_type, pack, state=None, addons=()):
+    return one(B5_U, "select id from public.create_organisation(%s, %s, %s, '', %s, %s)",
+               [name, account_type, pack, state, list(addons)])
+
+
+def b5_packs(team):
+    return sorted(r[0] for r in su("select pack_id from public.team_packs where team_id = %s", [team]))
+
+
+def b5_row(team):
+    return su("select account_type, state, addons_wanted from public.teams where id = %s", [team])[0]
+
+
+B5_AV = b5_team("AV Co", "provider", "av")
+check("B5: AV integration, in any state, starts on av", b5_packs(B5_AV) == ["av"], str(b5_packs(B5_AV)))
+check("B5: …with no state asked for, so none recorded", b5_row(B5_AV) == ("provider", None, []), str(b5_row(B5_AV)))
+for b5_state, b5_pack in (("VIC", "vic_rental"), ("QLD", "qld_electrical"), ("NSW", "electrical_general"),
+                          ("SA", "electrical_general"), ("WA", "electrical_general"), ("TAS", "electrical_general"),
+                          ("ACT", "electrical_general"), ("NT", "electrical_general")):
+    b5_t = b5_team(f"Sparks {b5_state}", "provider", b5_pack, b5_state)
+    check(f"B5: electrical work in {b5_state} starts on {b5_pack}, with its state recorded",
+          b5_packs(b5_t) == [b5_pack] and b5_row(b5_t)[1] == b5_state, f"{b5_packs(b5_t)} {b5_row(b5_t)}")
+    check(f"B5: …and the rows the pack's lists save into are there ({b5_state})",
+          su("""select count(*) from public.workflows w where w.pack_id = %s and not exists
+                  (select 1 from public.team_templates t where t.team_id = %s and t.kind = w.id)""",
+             [b5_pack, b5_t])[0][0] == 0)
+for b5_kind in ("landlord", "agency"):
+    b5_t = b5_team(f"A {b5_kind}", b5_kind, None)
+    check(f"B5: a {b5_kind} gets no pack", b5_packs(b5_t) == [] and b5_row(b5_t)[0] == b5_kind, str(b5_packs(b5_t)))
+    b5_e = one(B5_U, "select public.team_entitlements(%s)", [b5_t])
+    check(f"B5: …and its entitlements say so, with no starter to swap",
+          b5_e["packs"] == ["core"] and b5_e["account_type"] == b5_kind and b5_e["starter_pack"] is None and b5_e["starter_in_use"] is False,
+          str(b5_e))
+
+print("\n— Step B5: what a new team said")
+B5_ADD = b5_team("Add-ons", "provider", "vic_rental", "VIC", ["av", "qld_electrical", "vic_rental", "core", "not-a-pack"])
+check("B5: add-ons are noted, without the starter, core or anything made up",
+      b5_row(B5_ADD)[2] == ["av", "qld_electrical"], str(b5_row(B5_ADD)))
+check("B5: …and noted only: the team holds its starter and nothing else", b5_packs(B5_ADD) == ["vic_rental"], str(b5_packs(B5_ADD)))
+check("B5: a landlord's add-ons aren't noted", b5_row(b5_team("Rentals", "landlord", None, None, ["av"]))[2] == [])
+
+b5_count = lambda: su("select count(*) from public.teams")[0][0]
+b5_before = b5_count()
+refused("B5: a state that doesn't exist is refused", B5_U,
+        "select public.create_organisation('Nowhere', 'provider', 'av', '', 'XX', '{}')", sqlstate="23514")
+refused("B5: an inspecting team still has to choose a pack", B5_U,
+        "select public.create_organisation('No Pack', 'provider', null, '', 'VIC', '{}')", contains="Choose the pack")
+refused("B5: a pack that doesn't exist is refused", B5_U,
+        "select public.create_organisation('Bad Pack', 'provider', 'nope', '', 'VIC', '{}')", contains="no pack")
+check("B5: …and none of those left a team behind", b5_count() == b5_before, f"{b5_before} → {b5_count()}")
+refused("B5: signed out, a team can't be made this way", None,
+        "select public.create_organisation('Anon', 'provider', 'av', '', null, '{}')", sqlstate="42501")
+check("B5: 0006's three-argument call still means 0006's function",
+      b5_packs(one(B5_U, "select id from public.create_organisation('Short', 'provider', 'av')")) == ["av"])
+refused("B5: the team's state can't be changed from the app", B5_U,
+        "update public.teams set state = 'VIC' where id = %s", [B5_AV], sqlstate="42501")
+refused("B5: …nor its noted add-ons", B5_U,
+        "update public.teams set addons_wanted = '{av}' where id = %s", [B5_AV], sqlstate="42501")
+
+print("\n— Step B5: whether the starter can still be swapped")
+b5_ent = lambda team: one(B5_U, "select public.team_entitlements(%s)", [team])
+check("B5: a new team's starter is named, and unused",
+      b5_ent(B5_AV)["starter_pack"] == "av" and b5_ent(B5_AV)["starter_in_use"] is False, str(b5_ent(B5_AV)))
+_, B5_L = add_site(B5_U, B5_AV, "B5 Site")
+start_visit(B5_U, B5_AV, B5_L, "maintenance")
+check("B5: a visit under it marks it used", b5_ent(B5_AV)["starter_in_use"] is True)
+b5_custom_t = b5_team("Custom Only", "provider", "av")
+_, B5_L2 = add_site(B5_U, b5_custom_t, "B5 Custom")
+start_visit(B5_U, b5_custom_t, B5_L2, "custom")
+check("B5: a Custom List visit doesn't, since it isn't under the pack", b5_ent(b5_custom_t)["starter_in_use"] is False)
+act(B5_U, "select public.choose_starter_pack(%s, 'vic_rental')", [b5_custom_t])
+check("B5: …so it can still be swapped, and the answer follows",
+      b5_ent(b5_custom_t)["starter_pack"] == "vic_rental" and b5_packs(b5_custom_t) == ["vic_rental"], str(b5_ent(b5_custom_t)))
+check("B5: the team from before the plans has no starter to swap (its AV was granted free)",
+      one(O, "select public.team_entitlements(%s)", [T0])["starter_pack"] is None)
+
+print("\n— Step B5: report records")
+_, B5_RL = add_site(O, T0, "B5 Records")
+B5_RV = start_visit(O, T0, B5_RL, "maintenance", completed=True)
+b5_exports = lambda visit=B5_RV: su("select revision from public.visit_exports where visit_id = %s order by 1", [visit])
+act(O2, "insert into public.visit_exports (team_id, visit_id, revision, filename) values (%s, %s, 1, 'one.xlsx')", [T0, B5_RV])
+act(O2, "insert into public.visit_exports (team_id, visit_id, revision, filename) values (%s, %s, 2, 'two.xlsx')", [T0, B5_RV])
+check("B5: a member still files reports", b5_exports() == [(1,), (2,)], str(b5_exports()))
+act(O2, """insert into public.visit_exports (team_id, visit_id, revision, filename) values (%s, %s, 2, 'again.xlsx')
+           on conflict (visit_id, revision) do update set filename = excluded.filename""", [T0, B5_RV])
+check("B5: …and re-stamps one, which is what replacing a report does",
+      su("select filename from public.visit_exports where visit_id = %s and revision = 2", [B5_RV]) == [("again.xlsx",)])
+check("B5: …but deleting a record does nothing for a member",
+      act(O2, "delete from public.visit_exports where visit_id = %s and revision = 1 returning revision", [B5_RV]) == []
+      and b5_exports() == [(1,), (2,)], str(b5_exports()))
+act(O, "delete from public.visit_exports where visit_id = %s and revision = 1", [B5_RV])
+check("B5: an owner can", b5_exports() == [(2,)], str(b5_exports()))
+su("update public.team_members set role = 'admin' where team_id = %s and user_id = %s", [T0, O2])
+act(O2, "delete from public.visit_exports where visit_id = %s and revision = 2", [B5_RV])
+check("B5: so can an admin", b5_exports() == [], str(b5_exports()))
+su("update public.team_members set role = 'member' where team_id = %s and user_id = %s", [T0, O2])
+act(O, "insert into public.visit_exports (team_id, visit_id, revision, filename) values (%s, %s, 1, 'one.xlsx')", [T0, B5_RV])
+act(O2, "delete from public.visits where id = %s", [B5_RV])
+check("B5: deleting a whole visit still takes its records with it", b5_exports() == [], str(b5_exports()))
+
+print("\n— Step B5: what a signed-out caller can reach")
+B5_PUBLIC = ["email_is_registered", "invite_preview", "reminder_opt_out", "report_preview"]
+B5_CLOSED = (
+    ("all_members_overview", "select public.all_members_overview()", None),
+    ("create_team", "select public.create_team('Anon', '')", None),
+    ("is_team_admin", "select public.is_team_admin(%s)", [T0]),
+    ("is_team_member", "select public.is_team_member(%s)", [T0]),
+    ("is_team_owner", "select public.is_team_owner(%s)", [T0]),
+    ("move_member", "select public.move_member(%s, %s, %s)", [O2, T0, T0]),
+    ("my_teams", "select public.my_teams()", None),
+    ("set_member_role", "select public.set_member_role(%s, %s, 'member')", [T0, O2]),
+    ("team_members_list", "select public.team_members_list(%s)", [T0]),
+    ("transfer_ownership", "select public.transfer_ownership(%s, %s)", [T0, O2]),
+)
+
+
+def b5_anon_can_call():
+    return [r[0] for r in su("""select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                                 where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute')
+                                   and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+                                 order by 1""")]
+
+
+for b5_name, b5_sql, b5_args in B5_CLOSED:
+    refused(f"B5: signed out, {b5_name} is refused before it runs", None, b5_sql, b5_args,
+            contains="permission denied", sqlstate="42501")
+    check(f"B5: …while a signed-in caller can still run {b5_name}",
+          su("select has_function_privilege('authenticated', p.oid, 'execute') from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = %s", [b5_name])[0][0])
+check("B5: only the four public functions are left callable signed out", b5_anon_can_call() == B5_PUBLIC, str(b5_anon_can_call()))
+check("B5: signed out, the sign-in page's check still answers",
+      one(None, "select public.email_is_registered('owner@legacy.test')") is True)
+check("B5: …the invitation page's", act(None, "select public.invite_preview(%s)", [uuid.uuid4()]) is not None)
+check("B5: …the report link's", act(None, "select public.report_preview(%s)", [uuid.uuid4()]) is not None)
+check("B5: …and the opt-out link's", act(None, "select public.reminder_opt_out(%s)", [uuid.uuid4()]) is not None)
+refused("B5: nobody signed in can run the confirmation trigger's function directly", O,
+        "select public.consume_invite_on_confirm()", sqlstate="42501")
+for b5_fn in ("consume_invite_on_confirm", "set_updated_at"):
+    check(f"B5: {b5_fn} is closed to signed-in callers too",
+          not su("select has_function_privilege('authenticated', 'public.' || %s || '()', 'execute')", [b5_fn])[0][0])
+check("B5: no policy needs anon to run a closed function: they are all for signed-in callers",
+      su("""select count(*) from pg_policies where schemaname in ('public', 'storage')
+             and policyname not like 'stub%%' and roles <> '{authenticated}'""")[0][0] == 0,
+      str(su("""select schemaname, tablename, policyname, roles::text from pg_policies
+                 where schemaname in ('public', 'storage') and roles <> '{authenticated}'""")))
+
+# The confirmation trigger, fired by a role that can't run its function: what Supabase's own
+# auth service does. If closing it stopped invitations working, this is where it would show.
+su("""do $$ begin
+        if not exists (select 1 from pg_roles where rolname = 'b5_auth_service') then
+          create role b5_auth_service nologin;
+        end if;
+      end $$""")
+su("grant usage on schema auth to b5_auth_service")
+su("grant select, insert, update on auth.users to b5_auth_service")
+B5_IO = user("b5-inviter@signup.test")
+B5_IT = one(B5_IO, "select id from public.create_organisation('Invited Into', 'provider', 'av')")
+su("update public.subscriptions set plan = 'pro', seats = 5 where team_id = %s", [B5_IT])
+B5_TOK = one(B5_IO, "select token from public.create_invite(%s, 'b5-invitee@signup.test')", [B5_IT])
+B5_NEW = uuid.uuid4()
+check("B5: that role really can't run it",
+      not su("select has_function_privilege('b5_auth_service', 'public.consume_invite_on_confirm()', 'execute')")[0][0])
+with db.transaction():
+    db.execute("set local role b5_auth_service")
+    db.execute("insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values (%s, %s, %s, now())",
+               [B5_NEW, "b5-invitee@signup.test", json.dumps({"invite_token": str(B5_TOK)})])
+check("B5: confirming an email still takes up its invitation",
+      su("select role from public.team_members where team_id = %s and user_id = %s", [B5_IT, B5_NEW]) == [("member",)],
+      str(su("select role from public.team_members where user_id = %s", [B5_NEW])))
+B5_TC, _ = add_site(B5_IO, B5_IT, "B5 Touched")
+b5_touched = lambda: su("select updated_at from public.clients where id = %s", [B5_TC])
+b5_was = b5_touched()
+act(B5_IO, "update public.clients set name = 'B5 Touched Again' where id = %s", [B5_TC])
+check("B5: the updated-at trigger still fires for a signed-in writer", b5_touched() != b5_was, f"{b5_was} → {b5_touched()}")
+
 # R6 — a completed visit with no first completion on record still keeps its date when it is reopened.
 print("\n— Re-check R6: a visit completed without the triggers still keeps its first completion date")
 R6U = user("r6-owner@recheck.test")
@@ -1599,6 +1778,23 @@ refused("R7: with 0006 re-run by itself, a sent report still keeps the starter p
         "select public.choose_starter_pack(%s, 'qld_electrical')", [R7T], contains="cannot be swapped",
         sqlstate="PT402")
 run_file(NEW / "0007_compliance_and_reports.sql")   # leave the database as both files make it
+
+# B5 again: 0006 and 0007 have just been re-run, by themselves and without 0008.
+print("\n— Step B5: re-running 0006 and 0007 by themselves doesn't undo 0008")
+check("B5: only the four public functions are still callable signed out", b5_anon_can_call() == B5_PUBLIC, str(b5_anon_can_call()))
+B5_AFTER = one(B5_U, "select id from public.create_organisation('After Re-run', 'provider', 'vic_rental', '', 'VIC', '{}')")
+check("B5: the sign-up call still means the one function", b5_row(B5_AFTER)[1] == "VIC", str(b5_row(B5_AFTER)))
+check("B5: …and the short call the other",
+      b5_packs(one(B5_U, "select id from public.create_organisation('After Short', 'provider', 'av')")) == ["av"])
+_, B5_AL = add_site(O, T0, "B5 After")
+B5_AV2 = start_visit(O, T0, B5_AL, "maintenance", completed=True)
+act(O, "insert into public.visit_exports (team_id, visit_id, revision, filename) values (%s, %s, 1, 'one.xlsx')", [T0, B5_AV2])
+check("B5: a member still can't delete a report record, though 0007 put its policy back",
+      act(O2, "delete from public.visit_exports where visit_id = %s returning revision", [B5_AV2]) == []
+      and su("select count(*) from public.visit_exports where visit_id = %s", [B5_AV2])[0][0] == 1)
+run_file(NEW / "0008_signup.sql")   # leave the database as all three files make it
+check("B5: re-running 0008 afterwards puts back what 0006 replaced",
+      "starter_pack" in one(O, "select public.team_entitlements(%s)", [T0]))
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

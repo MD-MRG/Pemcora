@@ -1,15 +1,20 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
 import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
-import { useCanManage } from '../context/team.js'
+import { useCanManage, useEntitlements } from '../context/team.js'
 import Field from '../components/Field.jsx'
+import Notice from '../components/Notice.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
+import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
   listVisits,
-  startVisit,
+  beginVisit,
+  currentVisit,
+  retryHeldVisit,
+  discardHeldVisit,
   completeVisit,
   roomsWithStatus,
   addRoomToLocation,
@@ -27,7 +32,10 @@ import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
+import { isFail, MAIN } from '../lib/testTypes.js'
+import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
+import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
 
 const fmt = iso => (iso ? new Date(iso).toLocaleDateString() : '')
 
@@ -52,8 +60,9 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
+  const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
   return (
     <section className="border-hair mb-4 rounded-xl border bg-white p-5 shadow-sm">
@@ -82,6 +91,8 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, on
         </>
       )}
 
+      {usage && <p className="text-ink-soft mt-1 text-[13px] tabular-nums">{usage}</p>}
+
       {visit && (
         <label className="mt-4 block max-w-xs">
           <span className="text-ink-soft mb-1.5 block text-[12.5px] font-semibold">Technician</span>
@@ -99,9 +110,10 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, onStart, on
         <button
           type="button"
           onClick={open ? onContinue : onStart}
-          className="bg-navy min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-[#24486e]"
+          disabled={starting}
+          className="bg-navy min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-[#24486e] disabled:opacity-60"
         >
-          {open ? 'Continue' : visit ? config.newLabel : config.startLabel}
+          {starting ? 'Starting…' : open ? 'Continue' : startLabel}
         </button>
         {open && (
           <button
@@ -275,9 +287,22 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [askDeleteReport, setAskDeleteReport] = useState(null)
   const [askReopen, setAskReopen] = useState(false)
   const [reopenError, setReopenError] = useState('')
+  const [starting, setStarting] = useState(false)
+  const [startNote, setStartNote] = useState(null)
+  const [askDiscard, setAskDiscard] = useState(null)
+  const [sheet, setSheet] = useState(null)
+  const entitlements = useEntitlements()
+
+  // A save in the background can refuse a visit or join it to another device's,
+  // and this page has to show that without anyone touching it.
+  useSyncExternalStore(subscribe, heldCount)
+  useSyncExternalStore(subscribe, outsideChanges)
+  const offline = useSyncExternalStore(subscribe, saveStatus) === 'offline'
 
   const visits = listVisits(client.id, location.id, config.kind)
-  const current = visits.find(v => !v.completedAt) ?? visits[0] ?? null
+  const held = heldVisits()
+  const refused = visits.filter(v => held[v.id])
+  const current = currentVisit(visits, held)
   // Statuses come from the most recent visit whether it is open or finished —
   // before a new visit starts, the list should still show what the last one
   // found rather than pretending nothing has been tested.
@@ -304,6 +329,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           : nextRevision(current)
     const filename = await downloadReport({
       client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
+      sheetName: config.sheetName,
       settings: getSettings(),
     })
     recordExport(client.id, location.id, current.id, { mode, filename })
@@ -322,13 +348,113 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         onBack={onBack}
       />
 
+      {startNote && (!startNote.whileOffline || offline) && (
+        <div className="mb-4">
+          <Notice blocked={startNote.blocked} title={startNote.title}>
+            {startNote.detail}
+          </Notice>
+        </div>
+      )}
+
+      {sheet && <UpgradeSheet sheet={sheet} onClose={() => setSheet(null)} />}
+
+      {refused.map(v => (
+        <div key={v.id} className="mb-4">
+          <Notice blocked title={`Not saved: ${config.title} started ${fmt(v.startedAt)}`}>
+            <p>{held[v.id].message}</p>
+            <p className="mt-1">It stays on this device, and everything else keeps saving.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {/* Never a sheet by itself: this can be refused minutes after it was
+                  started, in the middle of something else. */}
+              {held[v.id].reason === 'upgrade' && (
+                <button
+                  type="button"
+                  onClick={() => setSheet(visitSheet(entitlements, config.kind))}
+                  className="bg-navy min-h-[42px] rounded-lg px-4 text-[13.5px] font-semibold text-white hover:bg-[#24486e]"
+                >
+                  Upgrade
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  await retryHeldVisit(v.id)
+                  onChanged()
+                }}
+                className="border-hair text-navy min-h-[42px] rounded-lg border bg-white px-4 text-[13.5px] font-semibold hover:bg-slate-50"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={() => setAskDiscard(v)}
+                className="text-fail min-h-[42px] rounded-lg px-3 text-[13.5px] font-semibold hover:bg-red-50"
+              >
+                Discard
+              </button>
+            </div>
+          </Notice>
+        </div>
+      ))}
+
+      {askDiscard && (
+        <ConfirmDialog
+          danger
+          title="Discard this visit?"
+          confirmLabel="Discard"
+          cancelLabel="Keep it"
+          onCancel={() => setAskDiscard(null)}
+          onConfirm={() => {
+            discardHeldVisit(client.id, location.id, askDiscard.id)
+            setAskDiscard(null)
+            onChanged()
+          }}
+        >
+          Everything entered on this device for this visit is lost. This cannot be undone. Export a
+          report first if you need a record of it.
+        </ConfirmDialog>
+      )}
+
       <VisitCard
         config={config}
         visit={current}
         roomCount={rooms.length}
         doneCount={done}
-        onStart={() => {
-          startVisit(client.id, location.id, config.kind, getSettings().technician ?? '')
+        starting={starting}
+        usage={usageLine(entitlements)}
+        needsUpgrade={startNeedsUpgrade(entitlements, config.kind)}
+        onStart={async () => {
+          setStarting(true)
+          setStartNote(null)
+          const started = await beginVisit(
+            client.id,
+            location.id,
+            config.kind,
+            getSettings().technician ?? '',
+          )
+          // It used up an inspection, or this device's idea of what's left was out of
+          // date. "Upgrade to start" asked the database just the same, because a second
+          // device can join an open visit with the allowance used up (2.5).
+          const fresh = refreshEntitlements()
+          if (started.outcome === 'refused' && started.reason === 'upgrade') {
+            setSheet(visitSheet(await fresh, config.kind))
+          } else if (started.outcome === 'refused') {
+            setStartNote({ blocked: true, title: 'Save failed', detail: started.message })
+          } else if (started.outcome === 'correction') {
+            setStartNote({
+              blocked: true,
+              title:
+                'A correction to an earlier visit is still open at this site. Finish that first, then start the new one.',
+            })
+          } else if (started.outcome === 'joined') {
+            setStartNote({ title: 'Another device had already started this visit, so you have joined it.' })
+          } else if (started.outcome === 'offline') {
+            setStartNote({
+              whileOffline: true,
+              title: 'Started on this device. It will be checked when the connection returns.',
+            })
+          }
+          setStarting(false)
           onChanged()
         }}
         onContinue={() => {
@@ -598,12 +724,38 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const [complete, setComplete] = useState(() => stored?.status === 'complete')
   const [pending, setPending] = useState(null)
 
-  const labelFor = useCallback(
-    testId =>
-      [...snapshot.tests, ...snapshot.sections.flatMap(s => s.tests)].find(t => t.id === testId)
-        ?.label ?? 'this test',
+  // A push can change what this room holds: its visit joined one another device
+  // started, or their answers merged in. These are the screen's own copies, and
+  // the next save writes them back whole, so they have to catch up or that save
+  // would undo the merge. Comments are typed into the state and saved on blur, so
+  // anything being typed right now stays.
+  const seenChanges = useRef(outsideChanges())
+  const savedComments = useRef(stored?.comments ?? '')
+  useEffect(
+    () =>
+      subscribe(() => {
+        if (outsideChanges() === seenChanges.current || !visit) return
+        seenChanges.current = outsideChanges()
+        const fresh = getRoomEntry(client.id, location.id, visit.id, roomId)
+        if (!fresh) return
+        setResults(fresh.results ?? { main: {} })
+        if (fresh.sections) setSections(fresh.sections)
+        setTroubleshooting(fresh.troubleshooting ?? {})
+        setComplete(fresh.status === 'complete')
+        setComments(typed => (typed === savedComments.current ? (fresh.comments ?? '') : typed))
+        savedComments.current = fresh.comments ?? ''
+      }),
+    [client.id, location.id, visit, roomId],
+  )
+
+  const testFor = useCallback(
+    testId => [...snapshot.tests, ...snapshot.sections.flatMap(s => s.tests)].find(t => t.id === testId),
     [snapshot],
   )
+  const labelFor = testId => testFor(testId)?.label ?? 'this test'
+  // Leaving a fail for an answer that isn't one — what a fail is depends on
+  // the test's type.
+  const leavesFail = (testId, was, value) => isFail(testFor(testId), was) && !isFail(testFor(testId), value)
 
   // Persist on every change — a technician walking away must not lose a room.
   const persist = useCallback(
@@ -627,7 +779,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
     const was = results[groupId]?.[testId]
     const nextResults = { ...results, [groupId]: { ...(results[groupId] ?? {}), [testId]: value } }
     let nextNotes = troubleshooting
-    if (was === 'FAIL' && value !== 'FAIL' && testId in troubleshooting) {
+    if (leavesFail(testId, was, value) && testId in troubleshooting) {
       nextNotes = { ...troubleshooting }
       delete nextNotes[testId]
     }
@@ -641,7 +793,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
     const was = results[groupId]?.[testId]
     const note = troubleshooting[testId]
     // Leaving FAIL discards the note it generated — confirm first (v1 §8.2).
-    if (was === 'FAIL' && value !== 'FAIL' && note && note.trim()) {
+    if (leavesFail(testId, was, value) && note && note.trim()) {
       setPending({ groupId, testId, value, label: labelFor(testId) })
       return
     }
@@ -665,10 +817,10 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   // FAILs from visible groups only — a switched-off section keeps its results
   // but must not raise troubleshooting rows.
   const failed = [
-    ...snapshot.tests.filter(t => results.main?.[t.id] === 'FAIL'),
+    ...snapshot.tests.filter(t => isFail(t, results[MAIN]?.[t.id])),
     ...snapshot.sections
       .filter(s => sections[s.id])
-      .flatMap(s => s.tests.filter(t => results[s.id]?.[t.id] === 'FAIL')),
+      .flatMap(s => s.tests.filter(t => isFail(t, results[s.id]?.[t.id]))),
   ]
 
   return (
@@ -771,7 +923,11 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
             rows={3}
             value={comments}
             onChange={e => setComments(e.target.value)}
-            onBlur={() => !readOnly && persist({ comments })}
+            onBlur={() => {
+              if (readOnly) return
+              savedComments.current = comments
+              persist({ comments })
+            }}
             readOnly={readOnly}
             placeholder="Any general notes for this room"
             className="border-hair text-ink focus:border-navy w-full resize-y rounded-lg border px-3 py-2 text-[14px] outline-none"
@@ -895,7 +1051,7 @@ export default function WorkflowPage({ config }) {
     // Results can only be recorded into an OPEN visit. With none open the room
     // still opens, showing the last visit's findings read-only — tapping a room
     // to review must never silently start a visit and blank every chip.
-    const visit = visits.find(v => !v.completedAt) ?? visits[0] ?? null
+    const visit = currentVisit(visits)
     const readOnly = !visit || !!visit.completedAt
     const rooms = roomsWithStatus(client.id, location.id, visit)
     if (!rooms.some(r => r.id === roomId)) {

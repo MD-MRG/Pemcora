@@ -28,6 +28,33 @@ import { supabase, emailRedirectUrl, inviteUrl } from './supabase.js'
 
 const byPosition = (a, b) => (a.position ?? 0) - (b.position ?? 0)
 
+// A friendlier message that keeps its code, which is what saveErrors.js goes by.
+const coded = (message, code) => Object.assign(new Error(message), { code })
+
+const PARENT = { clients: 'client', locations: 'site', floors: 'floor', rooms: 'room', visits: 'visit' }
+
+/**
+ * The security rules check that a new row hangs off a parent in the same team, and
+ * they answer before the foreign key does. So a parent deleted on another device
+ * comes back as "not allowed" (42501), not as a missing parent (23503), and the save
+ * queue would keep trying a save that can never land. Looking for the parent tells
+ * the two apart without reading the message: a missing one is reported with the code
+ * that means it. Still there, or no way to look, and the refusal stands.
+ *
+ * Found by tests/offline-e2e.mjs against the real database. The stand-in in
+ * tests/fake-server.mjs answers as this function does.
+ */
+async function whenParentGone(error, parents) {
+  if (error?.code !== '42501') return error
+  for (const [table, id] of parents) {
+    if (!id) continue
+    const { data, error: lookError } = await supabase.from(table).select('id').eq('id', id).maybeSingle()
+    if (lookError) return error
+    if (!data) return coded(`The ${PARENT[table]} this was saved under has been deleted.`, '23503')
+  }
+  return error
+}
+
 const roomFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
@@ -134,6 +161,9 @@ const visitFromRow = r => ({
   technician: r.technician ?? '',
   startedAt: r.started_at,
   completedAt: r.completed_at,
+  // Set once a visit has been completed. On an open visit, that makes it a
+  // correction being made to an earlier inspection, not a new one.
+  firstCompletedAt: r.first_completed_at ?? null,
   createdBy: r.created_by,
   exportPreference: r.export_preference ?? null,
   rooms: Object.fromEntries(
@@ -215,7 +245,7 @@ export async function updateTeamSettings(teamId, patch) {
     .eq('team_id', teamId)
     .select()
   if (error) throw error
-  if (!data?.length) throw new Error('Only an admin can change the company settings.')
+  if (!data?.length) throw coded('Only an admin can change the company settings.', '42501')
   return settingsFromRow(data[0])
 }
 
@@ -236,12 +266,12 @@ export async function saveTemplate(teamId, kind, template) {
     .eq('kind', kind)
     .select()
   if (error) throw error
-  if (!data?.length) throw new Error('Only an admin can change the shared test lists.')
+  if (!data?.length) throw coded('Only an admin can change the shared test lists.', '42501')
   return data[0].template
 }
 
-// create_team leaves the three template rows empty on purpose — src/data/
-// testLists.js is the single source of truth, and the app seeds from it on
+// create_team leaves the three template rows empty on purpose — the pack files
+// in src/data/packs/ are the single source of truth, and the app seeds from them on
 // first load. Anything already filled in is left alone, so this is safe to call
 // on every boot and two technicians starting at once cannot clobber each other.
 export async function seedTemplatesIfEmpty(teamId, seedByKind) {
@@ -273,6 +303,43 @@ export async function saveMemberPrefs(teamId, userId, patch) {
       { team_id: teamId, user_id: userId, default_technician: patch.defaultTechnician ?? '' },
       { onConflict: 'team_id,user_id' },
     )
+  if (error) throw error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entitlements
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Null if this person isn't in the team. A null limit is no limit.
+export async function getEntitlements(teamId) {
+  const { data, error } = await supabase.rpc('team_entitlements', { p_team_id: teamId })
+  if (error) throw error
+  if (!data) return null
+  return {
+    enforced: !!data.enforced,
+    accountType: data.account_type ?? 'provider',
+    plan: data.plan ?? 'free',
+    isPro: !!data.is_pro,
+    seatLimit: data.seat_limit ?? null,
+    seatsUsed: Number(data.seats_used ?? 0),
+    visitLimit: data.visit_limit ?? null,
+    visitsUsed: Number(data.visits_used ?? 0),
+    packs: data.packs ?? ['core'],
+    pastDueUntil: data.past_due_until ?? null,
+    cancelAt: data.cancel_at ?? null,
+    importUsed: !!data.import_used,
+    openVisits: Number(data.open_visits ?? 0),
+    starterPack: data.starter_pack ?? null,
+    starterInUse: !!data.starter_in_use,
+  }
+}
+
+// Owner or admin. Refused with the plan's code once the old pack has been used.
+export async function chooseStarterPack(teamId, packId) {
+  const { error } = await supabase.rpc('choose_starter_pack', {
+    p_team_id: teamId,
+    p_pack_id: packId,
+  })
   if (error) throw error
 }
 
@@ -355,6 +422,21 @@ export async function removeMember(teamId, userId) {
 // Teams and invitations
 // ─────────────────────────────────────────────────────────────────────────────
 
+// A new team that knows what it is. All six arguments, because the sign-up function
+// is the overload in 0008 that takes all six.
+export async function createOrganisation({ name, description, accountType, packId, state, addons }) {
+  const { data, error } = await supabase.rpc('create_organisation', {
+    p_name: name,
+    p_account_type: accountType,
+    p_pack_id: packId ?? null,
+    p_description: description ?? '',
+    p_state: state ?? null,
+    p_addons: addons ?? [],
+  })
+  if (error) throw error
+  return data
+}
+
 // Admin-only at the database, and reported the same way as team_settings: RLS
 // turns a refused update into zero rows rather than an error.
 export async function updateTeam(teamId, patch) {
@@ -405,10 +487,13 @@ export async function sendInvite(teamId, email) {
       body: { teamId, email, appUrl: emailRedirectUrl() },
     })
     // A non-2xx carries our own { error } body, which is the useful message —
-    // FunctionsHttpError's own text is only ever "non-2xx status code".
+    // FunctionsHttpError's own text is only ever "non-2xx status code". The code and
+    // hint come with it, which is how a full team is told from any other refusal.
     if (error) {
       const said = await error.context?.json?.().catch(() => null)
-      if (said?.error) throw new Error(said.error)
+      if (said?.error) {
+        throw Object.assign(new Error(said.error), { code: said.code, hint: said.hint })
+      }
       throw error
     }
     return { link: data.link, emailed: Boolean(data.emailed), email: data.email ?? email }
@@ -544,13 +629,27 @@ const isDuplicate = e => e?.code === '23505'
 // identity of every row; if Postgres generated its own, the cache and the
 // database would disagree about what a thing is called and every subsequent
 // update would silently address a row that does not exist.
+//
+// It also makes these inserts safe to repeat. A save can land with the answer lost
+// on the way back, and then it is sent again: the row's own id is what says "this
+// is the one you already made" rather than "someone else has that name".
 export async function createClient(teamId, name, id) {
   const { data, error } = await supabase
     .from('clients')
     .insert({ ...(id ? { id } : {}), team_id: teamId, name: String(name ?? '').trim() })
     .select(CLIENT_TREE)
     .single()
-  if (isDuplicate(error)) throw new Error(`A client named "${name}" already exists.`)
+  if (isDuplicate(error)) {
+    if (id) {
+      const { data: mine } = await supabase
+        .from('clients')
+        .select(CLIENT_TREE)
+        .eq('id', id)
+        .maybeSingle()
+      if (mine) return clientFromRow(mine)
+    }
+    throw coded(`A client named "${name}" already exists.`, '23505')
+  }
   if (error) throw error
   return clientFromRow(data)
 }
@@ -560,7 +659,7 @@ export async function renameClient(clientId, name) {
     .from('clients')
     .update({ name: String(name ?? '').trim() })
     .eq('id', clientId)
-  if (isDuplicate(error)) throw new Error(`A client named "${name}" already exists.`)
+  if (isDuplicate(error)) throw coded(`A client named "${name}" already exists.`, '23505')
   if (error) throw error
 }
 
@@ -580,8 +679,18 @@ export async function addLocation(teamId, clientId, details, id) {
     })
     .select('*, floors(*, rooms(*))')
     .single()
-  if (isDuplicate(error)) throw new Error('That address and suburb already exist for this client.')
-  if (error) throw error
+  if (isDuplicate(error)) {
+    if (id) {
+      const { data: mine } = await supabase
+        .from('locations')
+        .select('*, floors(*, rooms(*))')
+        .eq('id', id)
+        .maybeSingle()
+      if (mine) return locationFromRow(mine)
+    }
+    throw coded('That address and suburb already exist for this client.', '23505')
+  }
+  if (error) throw await whenParentGone(error, [['clients', clientId]])
   return locationFromRow(data)
 }
 
@@ -590,7 +699,7 @@ export async function updateLocation(locationId, details) {
     .from('locations')
     .update(locationToRow(details))
     .eq('id', locationId)
-  if (isDuplicate(error)) throw new Error('That address and suburb already exist for this client.')
+  if (isDuplicate(error)) throw coded('That address and suburb already exist for this client.', '23505')
   if (error) throw error
 }
 
@@ -605,7 +714,10 @@ export async function addFloor(teamId, locationId, floor, position) {
     .insert(floorToRow(floor, locationId, teamId, position))
     .select('*, rooms(*)')
     .single()
-  if (error) throw error
+  // Its id is the only unique thing about a floor, so this is an insert that
+  // already landed.
+  if (isDuplicate(error)) return floor
+  if (error) throw await whenParentGone(error, [['locations', locationId]])
   return floorFromRow(data)
 }
 
@@ -628,7 +740,9 @@ export async function addRoom(teamId, floorId, room, position) {
     .insert(roomToRow(room, floorId, teamId, position))
     .select()
     .single()
-  if (error) throw error
+  // As for a floor: only its id is unique.
+  if (isDuplicate(error)) return room
+  if (error) throw await whenParentGone(error, [['floors', floorId]])
   return roomFromRow(data)
 }
 
@@ -756,27 +870,57 @@ export async function openVisit(locationId, kind) {
  *
  * The partial unique index makes "only one open visit per kind" true even when
  * two devices ask at the same instant; the loser gets 23505 and is handed the
- * winner's visit, which is what it wanted anyway.
+ * winner's visit, which is what it wanted anyway. A returned id other than the
+ * one asked for is how the caller knows it was handed someone else's.
+ *
+ * 23505 also comes back when this very visit is already in: a save that landed
+ * with its answer lost, sent again. So its own id is looked for first.
+ *
+ * A visit finished before it reached the database goes in finished. It isn't
+ * open, so the index has nothing to say about it, and it is an inspection of its
+ * own however many others are open at the site.
  */
-export async function startVisit(teamId, locationId, kind, technician, userId, id, startedAt) {
-  const { data, error } = await supabase
-    .from('visits')
-    .insert({
-      ...(id ? { id } : {}),
-      ...(startedAt ? { started_at: startedAt } : {}),
-      team_id: teamId,
-      location_id: locationId,
-      kind,
-      // Copied, not referenced: changing the default technician later must not
-      // rewrite who attended a visit months ago.
-      technician: technician ?? '',
-      created_by: userId ?? null,
-    })
-    .select(VISIT_TREE)
-    .single()
-  if (isDuplicate(error)) return openVisit(locationId, kind)
-  if (error) throw error
-  return visitFromRow(data)
+export async function startVisit(teamId, locationId, kind, technician, userId, id, startedAt, completedAt) {
+  const insert = () =>
+    supabase
+      .from('visits')
+      .insert({
+        ...(id ? { id } : {}),
+        ...(startedAt ? { started_at: startedAt } : {}),
+        ...(completedAt ? { completed_at: completedAt } : {}),
+        team_id: teamId,
+        location_id: locationId,
+        kind,
+        // Copied, not referenced: changing the default technician later must not
+        // rewrite who attended a visit months ago.
+        technician: technician ?? '',
+        created_by: userId ?? null,
+      })
+      .select(VISIT_TREE)
+      .single()
+
+  const { data, error } = await insert()
+  if (!isDuplicate(error)) {
+    if (error) throw await whenParentGone(error, [['locations', locationId]])
+    return visitFromRow(data)
+  }
+
+  if (id) {
+    const { data: mine, error: findError } = await supabase
+      .from('visits')
+      .select(VISIT_TREE)
+      .eq('id', id)
+      .maybeSingle()
+    if (findError) throw findError
+    if (mine) return visitFromRow(mine)
+  }
+  const open = await openVisit(locationId, kind)
+  if (open) return open
+
+  // Finished in the moment between, so nothing is in the way any more.
+  const retried = await insert()
+  if (retried.error) throw await whenParentGone(retried.error, [['locations', locationId]])
+  return visitFromRow(retried.data)
 }
 
 export async function updateVisit(visitId, patch) {
@@ -784,8 +928,11 @@ export async function updateVisit(visitId, patch) {
   if ('technician' in patch) row.technician = patch.technician ?? ''
   if ('completedAt' in patch) row.completed_at = patch.completedAt
   if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
-  const { error } = await supabase.from('visits').update(row).eq('id', visitId)
+  const { data, error } = await supabase.from('visits').update(row).eq('id', visitId).select('id')
   if (error) throw error
+  // Every member can write a visit, so no row back means it isn't there any more:
+  // deleted on another device, while this one held changes to it.
+  if (!data?.length) throw coded('This visit has been deleted on another device.', 'VISIT_GONE')
 }
 
 export const completeVisit = visitId =>
@@ -812,8 +959,52 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
     )
     .select()
     .single()
-  if (error) throw error
+  // The visit first: if that has gone, so has everything in it.
+  if (error) throw await whenParentGone(error, [['visits', visitId], ['rooms', roomId]])
   return visitRoomFromRow(data)
+}
+
+// Without its test list, which only matters if there is something to merge.
+const ROOM_ANSWERS = 'results, troubleshooting, sections_enabled, comments, status, fails, updated_at'
+
+/** One room as the database holds it now, or null if it holds no such row. */
+export async function getVisitRoom(visitId, roomId, { withTemplate = false } = {}) {
+  const { data, error } = await supabase
+    .from('visit_rooms')
+    .select(withTemplate ? '*' : ROOM_ANSWERS)
+    .eq('visit_id', visitId)
+    .eq('room_id', roomId)
+    .maybeSingle()
+  if (error) throw error
+  return data ? visitRoomFromRow(data) : null
+}
+
+export async function visitExists(visitId) {
+  const { data, error } = await supabase.from('visits').select('id').eq('id', visitId).maybeSingle()
+  if (error) throw error
+  return !!data
+}
+
+/**
+ * A room's answers when the room itself has been deleted from the floor plan, on
+ * another device, while this one was recording into it. It goes in with no room,
+ * under its copied labels: the state a deleted room's results are left in anyway.
+ */
+export async function saveRoomlessVisitRoom(teamId, visitId, entry) {
+  const { error } = await supabase
+    .from('visit_rooms')
+    .insert({ team_id: teamId, visit_id: visitId, room_id: null, ...visitRoomToRow(entry) })
+  if (error) throw await whenParentGone(error, [['visits', visitId]])
+}
+
+// No row to delete is fine: another device got there first.
+export async function deleteExport(visitId, revision) {
+  const { error } = await supabase
+    .from('visit_exports')
+    .delete()
+    .eq('visit_id', visitId)
+    .eq('revision', revision)
+  if (error) throw error
 }
 
 export async function recordExport(teamId, visitId, revision, filename, userId) {
@@ -831,7 +1022,7 @@ export async function recordExport(teamId, visitId, revision, filename, userId) 
     )
     .select()
     .single()
-  if (error) throw error
+  if (error) throw await whenParentGone(error, [['visits', visitId]])
   return {
     id: data.id,
     revision: data.revision,

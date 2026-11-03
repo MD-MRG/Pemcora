@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
-import { MAIN_NAV, FOOT_NAV } from '../nav.js'
-import { useCanManage } from '../context/team.js'
+import { navFor, FOOT_NAV } from '../nav.js'
+import { useCanManage, useEntitlements } from '../context/team.js'
 import { IconChevron } from '../components/icons.jsx'
 
 function NavItem({ item, collapsed, onNavigate }) {
@@ -57,7 +57,7 @@ export default function SideNav({ collapsed = false, onToggle, onNavigate, showT
   // which with no session answers yes — local mode has no team to be an admin
   // of, and hiding the page there would only make it untestable.
   const canManage = useCanManage()
-  const items = MAIN_NAV.filter(item => !item.admin || canManage)
+  const items = navFor(useEntitlements()).filter(item => !item.admin || canManage)
 
   return (
     <nav

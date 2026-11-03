@@ -12,6 +12,9 @@ export default function ConfirmDialog({
   danger = false,
   onConfirm,
   onCancel,
+  // A third way out, for the rare question with two real answers.
+  alternativeLabel = null,
+  onAlternative = null,
 }) {
   return (
     <div
@@ -28,7 +31,7 @@ export default function ConfirmDialog({
         <h2 className="text-[16px] font-bold">{title}</h2>
         {children && <div className="text-ink-soft mt-2 text-[13.5px]">{children}</div>}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button
             type="button"
             onClick={onCancel}
@@ -36,16 +39,28 @@ export default function ConfirmDialog({
           >
             {cancelLabel}
           </button>
-          <button
-            type="button"
-            autoFocus
-            onClick={onConfirm}
-            className={`min-h-[46px] rounded-lg px-5 text-[13.5px] font-semibold text-white ${
-              danger ? 'bg-fail hover:bg-[#a52717]' : 'bg-navy hover:bg-[#24486e]'
-            }`}
-          >
-            {confirmLabel}
-          </button>
+          {alternativeLabel && (
+            <button
+              type="button"
+              onClick={onAlternative}
+              className="text-fail min-h-[46px] rounded-lg px-4 text-[13.5px] font-semibold hover:bg-red-50"
+            >
+              {alternativeLabel}
+            </button>
+          )}
+          {/* No label when there is nothing this person can do but read it. */}
+          {confirmLabel && (
+            <button
+              type="button"
+              autoFocus
+              onClick={onConfirm}
+              className={`min-h-[46px] rounded-lg px-5 text-[13.5px] font-semibold text-white ${
+                danger ? 'bg-fail hover:bg-[#a52717]' : 'bg-navy hover:bg-[#24486e]'
+              }`}
+            >
+              {confirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -1,10 +1,39 @@
-import { useEffect, useState } from 'react'
-import { hydrate, resetCache, flush } from '../lib/cache.js'
+import { useEffect, useRef, useState } from 'react'
+import { hydrate, pushStoredCopy, resetCache, flush } from '../lib/cache.js'
 import { supabaseAdapter } from '../lib/adapters/supabase.js'
+import {
+  closeEntitlements,
+  currentEntitlements,
+  openEntitlements,
+  refreshEntitlements,
+} from '../lib/entitlements.js'
+import { deviceCopies, removeCopy, unsavedCopies } from '../lib/offlineStore.js'
+import { isNetworkFailure } from '../lib/saveErrors.js'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout from './GateLayout.jsx'
+
+// A device that has never seen this team's plan waits a moment for it, so a landlord's
+// first screen isn't an inspector's menu. Not for long, because not knowing it hides
+// nothing and the database decides everything anyway.
+const ENTITLEMENTS_PATIENCE = 3000
+
+// Work left on this device under another of this person's teams: they switched
+// away from it with no signal. It goes when it can. Refused or failing work stays
+// on the device for when that team is next open, where it can be seen and dealt with.
+async function sendOtherTeams(userId, teamId) {
+  const copies = (await unsavedCopies(userId)).filter(c => c.teamId !== teamId)
+  for (const copy of copies) {
+    try {
+      const { clean, held } = await pushStoredCopy(supabaseAdapter(copy.teamId, userId), copy)
+      if (clean && Object.keys(held).length === 0) await removeCopy(copy.id)
+    } catch (e) {
+      if (isNetworkFailure(e)) return
+      console.error('[boot] could not save work from another team', e)
+    }
+  }
+}
 
 /**
  * Loads the team's data into the cache before the app renders.
@@ -13,12 +42,19 @@ import GateLayout from './GateLayout.jsx'
  * clientStore stay synchronous: by the time any page reads during render, the
  * tree is already in memory. A spinner here is the price of not turning every
  * read in eight files into a promise.
+ *
+ * It runs on the copy kept on this device if it has to, so a load only fails with
+ * no signal if this device has never had the team's data.
  */
 export default function DataBoot({ children }) {
-  const { user } = useAuth()
+  const { user, session } = useAuth()
   const { team } = useTeam()
+  // Opened from the device with a login that can't be renewed right now, every
+  // request will be slow to fail, so don't wait long before using the device copy.
+  const openedFromDevice = useRef(!!session?.offline)
   const [state, setState] = useState('loading') // 'loading' | 'ready' | 'error'
   const [error, setError] = useState(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -26,8 +62,21 @@ export default function DataBoot({ children }) {
     // Clear first: switching accounts must not show the previous team's data
     // for the moment before the new load lands.
     resetCache()
-    hydrate(supabaseAdapter(team.id, user?.id))
-      .then(() => alive && setState('ready'))
+    const reading = openEntitlements(team.id, user?.id)
+    const firstAnswer =
+      currentEntitlements() || openedFromDevice.current
+        ? null
+        : Promise.race([reading, new Promise(resolve => setTimeout(resolve, ENTITLEMENTS_PATIENCE))])
+    const loading = hydrate(supabaseAdapter(team.id, user?.id), {
+      device: deviceCopies(user?.id, team.id),
+      ...(openedFromDevice.current ? { patience: 1000, expectOffline: true } : {}),
+    })
+    Promise.all([loading, firstAnswer])
+      .then(() => {
+        if (!alive) return
+        setState('ready')
+        sendOtherTeams(user?.id, team.id)
+      })
       .catch(e => {
         if (!alive) return
         setError(e)
@@ -35,13 +84,20 @@ export default function DataBoot({ children }) {
       })
     return () => {
       alive = false
+      resetCache()
+      closeEntitlements()
     }
-  }, [team.id, user?.id])
+  }, [team.id, user?.id, attempt])
 
-  // Pending edits are debounced, so a close or reload within that window would
-  // drop them. This is best-effort — the browser gives no guarantee an async
-  // call started here completes — but it costs nothing and catches the common
-  // case of someone closing the tab straight after typing.
+  // Back online: what this device knows about the plan may be out of date.
+  useEffect(() => {
+    window.addEventListener('online', refreshEntitlements)
+    return () => window.removeEventListener('online', refreshEntitlements)
+  }, [])
+
+  // Pending edits are debounced, so this is the last chance to send them before
+  // a close or a reload. If it doesn't finish, they are on the device already and
+  // go on the next load.
   useEffect(() => {
     const onHide = () => {
       if (document.visibilityState === 'hidden') flush()
@@ -53,6 +109,27 @@ export default function DataBoot({ children }) {
       window.removeEventListener('pagehide', flush)
     }
   }, [])
+
+  const offline = state === 'error' && isNetworkFailure(error)
+
+  // Nothing on this device to run on, so the connection coming back is the cue.
+  useEffect(() => {
+    if (!offline) return undefined
+    const retry = () => setAttempt(n => n + 1)
+    window.addEventListener('online', retry)
+    return () => window.removeEventListener('online', retry)
+  }, [offline])
+
+  if (offline) {
+    return (
+      <GateLayout title="No connection">
+        <Notice blocked title="This device doesn't have your team's data yet">
+          It needs a connection the first time. Once it has loaded here, it will open without one.
+          This page will carry on by itself when the connection returns.
+        </Notice>
+      </GateLayout>
+    )
+  }
 
   if (state === 'error') {
     return (

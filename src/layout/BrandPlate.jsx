@@ -9,7 +9,7 @@ import { BrandMark } from '../components/icons.jsx'
 export default function BrandPlate({
   collapsed = false,
   name = 'Pemcora',
-  tagline = 'AV Service',
+  tagline = '',
   logoFull = null,
   logoCollapsed = null,
 }) {

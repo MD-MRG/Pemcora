@@ -5,6 +5,7 @@
 // picking them out of JSX, and so the page stays presentational.
 
 import { normalise } from './clientStore.js'
+import { noteIsFinished, noteKey, roomFails, siteFails } from './testTypes.js'
 
 // Visits stored before Commissioning existed carry no kind; they were all PM.
 // Same fallback as clientStore.js — if that one changes, this must too.
@@ -95,7 +96,8 @@ export function openWork(clients) {
         days: daysSince(visit.startedAt),
         total: rooms.length,
         done: entries.filter(e => e.status === 'complete').length,
-        fails: entries.reduce((n, e) => n + (e.fails ?? 0), 0),
+        fails:
+          entries.reduce((n, e) => n + (e.fails ?? 0), 0) + siteFails(visit.siteResults).length,
       }
     })
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
@@ -104,23 +106,22 @@ export function openWork(clients) {
 /* ── Section 2 · what needs attention ─────────────────────────────────────── */
 
 /**
- * FAILs that nobody has written a note against. Deliberately mirrors
- * `countFails` in clientStore.js: a switched-off section keeps its results but
+ * FAILs that nobody has written a note against. Built on the same `roomFails`
+ * as `countFails` in clientStore.js: a switched-off section keeps its results but
  * they must not raise a flag here, or the technician is chased about a section
- * they consciously excluded from the report.
+ * they consciously excluded from the report. A suggested note still waiting for
+ * its timeframe counts as unwritten.
  */
 function unnotedFails(entry) {
-  if (!entry?.results) return 0
-  const notes = entry.troubleshooting ?? {}
-  const bare = id => String(notes[id] ?? '').trim() === ''
-  const count = group =>
-    Object.entries(group ?? {}).filter(([id, v]) => v === 'FAIL' && bare(id)).length
+  const notes = entry?.troubleshooting ?? {}
+  return roomFails(entry).filter(f => !noteIsFinished(notes[f.testId])).length
+}
 
-  let n = count(entry.results.main)
-  for (const [sectionId, on] of Object.entries(entry.sections ?? {})) {
-    if (on) n += count(entry.results[sectionId])
-  }
-  return n
+// The same for a visit's whole-site step, where a test repeated per item has
+// one note per item.
+function unnotedSiteFails(site) {
+  const notes = site?.troubleshooting ?? {}
+  return siteFails(site).filter(f => !noteIsFinished(notes[noteKey(f.testId, f.itemId)])).length
 }
 
 /**
@@ -133,11 +134,34 @@ function unnotedFails(entry) {
  *   'no-rooms'    a location with no floor plan — every workflow dead-ends
  *                 there until rooms exist
  *
+ *   'not-saved'   a visit the database refused, sitting on this device with no
+ *                 other copy anywhere. Comes first, because nobody else can see it
+ *
  * Open visits are excluded from 'unexported' on purpose: an unfinished visit
  * has no report yet by definition, and it is already in section 1.
  */
-export function attention(clients) {
+export function attention(clients, held = {}) {
   const rows = []
+
+  for (const [visitId, record] of Object.entries(held)) {
+    rows.push({
+      type: 'not-saved',
+      key: `n-${visitId}`,
+      visitId,
+      clientId: record.clientId,
+      clientName: record.clientName,
+      locationId: record.locationId,
+      where: record.where,
+      kind: record.kind,
+      kindLabel: KIND_LABEL[record.kind] ?? KIND_LABEL.maintenance,
+      path: KIND_PATH[record.kind] ?? KIND_PATH.maintenance,
+      at: record.at,
+      message: record.message,
+      // Its site has been deleted, so there is no visit page left to open.
+      orphan: !!record.orphan,
+      action: record.orphan ? 'Discard' : 'Open visit',
+    })
+  }
 
   for (const { client, location, visit } of allVisits(clients)) {
     const base = {
@@ -163,6 +187,20 @@ export function attention(clients) {
     // Only an OPEN visit. A finished visit's rooms are read-only, so flagging a
     // missing note there sends the technician to a screen that cannot take one —
     // the note has to be written before the visit is finished or not at all.
+    const siteUnnoted = visit.completedAt ? 0 : unnotedSiteFails(visit.siteResults)
+    if (siteUnnoted > 0) {
+      rows.push({
+        ...base,
+        type: 'fails',
+        key: `f-${visit.id}-site`,
+        roomId: null,
+        roomName: 'Whole site',
+        count: siteUnnoted,
+        at: visit.siteResults.touchedAt ?? visit.startedAt,
+        action: 'Open visit',
+      })
+    }
+
     for (const room of visit.completedAt ? [] : roomsOf(location)) {
       const n = unnotedFails(visit.rooms?.[room.id])
       if (n > 0) {
@@ -196,7 +234,7 @@ export function attention(clients) {
     }
   }
 
-  const rank = { unexported: 0, fails: 1, 'no-rooms': 2 }
+  const rank = { 'not-saved': -1, unexported: 0, fails: 1, 'no-rooms': 2 }
   return rows.sort(
     (a, b) => rank[a.type] - rank[b.type] || String(b.at ?? '').localeCompare(String(a.at ?? '')),
   )

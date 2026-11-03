@@ -11,10 +11,15 @@ import {
   removeMember,
   moveMember,
   deleteAccount,
+  getEntitlements,
 } from '../lib/api.js'
+import { seatSheet } from '../lib/entitlements.js'
+import { classifySaveError } from '../lib/saveErrors.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import TeamChoices from '../components/TeamChoices.jsx'
+import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { IconTrash } from '../components/icons.jsx'
 
 const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' }
@@ -63,7 +68,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
     try {
       setInvites(await listInvites(team.id))
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
   }, [team.id, onProblem])
 
@@ -77,7 +82,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       await updateTeam(team.id, { name: name.trim(), description: description.trim() })
       await onChanged()
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
     setBusy(false)
   }
@@ -92,7 +97,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       setCopied(false)
       await loadInvites()
     } catch (e2) {
-      onProblem(e2.message)
+      onProblem(e2, team)
     }
     setBusy(false)
   }
@@ -102,7 +107,7 @@ function TeamCard({ team, active, onSwitch, onChanged, onProblem }) {
       await revokeInvite(id)
       await loadInvites()
     } catch (e) {
-      onProblem(e.message)
+      onProblem(e)
     }
   }
 
@@ -283,14 +288,15 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
   const editable = isOwnerOf && !isSelf && member.role !== 'owner'
   const elsewhere = teams.filter(t => t.id !== member.teamId && t.role === 'owner')
 
-  const run = async (fn, after) => {
+  const run = async (fn, after, intoTeam) => {
     setBusy(true)
     try {
       await fn()
       setConfirming(null)
       await after()
     } catch (e) {
-      onProblem(e.message)
+      setConfirming(null)
+      onProblem(e, intoTeam)
       setBusy(false)
     }
   }
@@ -412,7 +418,11 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
               cancelLabel="Cancel"
               onCancel={() => setConfirming(null)}
               onConfirm={() =>
-                run(() => moveMember(member.userId, member.teamId, moveTo), onChanged)
+                run(
+                  () => moveMember(member.userId, member.teamId, moveTo),
+                  onChanged,
+                  teams.find(t => t.id === moveTo),
+                )
               }
             >
               <label className="block">
@@ -448,14 +458,25 @@ function MemberRow({ member, teams, isOwnerOf, isSelf, onChanged, onProblem }) {
 
 export default function Teams() {
   const { session, user } = useAuth()
-  const { teams, team, isAdmin, refresh, createTeam, setActiveTeam } = useTeam()
+  const { teams, team, isAdmin, refresh, createOrganisation, setActiveTeam } = useTeam()
   const [members, setMembers] = useState([])
   const [problem, setProblem] = useState('')
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [creating, setCreating] = useState(false)
+  const [created, setCreated] = useState(0) // starts the questions again for the next team
+  const [sheet, setSheet] = useState(null)
 
-  const onProblem = useCallback(message => setProblem(message), [])
+  // A team with no seat left gets the upgrade sheet, told by the code and never the
+  // message. Anything else says what went wrong. `intoTeam` is the team that refused.
+  const onProblem = useCallback(async (e, intoTeam) => {
+    if (classifySaveError(e) !== 'upgrade') {
+      setProblem(e.message)
+      return
+    }
+    const plan = intoTeam ? await getEntitlements(intoTeam.id).catch(() => null) : null
+    setSheet(seatSheet(intoTeam?.name, plan))
+  }, [])
 
   const loadMembers = useCallback(async () => {
     if (!session) return
@@ -497,11 +518,14 @@ export default function Teams() {
     )
   }
 
-  async function create(e) {
-    e.preventDefault()
+  async function create(choice) {
     setCreating(true)
     setProblem('')
-    const { error } = await createTeam(newName.trim(), newDescription.trim())
+    const { error } = await createOrganisation({
+      name: newName.trim(),
+      description: newDescription.trim(),
+      ...choice,
+    })
     setCreating(false)
     if (error) {
       setProblem(error.message)
@@ -509,11 +533,14 @@ export default function Teams() {
     }
     setNewName('')
     setNewDescription('')
+    setCreated(n => n + 1)
     await loadMembers()
   }
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
+      {sheet && <UpgradeSheet sheet={sheet} onClose={() => setSheet(null)} />}
+
       {problem && (
         <Notice blocked title={problem}>
           <button
@@ -550,9 +577,10 @@ export default function Teams() {
         <h2 className="text-[19px] font-bold tracking-[-.01em]">Create a team</h2>
         <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
           A new team starts empty — its own clients, its own test lists, its own branding. You own
-          it, and can invite people to it once it exists.
+          it, and can invite people to it once it exists. What a team does can't be changed later,
+          so someone who does two kinds of work has one team for each.
         </p>
-        <form onSubmit={create} className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field
             label="Team name"
             value={newName}
@@ -566,16 +594,15 @@ export default function Teams() {
             onChange={setNewDescription}
             placeholder="Optional — what this team covers"
           />
-          <div className="sm:col-span-2">
-            <button
-              type="submit"
-              disabled={creating || !newName.trim()}
-              className="bg-navy min-h-[46px] rounded-lg px-5 text-[13.5px] font-semibold text-white hover:bg-[#24486e] disabled:opacity-55"
-            >
-              {creating ? 'Creating…' : 'Create team'}
-            </button>
+          <div className="max-w-md sm:col-span-2">
+            <TeamChoices
+              key={created}
+              busy={creating}
+              canConfirm={!!newName.trim()}
+              onConfirm={create}
+            />
           </div>
-        </form>
+        </div>
       </section>
 
       <section className="border-hair rounded-xl border bg-white p-6">

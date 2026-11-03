@@ -1,13 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import BrandPlate from './BrandPlate.jsx'
 import ContextBar from './ContextBar.jsx'
 import SideNav from './SideNav.jsx'
-import { navByPath } from '../nav.js'
+import { navByPath, redirectFor } from '../nav.js'
+import { useEntitlements } from '../context/team.js'
+import { hasVisitsOfKind } from '../lib/clientStore.js'
+import { brandTagline } from '../lib/entitlements.js'
 import { prefs } from '../lib/prefs.js'
 import { getSettings, saveSettings } from '../lib/settingsStore.js'
 import { applyPlate, DEFAULT_PLATE } from '../lib/plates.js'
 import { IconClose } from '../components/icons.jsx'
+import PlanBanners from '../components/PlanBanners.jsx'
 
 // Wide enough for "Preventative Maintenance" on one line beside its icon.
 const NAV_WIDE = 264
@@ -20,6 +24,9 @@ const breakpointOf = w => (w < BP_PHONE ? 'phone' : w < BP_WIDE ? 'tablet' : 'wi
 export default function AppShell() {
   const location = useLocation()
   const current = navByPath(location.pathname)
+  const entitlements = useEntitlements()
+  const sendTo = redirectFor(location.pathname, entitlements, hasVisitsOfKind)
+  const tagline = brandTagline(entitlements)
 
   // null = no manual choice yet, so the breakpoint decides.
   const [manual, setManual] = useState(() => prefs.getCollapsed())
@@ -92,6 +99,13 @@ export default function AppShell() {
     setDetail,
   }
 
+  const page = (
+    <>
+      <PlanBanners />
+      {sendTo ? <Navigate to={sendTo} replace /> : <Outlet context={ctx} />}
+    </>
+  )
+
   const skipLink = (
     <a
       href="#stage"
@@ -116,7 +130,7 @@ export default function AppShell() {
         </header>
 
         <main id="stage" className="bg-stage flex-1 overflow-auto">
-          <Outlet context={ctx} />
+          {page}
         </main>
 
         {drawerOpen && (
@@ -133,7 +147,7 @@ export default function AppShell() {
               aria-label="Navigation"
             >
               <div className="relative h-[76px] shrink-0">
-                <BrandPlate collapsed={false} name={brandName} logoFull={settings.logoFull} logoCollapsed={settings.logoCollapsed} />
+                <BrandPlate collapsed={false} name={brandName} tagline={tagline} logoFull={settings.logoFull} logoCollapsed={settings.logoCollapsed} />
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
@@ -168,13 +182,14 @@ export default function AppShell() {
       <BrandPlate
         collapsed={collapsed}
         name={brandName}
+        tagline={tagline}
         logoFull={settings.logoFull}
         logoCollapsed={settings.logoCollapsed}
       />
       <ContextBar item={current} detail={detail} />
       <SideNav collapsed={collapsed} onToggle={toggle} />
       <main id="stage" className="bg-stage overflow-auto">
-        <Outlet context={ctx} />
+        {page}
       </main>
     </div>
   )

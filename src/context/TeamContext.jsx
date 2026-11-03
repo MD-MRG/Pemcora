@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
+import * as api from '../lib/api.js'
 import { prefs } from '../lib/prefs.js'
+import { isNetworkFailure } from '../lib/saveErrors.js'
 import { useAuth } from './auth.js'
 import { TeamContext } from './team.js'
+
+// Every request waits on the login being renewed, which on a connection going
+// nowhere takes up to half a minute to fail. There is no need to sit through that
+// with the last known team to hand: it takes over once the real answer arrives.
+const TEAM_PATIENCE = 3000
 
 const teamFromRow = t => ({
   id: t.team_id,
@@ -16,31 +23,73 @@ const teamFromRow = t => ({
 
 export function TeamProvider({ children }) {
   const { session } = useAuth()
+  // The person, not their session. The session object changes every time the login
+  // token renews, and reloading the teams then would take the app down to a spinner
+  // and back, in the middle of whatever someone was doing.
+  const userId = session?.user?.id ?? null
   const [teams, setTeams] = useState([])
   const [activeId, setActiveId] = useState(() => prefs.getActiveTeam())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const refresh = useCallback(async () => {
-    if (!session) {
-      setTeams([])
+  const refresh = useCallback(
+    async ({ quietly = false } = {}) => {
+      if (!userId) {
+        setTeams([])
+        setLoading(false)
+        return
+      }
+      if (!quietly) {
+        setLoading(true)
+        setError(null)
+      }
+
+      // No signal is no reason to lose the team this device was working in.
+      const last = prefs.getLastTeams(userId)
+      const showLast = () => {
+        setTeams(last)
+        setError(null)
+        setLoading(false)
+      }
+      if (navigator.onLine === false) {
+        if (last) showLast()
+        else if (!quietly) {
+          setError({ code: '', message: 'This device is offline' })
+          setLoading(false)
+        }
+        return
+      }
+      const patience = last ? setTimeout(showLast, TEAM_PATIENCE) : null
+
+      const { data, error: rpcError } = await supabase.rpc('my_teams')
+      clearTimeout(patience)
+      if (rpcError) {
+        if (last && isNetworkFailure(rpcError)) {
+          showLast()
+        } else if (!quietly) {
+          setError(rpcError)
+          setTeams([])
+        }
+      } else {
+        const next = (data ?? []).map(teamFromRow)
+        setTeams(next)
+        setError(null)
+        prefs.setLastTeams(userId, next)
+      }
       setLoading(false)
-      return
-    }
-    setLoading(true)
-    setError(null)
-    const { data, error: rpcError } = await supabase.rpc('my_teams')
-    if (rpcError) {
-      setError(rpcError)
-      setTeams([])
-    } else {
-      setTeams((data ?? []).map(teamFromRow))
-    }
-    setLoading(false)
-  }, [session])
+    },
+    [userId],
+  )
 
   useEffect(() => {
     refresh()
+  }, [refresh])
+
+  // Back online: catch up on who is in what, without taking the app down to do it.
+  useEffect(() => {
+    const catchUp = () => refresh({ quietly: true })
+    window.addEventListener('online', catchUp)
+    return () => window.removeEventListener('online', catchUp)
   }, [refresh])
 
   // The stored choice is a hint, not a fact. Being moved out of a team, or
@@ -58,15 +107,18 @@ export function TeamProvider({ children }) {
     [],
   )
 
-  const createTeam = useCallback(
-    async (name, description) => {
-      const { data, error: e } = await supabase.rpc('create_team', {
-        p_name: name,
-        p_description: description ?? '',
-      })
-      if (e) return { error: e }
-      await refresh()
-      return { data }
+  const createOrganisation = useCallback(
+    async details => {
+      try {
+        const data = await api.createOrganisation(details)
+        await refresh()
+        return { data }
+      } catch (e) {
+        // The team may have been made and only the answer lost. Looking now means
+        // trying again doesn't make a second one.
+        if (isNetworkFailure(e)) await refresh({ quietly: true })
+        return { error: e }
+      }
     },
     [refresh],
   )
@@ -82,7 +134,7 @@ export function TeamProvider({ children }) {
     isOwner: role === 'owner',
     isAdmin: role === 'owner' || role === 'admin',
     refresh,
-    createTeam,
+    createOrganisation,
     setActiveTeam,
   }
   return <TeamContext.Provider value={value}>{children}</TeamContext.Provider>

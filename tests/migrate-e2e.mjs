@@ -194,10 +194,13 @@ try {
   await page.getByRole('button', { name: /^sign in$/i }).click()
   await page.waitForTimeout(2500)
 
-  // No team yet, so TeamSetup creates one without asking and the app opens.
+  // No team yet, so Team Setup asks what it does, and the app opens on the answer.
+  await page.getByRole('radio', { name: /^AV integration/ }).check({ timeout: 15000 })
+  await page.getByRole('button', { name: 'Continue', exact: true }).click()
+  await page.getByRole('button', { name: 'Create team', exact: true }).click()
   await page.locator('nav a').nth(6).waitFor({ timeout: 15000 }).catch(() => {})
 
-  const team = (await sb.rpc('my_teams')).data?.[0]
+  const team =(await sb.rpc('my_teams')).data?.[0]
   log(!!team, 'team created', team?.name)
 
   // The team starts empty even though the browser is full — the import is

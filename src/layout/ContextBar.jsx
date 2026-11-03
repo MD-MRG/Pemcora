@@ -1,4 +1,5 @@
 import { IconMenu } from '../components/icons.jsx'
+import SaveStatus from '../components/SaveStatus.jsx'
 
 // Sits to the right of the brand plate. Carries the current page's identity;
 // the right-hand slot is reserved for per-page actions as pages get built.
@@ -30,7 +31,9 @@ export default function ContextBar({ item, detail = null, onOpenNav, showMenuBut
       </div>
 
       {/* page actions land here */}
-      <div className="flex shrink-0 items-center gap-2" />
+      <div className="flex shrink-0 items-center gap-2">
+        <SaveStatus />
+      </div>
     </div>
   )
 }
