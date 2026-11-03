@@ -1278,6 +1278,20 @@ step:
   - The page shows the newest photo through a link that lasts five minutes.
   - With no signal it says it needs a connection and sends nothing. An item not yet saved is
     sent first; a photo can't point at an item the database doesn't have.
+- How C2d (the report's equipment) came out:
+  - The page has handed the report every item at the site, removed ones included, since C1e.
+    The snapshot's `equipment` now lists those standing when the visit finished and those taken
+    out during it. Each says when it went in and came out (`createdAt`, `removedAt`), whether
+    it's in place, replaced or removed, what it replaced or was replaced by, and its own fields
+    in words (`details`).
+  - Only the item types the visit's list tests are listed, so an electrical check doesn't list
+    the smoke alarms, and an AV report has none.
+  - The Excel export has an Equipment part after the whole-site results: each item under its
+    name and room, with what was recorded about it. An alarm expired by the day of the visit
+    is marked in the fail colour, and a replaced one says when.
+  - An item gone by the end of the visit is named "(replaced)" or "(removed)" in the whole-site
+    results too, so it isn't confused with the one put in its place under the same name.
+  - Photos aren't in the Excel export; D1's PDF embeds them.
 
 #### C3. Settings and client pages
 

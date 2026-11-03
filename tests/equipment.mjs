@@ -67,6 +67,95 @@ log('an item is summed up by its choices, make and model',
     'Photoelectric · 240 V hard-wired · Clipsal 755PSMA')
 log('an item with no name is named by its type and place', itemName({ assetType: 'smoke_alarm', label: '' }, 1) === 'Smoke alarm 2')
 
+// ── The report's equipment (C2d) ────────────────────────────────────────────
+{
+  // The list as a visit holds it, shaped by the template store, which keeps its
+  // edits in localStorage.
+  const store = new Map()
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
+  })
+  const { getTemplate } = await import('../src/lib/templateStore.js')
+  const { buildReportSnapshot } = await import('../src/lib/reportSnapshot.js')
+  const { buildWorkbook } = await import('../src/lib/report.js')
+  const qldList = getTemplate('qld_smoke_alarm')
+  delete globalThis.localStorage
+  const each = qldList.sections.find(s => s.assetType === 'smoke_alarm')
+  const works = each.tests.find(t => t.onFail === 'replace')
+  const item = (id, label, extra = {}) => ({
+    id, assetType: 'smoke_alarm', roomId: null, label, make: '', model: '', serial: '', attributes: {},
+    installedOn: null, expiresOn: null, removedAt: null, createdAt: '2020-01-01T00:00:00.000Z', ...extra,
+  })
+  const assets = [
+    item('old', 'Bedroom 1 alarm', { roomId: 'b1', removedAt: '2026-11-03T02:00:00.000Z', attributes: { sensor: 'ionisation' } }),
+    item('new', 'Bedroom 1 alarm', {
+      roomId: 'b1', createdAt: '2026-11-03T02:00:00.000Z', make: 'Clipsal', model: '755PSMA', expiresOn: '2036-01-15',
+      attributes: { sensor: 'photoelectric', power: 'mains', replaces: 'old' },
+    }),
+    item('hall', 'Hall alarm', { expiresOn: '2026-10-01' }),
+    item('laundry', 'Laundry alarm', { removedAt: '2025-06-01T00:00:00.000Z' }),
+    item('garage', 'Garage alarm', { removedAt: '2026-11-03T03:00:00.000Z' }),
+    item('later', 'Added since', { createdAt: '2026-11-10T00:00:00.000Z' }),
+    { ...item('rcd', 'RCD 1'), assetType: 'rcd' },
+  ]
+  const visit = {
+    technician: 'Sam', startedAt: '2026-11-03T00:00:00.000Z', completedAt: '2026-11-03T05:00:00.000Z', rooms: {},
+    siteResults: { template: qldList, results: { [each.id]: { old: { [works.id]: 'FAIL' } } }, troubleshooting: {} },
+  }
+  const rooms = [{ id: 'b1', name: 'Bedroom 1', floorLabel: 'Upstairs' }]
+  const snap = buildReportSnapshot({ visit, rooms, assets })
+  const eq = id => snap.equipment.find(e => e.id === id)
+  log('the report lists the alarms standing when the visit finished, and those taken out during it',
+    snap.equipment.map(e => e.id).join() === 'old,new,hall,garage', snap.equipment.map(e => e.id).join())
+  log('not one gone before it, one added since, or a type the list doesn\'t test',
+    !eq('laundry') && !eq('later') && !eq('rcd'))
+  log('each with when it went in, and when it came out if it did',
+    eq('new').createdAt === '2026-11-03T02:00:00.000Z' && eq('new').removedAt === null && eq('old').removedAt === '2026-11-03T02:00:00.000Z')
+  log('a replaced alarm says so, and the new one what it replaced',
+    eq('old').status === 'replaced' && eq('old').replacedBy === 'Bedroom 1 alarm' && eq('new').status === 'in place' && eq('new').replaces === 'Bedroom 1 alarm')
+  log('one taken out with nothing in its place is removed', eq('garage').status === 'removed' && eq('garage').replacedBy === null)
+  log('its own fields in words, those recorded',
+    JSON.stringify(eq('new').details) === JSON.stringify([['Sensor', 'Photoelectric'], ['Power', '240 V hard-wired']]), JSON.stringify(eq('new').details))
+  log('the whole-site step\'s old alarm is named as replaced',
+    snap.site.sections[0].items.map(i => i.label).join() === 'Bedroom 1 alarm (replaced),Bedroom 1 alarm,Hall alarm',
+    snap.site.sections[0].items.map(i => i.label).join())
+  const open = buildReportSnapshot({ visit: { ...visit, completedAt: null }, rooms, assets })
+  log('a visit still open lists what is there now, and what came out since it started',
+    open.equipment.map(e => e.id).join() === 'old,new,hall,garage,later', open.equipment.map(e => e.id).join())
+  log('an AV visit lists none', buildReportSnapshot({ visit: { rooms: {} }, rooms, assets }).equipment.length === 0)
+
+  const rowsOf = async wb => {
+    const out = []
+    wb.worksheets[0].eachRow(r => out.push(r))
+    return out
+  }
+  // A row merged across both columns reads its text once.
+  const text = r => {
+    const cells = r.values.filter(v => v != null).map(String)
+    return cells.length === 2 && cells[0] === cells[1] && r.getCell(1).isMerged ? cells[0] : cells.join('|')
+  }
+  const wb = await buildWorkbook({ client: { name: 'Rental Co' }, location: { address: '10 Smith St' }, visit, rooms, revision: 1, reportTitle: 'Smoke Alarm Compliance Inspection', assets, sheetName: 'Report' })
+  const rows = await rowsOf(wb)
+  const lines = rows.map(text)
+  const at = line => lines.indexOf(line)
+  log('the Excel report has an Equipment part after the whole site',
+    at('Equipment') > at('Whole site') && at('Whole site') > 0 && at('Smoke alarms') > at('Equipment'), lines.slice(-30).join(' / '))
+  log('each alarm under its name and room, the replaced one marked',
+    at('Bedroom 1 alarm (Bedroom 1) (replaced)') > 0 && at('Replaced|2026-11-03') > at('Bedroom 1 alarm (Bedroom 1) (replaced)') &&
+      // The new one's heading is in the whole-site results too; this is the last.
+      lines.lastIndexOf('Bedroom 1 alarm (Bedroom 1)') > at('Replaced|2026-11-03'))
+  log('with its details, make and model, and what it replaced',
+    lines.includes('Sensor|Photoelectric') && lines.includes('Power|240 V hard-wired') && lines.includes('Make and model|Clipsal 755PSMA') &&
+      lines.includes('Expires|2036-01-15') && lines.includes('Put in|2026-11-03, replacing Bedroom 1 alarm'))
+  const expired = rows.find(r => text(r) === 'Expires|2026-10-01 (expired)')
+  log('an alarm expired by the day of the visit says so, in the fail colour', expired?.getCell(2).font?.color?.argb === 'FFC22E1C')
+  log('one taken out says when', lines.includes('Garage alarm (removed)') && lines.includes('Removed|2026-11-03'))
+  log('nothing is printed that wasn\'t recorded', !lines.some(l => /^(Serial number|Installed)\|/.test(l)))
+  const av = await rowsOf(await buildWorkbook({ client: { name: 'AV Co' }, location: {}, visit: { rooms: {} }, rooms, revision: 1, assets }))
+  log('an AV report has no Equipment part', !av.map(text).includes('Equipment'))
+}
+
 // ── The screens ─────────────────────────────────────────────────────────────
 async function launch() {
   for (const channel of ['chrome', 'msedge']) {

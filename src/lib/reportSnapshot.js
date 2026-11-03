@@ -8,6 +8,8 @@ import {
   siteSections,
   typeOf,
 } from './testTypes.js'
+import { fieldText, panelTypes } from './equipment.js'
+import { assetFields, assetTypeLabel } from '../data/packs/shared/assetTypes.js'
 
 // What a report says, as plain data: the snapshot send_report() keeps with a
 // delivery (build plan 2.10), and what the Excel export lays out. Building
@@ -25,6 +27,11 @@ import {
 //            roomId, label, make, model, serial, installedOn, expiresOn,
 //            createdAt, removedAt, attributes }. The snapshot works out what
 //            stood there at the visit, so a report exported later doesn't change.
+//
+// `equipment` is the items of the types the visit's list tests one by one: those
+// standing when it finished, and those taken out during it, each with when it
+// went in and came out, and what it replaced or was replaced by. An AV visit's
+// list tests no items, so its report has none.
 
 export const SNAPSHOT_VERSION = 1
 
@@ -47,6 +54,19 @@ function stoodThen(asset, visit) {
   const removed = time(asset.removedAt)
   return (added === null || added <= end) && (removed === null || removed > end)
 }
+
+// Taken out while the visit was open: replaced, most likely, because it failed.
+// A visit with no start on record can't say, so nothing counts.
+function removedDuring(asset, visit) {
+  const removed = time(asset.removedAt)
+  const start = time(visit?.startedAt)
+  const end = time(visit?.completedAt) ?? Infinity
+  return removed !== null && start !== null && removed >= start && removed <= end
+}
+
+// What a removed item says after its name, so it isn't confused with the one put
+// in its place under the same name.
+const goneWord = (asset, assets) => (assets.some(a => a.attributes?.replaces === asset.id) ? 'replaced' : 'removed')
 
 // One test's answer. `group` is where it is kept: results[group][testId], or
 // results[group][itemId][testId] for an item.
@@ -136,9 +156,44 @@ function itemsFor(section, visit, assets, roomNames) {
   const items = [...ofType, ...[...answered].filter(id => !known.has(id)).map(id => ({ id }))]
   return items.map((a, i) => ({
     id: a.id,
-    label: a.label || `Item ${i + 1}`,
+    label: (a.label || `Item ${i + 1}`) + (a.removedAt && !stoodThen(a, visit) ? ` (${goneWord(a, assets)})` : ''),
     room: roomNames.get(a.roomId) ?? '',
   }))
+}
+
+function equipmentSnapshot(visit, assets, roomNames) {
+  const types = panelTypes(visit?.siteResults?.template)
+  const name = a => a.label || assetTypeLabel(a.assetType)
+  const byId = new Map(assets.map(a => [a.id, a]))
+  return assets
+    .filter(a => types.includes(a.assetType) && (stoodThen(a, visit) || removedDuring(a, visit)))
+    .sort((a, b) => types.indexOf(a.assetType) - types.indexOf(b.assetType))
+    .map(a => {
+      const gone = !stoodThen(a, visit)
+      const replacedBy = assets.find(x => x.attributes?.replaces === a.id)
+      const replaces = byId.get(a.attributes?.replaces)
+      return {
+        id: a.id,
+        assetType: a.assetType,
+        label: name(a),
+        room: roomNames.get(a.roomId) ?? '',
+        make: a.make ?? '',
+        model: a.model ?? '',
+        serial: a.serial ?? '',
+        installedOn: a.installedOn ?? null,
+        expiresOn: a.expiresOn ?? null,
+        attributes: a.attributes ?? {},
+        // The type's own fields in words, those recorded, in the pack's order.
+        details: assetFields(a.assetType)
+          .map(f => [f.label, fieldText(f, a.attributes?.[f.id])])
+          .filter(([, text]) => text),
+        createdAt: a.createdAt ?? null,
+        removedAt: gone ? a.removedAt : null,
+        status: !gone ? 'in place' : replacedBy ? 'replaced' : 'removed',
+        replacedBy: gone && replacedBy ? name(replacedBy) : null,
+        replaces: replaces ? name(replaces) : null,
+      }
+    })
 }
 
 function siteSnapshot(visit, assets, roomNames) {
@@ -185,18 +240,6 @@ export function buildReportSnapshot({
     rooms: rooms
       .filter(room => !siteOnly || visit?.rooms?.[room.id])
       .map(room => roomSnapshot(room, visit?.rooms?.[room.id])),
-    equipment: assets
-      .filter(a => stoodThen(a, visit))
-      .map(a => ({
-        assetType: a.assetType,
-        label: a.label ?? '',
-        room: roomNames.get(a.roomId) ?? '',
-        make: a.make ?? '',
-        model: a.model ?? '',
-        serial: a.serial ?? '',
-        installedOn: a.installedOn ?? null,
-        expiresOn: a.expiresOn ?? null,
-        attributes: a.attributes ?? {},
-      })),
+    equipment: equipmentSnapshot(visit, assets, roomNames),
   }
 }

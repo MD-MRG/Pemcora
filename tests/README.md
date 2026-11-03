@@ -167,12 +167,13 @@ exported as it always was (22 checks).
 node tests/signoff.mjs
 ```
 
-`equipment.mjs` is steps C2 and C2b. The rules for item types and expiry dates in Node, then a Queensland
+`equipment.mjs` is steps C2, C2b and C2d. The rules for item types and expiry dates, and the report's
+equipment as the snapshot and the Excel export lay it out, in Node; then a Queensland
 smoke alarm site in a browser: the equipment panel before any visit, alarms added and edited with
 their own fields, a manufacture date filling in the expiry, expired and soon-to-expire alarms
 flagged, a removed one kept under Removed, the whole-site step testing the alarms the panel
 added, an alarm replaced from the panel and from a failed alarm's note, one removed, and no
-panel on an AV page (53 checks).
+panel on an AV page (69 checks).
 
 ```
 node tests/equipment.mjs
