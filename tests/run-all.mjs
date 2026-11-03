@@ -41,6 +41,7 @@ const SUITES = [
   'entitlements',
   'signup',
   'workflow-pages',
+  'answers',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

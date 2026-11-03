@@ -1188,6 +1188,18 @@ step:
     laundry, garage, stairway, other. The electrician's check of the lists covers it too.
   - A room opened for the first time switches on the room sections its type names, on top
     of the last room's choice. No list uses that yet.
+- How C1d (answers and fail notes) came out:
+  - One answer input for every type (`AnswerInput.jsx`), shared by rooms and the whole-site
+    step. A PASS / FAIL / N/A row is laid out exactly as before. A reading is typed as text,
+    so "> 999" can be recorded, and only a number is judged against the test's limits.
+  - The note box (`FailNote.jsx`) offers the list's suggestions while the note is empty,
+    and again on request. Choosing one keeps anything already typed, under it.
+  - An open visit with a note still saying [timeframe] can't be finished, by Finish or by
+    exporting, and says which room. A note in a section switched off doesn't count, since
+    nobody can see it there to finish it.
+  - Settings shows a tab for every list the team uses, and the suggestions under a list that
+    has them. Each typed test shows what it asks for, such as "Reading (Ω)". The editor
+    renames, reorders and removes tests; their types are the pack's.
 
 #### C2. Equipment panel per site
 

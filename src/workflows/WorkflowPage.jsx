@@ -4,7 +4,8 @@ import { useLocation as useRouterLocation, useOutletContext } from 'react-router
 import { useCanManage, useEntitlements, useRoomTypes } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
-import ResultSelector from '../components/ResultSelector.jsx'
+import AnswerInput from '../components/AnswerInput.jsx'
+import FailNote from '../components/FailNote.jsx'
 import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
@@ -33,7 +34,7 @@ import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
-import { isFail, MAIN, sectionsForRoomType } from '../lib/testTypes.js'
+import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, typeOf } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
@@ -288,6 +289,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [adding, setAdding] = useState(false)
   const [askExport, setAskExport] = useState(false)
   const [askFinish, setAskFinish] = useState(false)
+  const [unfinished, setUnfinished] = useState(null)
   const [askDeleteRoom, setAskDeleteRoom] = useState(null)
   const [askDeleteReport, setAskDeleteReport] = useState(null)
   const [askReopen, setAskReopen] = useState(false)
@@ -345,6 +347,18 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   }
 
   const floors = (location.floors ?? []).map(f => ({ id: f.id, label: f.label }))
+
+  // A note chosen from the suggestions can still say [timeframe]. Sent like that,
+  // it would reach a report that can't be changed, so an open visit with one can't
+  // be finished, by Finish or by exporting, until it's filled in.
+  const awaitingTimeframe = () => {
+    if (!current || current.completedAt) return false
+    const where = notesAwaitingTimeframe(current).map(id =>
+      id === 'site' ? 'the whole-site step' : rooms.find(r => r.id === id)?.name || 'a room',
+    )
+    setUnfinished(where.length ? where : null)
+    return where.length > 0
+  }
 
   return (
     <>
@@ -468,7 +482,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           if (first) onOpenRoom(first.id)
         }}
         onExport={() => {
-          if (!current) return
+          if (!current || awaitingTimeframe()) return
           const already = (current.exports ?? []).length > 0
           // Only ask once a report exists, and skip the prompt if the
           // technician chose to remember an answer for this visit.
@@ -480,13 +494,23 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           setVisitTechnician(client.id, location.id, current.id, value)
           onChanged()
         }}
-        onFinish={() => setAskFinish(true)}
+        onFinish={() => {
+          if (!awaitingTimeframe()) setAskFinish(true)
+        }}
         canManage={canManage}
         onReopen={() => {
           setReopenError('')
           setAskReopen(true)
         }}
       />
+
+      {unfinished && (
+        <div className="mb-4">
+          <Notice blocked title="A note still says [timeframe]">
+            In {unfinished.join(', ')}. Fill in the timeframe, then finish the visit.
+          </Notice>
+        </div>
+      )}
 
       {reopenError && (
         <p className="border-fail/30 bg-fail/5 text-fail mb-4 rounded-lg border px-4 py-3 text-[13.5px]">
@@ -691,11 +715,16 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
 }
 
 /* ── Level 4 · room tests ─────────────────────────────────────────────────── */
-function TestRow({ test, value, onChange, readOnly }) {
+// PASS / FAIL / N/A rows are laid out exactly as they always were. Any other
+// answer may need the room to wrap under its label on a phone.
+function TestRow({ test, value, reading, onAnswer, readOnly }) {
+  const wraps = typeOf(test) !== 'check'
   return (
-    <div className="border-hair flex items-center justify-between gap-4 border-b px-4 py-2.5 last:border-0">
+    <div
+      className={`border-hair flex items-center justify-between gap-4 border-b px-4 py-2.5 last:border-0 ${wraps ? 'flex-wrap gap-y-2' : ''}`}
+    >
       <span className="min-w-0 text-[14px] font-medium">{test.label}</span>
-      <ResultSelector value={value ?? null} onChange={onChange} label={test.label} disabled={readOnly} />
+      <AnswerInput test={test} value={value} reading={reading} onAnswer={onAnswer} readOnly={readOnly} />
     </div>
   )
 }
@@ -720,6 +749,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const snapshot = stored?.template ?? template
 
   const [results, setResults] = useState(() => stored?.results ?? { main: {} })
+  const [readings, setReadings] = useState(() => stored?.readings ?? {})
   // A room opened for the first time starts as the last one did, plus whatever
   // its type switches on: the bathroom section in a bathroom.
   const [sections, setSections] = useState(
@@ -750,6 +780,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
         const fresh = getRoomEntry(client.id, location.id, visit.id, roomId)
         if (!fresh) return
         setResults(fresh.results ?? { main: {} })
+        setReadings(fresh.readings ?? {})
         if (fresh.sections) setSections(fresh.sections)
         setTroubleshooting(fresh.troubleshooting ?? {})
         setComplete(fresh.status === 'complete')
@@ -774,6 +805,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
       if (readOnly || !visit) return
       saveRoomEntry(client.id, location.id, visit.id, roomId, {
         results,
+        readings,
         sections,
         troubleshooting,
         comments,
@@ -783,32 +815,41 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
       })
       onChanged()
     },
-    [client.id, location.id, visit, roomId, results, sections, troubleshooting, comments, snapshot, complete, onChanged, readOnly],
+    [client.id, location.id, visit, roomId, results, readings, sections, troubleshooting, comments, snapshot, complete, onChanged, readOnly],
   )
 
-  const applyResult = (groupId, testId, value) => {
+  // A reading goes under readings, beside the verdict its limits give, if any.
+  const applyResult = (groupId, testId, value, reading) => {
     const was = results[groupId]?.[testId]
     const nextResults = { ...results, [groupId]: { ...(results[groupId] ?? {}), [testId]: value } }
+    let nextReadings = readings
+    if (typeOf(testFor(testId)) === 'measure') {
+      const group = { ...(readings[groupId] ?? {}) }
+      if (reading) group[testId] = reading
+      else delete group[testId]
+      nextReadings = { ...readings, [groupId]: group }
+    }
     let nextNotes = troubleshooting
     if (leavesFail(testId, was, value) && testId in troubleshooting) {
       nextNotes = { ...troubleshooting }
       delete nextNotes[testId]
     }
     setResults(nextResults)
+    setReadings(nextReadings)
     setTroubleshooting(nextNotes)
-    persist({ results: nextResults, troubleshooting: nextNotes })
+    persist({ results: nextResults, readings: nextReadings, troubleshooting: nextNotes })
   }
 
-  const setResult = (groupId, testId, value) => {
+  const setResult = (groupId, testId, value, reading) => {
     if (readOnly) return
     const was = results[groupId]?.[testId]
     const note = troubleshooting[testId]
     // Leaving FAIL discards the note it generated — confirm first (v1 §8.2).
     if (leavesFail(testId, was, value) && note && note.trim()) {
-      setPending({ groupId, testId, value, label: labelFor(testId) })
+      setPending({ groupId, testId, value, reading, label: labelFor(testId) })
       return
     }
-    applyResult(groupId, testId, value)
+    applyResult(groupId, testId, value, reading)
   }
 
   const toggleSection = (sectionId, on) => {
@@ -872,7 +913,8 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
               key={t.id}
               test={t}
               value={results.main?.[t.id]}
-              onChange={v => setResult('main', t.id, v)}
+              reading={readings.main?.[t.id]}
+              onAnswer={(v, reading) => setResult('main', t.id, v, reading)}
               readOnly={readOnly}
             />
           ))}
@@ -896,7 +938,8 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
                   key={t.id}
                   test={t}
                   value={results[section.id]?.[t.id]}
-                  onChange={v => setResult(section.id, t.id, v)}
+                  reading={readings[section.id]?.[t.id]}
+                  onAnswer={(v, reading) => setResult(section.id, t.id, v, reading)}
                   readOnly={readOnly}
                 />
               ))}
@@ -910,19 +953,15 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
           ) : (
             <div className="flex flex-col gap-3">
               {failed.map(t => (
-                <label key={t.id} className="block">
-                  <span className="text-ink-soft mb-1.5 block text-[12.5px] font-semibold">
-                    {t.label}
-                  </span>
-                  <textarea
-                    rows={2}
-                    value={troubleshooting[t.id] ?? ''}
-                    onChange={e => setNote(t.id, e.target.value)}
-                    readOnly={readOnly}
-                    placeholder="Describe the issue / action taken"
-                    className="border-hair text-ink focus:border-navy w-full resize-y rounded-lg border px-3 py-2 text-[14px] outline-none"
-                  />
-                </label>
+                <FailNote
+                  key={t.id}
+                  label={t.label}
+                  note={troubleshooting[t.id]}
+                  onChange={text => setNote(t.id, text)}
+                  suggestions={snapshot.failNotes}
+                  readOnly={readOnly}
+                  placeholder="Describe the issue / action taken"
+                />
               ))}
             </div>
           )}
@@ -979,7 +1018,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
           cancelLabel="Keep the note"
           onCancel={() => setPending(null)}
           onConfirm={() => {
-            applyResult(pending.groupId, pending.testId, pending.value)
+            applyResult(pending.groupId, pending.testId, pending.value, pending.reading)
             setPending(null)
           }}
         >

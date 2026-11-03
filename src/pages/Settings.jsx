@@ -10,8 +10,8 @@ import AccountPanel from '../components/AccountPanel.jsx'
 import StarterPackCard from '../components/StarterPackCard.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 import { useEntitlements } from '../context/team.js'
-import { holdsPack, isProvider } from '../lib/entitlements.js'
-import { workflow } from '../data/packs/index.js'
+import { isProvider, usesPack } from '../lib/entitlements.js'
+import { WORKFLOWS, workflow } from '../data/packs/index.js'
 
 const TEMPLATES = [
   {
@@ -32,6 +32,13 @@ const TEMPLATES = [
     title: 'Custom List tests',
     note: 'Starts empty. Build the list and name the sections however the job needs.',
   },
+  // Every other workflow's list, named as its page is.
+  ...WORKFLOWS.filter(w => !['maintenance', 'commissioning', 'custom'].includes(w.id)).map(w => ({
+    kind: w.id,
+    tab: w.nav.label,
+    title: `${w.page.title} tests`,
+    note: 'A proposed list, built from the official forms and rules. A licensed electrician checks it before it ships.',
+  })),
 ]
 
 function PlateSwatch({ plate, selected, onSelect, logo }) {
@@ -83,7 +90,7 @@ export default function Settings() {
   // nothing, so it has no lists and no technician to record.
   const entitlements = useEntitlements()
   const inspects = isProvider(entitlements)
-  const lists = TEMPLATES.filter(t => holdsPack(entitlements, workflow(t.kind).packId))
+  const lists = TEMPLATES.filter(t => usesPack(entitlements, workflow(t.kind).packId))
   const shownKind = lists.some(t => t.kind === templateKind) ? templateKind : lists[0]?.kind
 
   const update = patch => {

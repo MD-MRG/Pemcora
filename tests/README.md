@@ -138,6 +138,16 @@ it names (35 checks).
 node tests/workflow-pages.mjs
 ```
 
+`answers.mjs` is step C1d. A Custom List built with one test of each type and suggested
+wording, worked through in a browser: what each type records, a reading kept with its unit and
+judged against its limits, a No or a low reading opening the note box, the suggestions and the
+one that asks for a timeframe, finishing and exporting refused while a note still says
+[timeframe], and the suggestions reworded in Settings, where an AV list shows none (37 checks).
+
+```
+node tests/answers.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does
