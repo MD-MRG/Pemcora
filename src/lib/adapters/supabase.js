@@ -57,7 +57,7 @@ const changed = (a, b, keys) => keys.some(k => (a?.[k] ?? '') !== (b?.[k] ?? '')
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
 const LOCATION_KEYS = ['address', 'suburb', 'city', 'state', 'postcode']
-const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference']
+const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference', 'outcome']
 const ASSET_KEYS = ['roomId', 'assetType', 'label', 'make', 'model', 'serial', 'attributes', 'installedOn', 'expiresOn', 'removedAt']
 
 // What someone entered in a room, from either side. The database stores a room
@@ -88,6 +88,8 @@ const treeVisit = v => ({
   firstCompletedAt: v.firstCompletedAt,
   exportPreference: v.exportPreference,
   siteResults: v.siteResults ?? {},
+  outcome: v.outcome ?? null,
+  signoff: v.signoff ?? null,
   rooms: Object.fromEntries(
     Object.entries(v.rooms).map(([roomId, r]) => [
       roomId,
@@ -172,6 +174,7 @@ export function supabaseAdapter(teamId, userId, source = api) {
           logoCollapsed: settings.logoCollapsed,
           plate: settings.plate,
           technician: prefs.defaultTechnician ?? '',
+          licenceNumber: prefs.licenceNumber ?? '',
         },
         // Empty rows read back as {}; templateStore treats that as "not seeded
         // yet" and fills them from the pack files on first read.
@@ -676,6 +679,9 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
   const patch = Object.fromEntries(
     VISIT_KEYS.filter(k => changed(base, visit, [k])).map(k => [k, visit[k]]),
   )
+  // An object, so compared by what it holds. The database stamps it; sending the
+  // same one back keeps those stamps (stamp_signoff in 0007).
+  if (!deepEqual(base.signoff ?? null, visit.signoff ?? null)) patch.signoff = visit.signoff ?? null
   let site = visit.siteResults
   if (!deepEqual(base.siteResults ?? {}, site ?? {})) {
     site = await siteToSave(ctx, visit, base.siteResults, brandNew)

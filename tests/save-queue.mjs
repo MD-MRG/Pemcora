@@ -1025,6 +1025,33 @@ const items = () => store.listAssets('c1', 'l1')
   log('an edit to an item deleted with its site elsewhere doesn\'t jam saving', saveStatus() === 'saved', saveStatus())
 }
 
+// ── Signing off (C1f) ───────────────────────────────────────────────────────
+{
+  const server = setup()
+  server.seedVisit({ id: 'v1' })
+  server.prefs.licenceNumber = 'A123'
+  const device = await boot(server)
+  log('the technician\'s licence number is read with their settings', cache.readSettings()?.licenceNumber === 'A123')
+  const signoff = { technician: 'Sam', licence_number: 'A123', signed_at: new Date().toISOString(), signature: 'M1 1L2 2' }
+  store.signOffVisit('c1', 'l1', 'v1', { outcome: 'compliant', signoff })
+  log('signing off finishes the visit', !!localVisit('v1').completedAt)
+  await flush()
+  const row = server.visits.get('v1')
+  log('the outcome and sign-off reach the database', row.outcome === 'compliant' && row.signoff?.licence_number === 'A123' && !!row.completedAt)
+  const writes = server.countCalls('updateVisit')
+  await flush()
+  log('a sign-off already sent isn\'t sent again', server.countCalls('updateVisit') === writes)
+  await boot(server, device)
+  log('it comes back with the database\'s stamps', localVisit('v1').signoff?.signed_by === 'user' && localVisit('v1').outcome === 'compliant')
+  store.setVisitTechnician('c1', 'l1', 'v1', 'Samantha')
+  await flush()
+  log('and another change to the visit leaves it alone',
+    server.countCalls('updateVisit') === writes + 1 && server.visits.get('v1').signoff.recorded_at === row.signoff.recorded_at)
+
+  const merged = mergeVisit({ id: 'mine', rooms: {}, outcome: 'compliant', signoff }, { id: 'theirs', rooms: {} })
+  log('a joined visit keeps this device\'s sign-off', merged.outcome === 'compliant' && merged.signoff?.signature === 'M1 1L2 2')
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()

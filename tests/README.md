@@ -62,8 +62,8 @@ visit continued the next day, two devices on the same visit, a refused offline s
 
 | Suite | Runs against | Checks |
 |---|---|---|
-| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 222 |
-| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 121 |
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 229 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 124 |
 | `offline-e2e.mjs` | The live project. Not in `npm test` | |
 
 `offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
@@ -156,6 +156,15 @@ an AV visit unchanged (36 checks).
 
 ```
 node tests/site-step.mjs
+```
+
+`signoff.mjs` is step C1f. A Queensland smoke alarm inspection finished by signing off, in a
+browser: what the sign-off needs, what's kept with the visit, the report it exports (read back
+with ExcelJS), a correction signed again, exporting an open check, and an AV visit finished and
+exported as it always was (22 checks).
+
+```
+node tests/signoff.mjs
 ```
 
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend

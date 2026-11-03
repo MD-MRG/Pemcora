@@ -492,15 +492,24 @@ try {
   }, { w: where, id: alarmId }), 'and the other device reads it, removed, on its next load')
 
   // Finished, reopened for a correction, finished again: the first date stands.
+  // Signed off (C1f): the database stamps who signed and when it was saved.
   const finishOn = page => page.evaluate(async w => {
     const store = await import('/src/lib/clientStore.js')
     const cache = await import('/src/lib/cache.js')
-    store.completeVisit(w.clientId, w.locationId, w.visitId)
+    store.signOffVisit(w.clientId, w.locationId, w.visitId, {
+      outcome: 'compliant',
+      signoff: { technician: 'E2E', licence_number: 'T-1', signed_at: new Date().toISOString(), signature: 'M1 1L20 20' },
+    })
     return cache.flush()
   }, where)
   await finishOn(a.page)
-  const firstDate = (await visitRows()).find(v => v.id === where.visitId)?.completed_at
-  log(!!firstDate, 'finishing it reaches the database')
+  const signedRow = (await visitRows()).find(v => v.id === where.visitId)
+  const firstDate = signedRow?.completed_at
+  log(!!firstDate, 'signing it off finishes it on the database')
+  log(signedRow?.outcome === 'compliant' && signedRow.signoff?.licence_number === 'T-1',
+    'with the outcome and sign-off', JSON.stringify(signedRow?.signoff))
+  log(signedRow?.signoff?.signed_by === signedIn.data.user.id && !!signedRow.signoff.recorded_at,
+    'stamped by the database with who signed and when it was saved')
   await sleep(1500)
   await sb.from('visits').update({ completed_at: null }).eq('id', where.visitId) // reopened elsewhere
   const answered = await a.page.evaluate(async id => {

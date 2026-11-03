@@ -72,6 +72,8 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  * Pure — builds and returns the workbook. No DOM, so it can be exercised in
  * Node as well as the browser.
  */
+const OUTCOME_TEXT = { compliant: 'Compliant', non_compliant: 'Non-compliant' }
+
 export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [], sheetName = 'PM Report' }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
@@ -168,6 +170,12 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   kv('Technician', visit.technician ?? '')
   kv('Visit started', (visit.startedAt ?? '').slice(0, 10))
   kv('Visit completed', (visit.completedAt ?? '').slice(0, 10))
+  // Only a check that is signed off has these, so an AV report is as it was.
+  if (visit.outcome) kv('Outcome', OUTCOME_TEXT[visit.outcome] ?? visit.outcome)
+  if (visit.signoff) {
+    kv('Signed off by', [visit.signoff.technician, visit.signoff.licence_number && `Licence ${visit.signoff.licence_number}`]
+      .filter(Boolean).join(' · '))
+  }
   blank()
 
   const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle })

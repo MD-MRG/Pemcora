@@ -200,9 +200,20 @@ try {
     (await alarmGroup('Landing alarm').getByRole('button', { name: `${CLEANED}: FAIL`, exact: true }).getAttribute('aria-pressed')) === 'true')
 
   // The report covers each alarm.
+  // It's signed off on the way (C1f, tests/signoff.mjs).
   await page.getByRole('button', { name: 'Back to the rooms' }).click()
-  const download = page.waitForEvent('download', { timeout: 15000 })
   await page.getByRole('button', { name: 'Export report' }).click()
+  const signing = page.getByRole('dialog')
+  await signing.getByLabel('Non-compliant').check()
+  await signing.getByLabel('Name').fill('Sam')
+  await signing.getByLabel('Licence or registration number').fill('QLD-1')
+  const pad = await signing.getByRole('img', { name: /Signature/ }).boundingBox()
+  await page.mouse.move(pad.x + 40, pad.y + 60)
+  await page.mouse.down()
+  await page.mouse.move(pad.x + 200, pad.y + 90, { steps: 8 })
+  await page.mouse.up()
+  const download = page.waitForEvent('download', { timeout: 15000 })
+  await signing.getByRole('button', { name: 'Sign and finish' }).click()
   const file = await download
   log('the report exports', /\.xlsx$/.test(file.suggestedFilename()), file.suggestedFilename())
   const wb = new ExcelJS.Workbook()

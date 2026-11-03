@@ -37,7 +37,7 @@ export class FakeServer {
     this.assets = new Map()
     this.settings = { company: {}, logoFull: null, logoCollapsed: null, plate: 'brass' }
     this.templates = { maintenance: {}, commissioning: {}, custom: {} }
-    this.prefs = { defaultTechnician: '' }
+    this.prefs = { defaultTechnician: '', licenceNumber: '' }
 
     this.down = false
     this.admin = true
@@ -422,6 +422,11 @@ export class FakeServer {
         if ('technician' in patch) visit.technician = patch.technician ?? ''
         if ('exportPreference' in patch) visit.exportPreference = patch.exportPreference ?? null
         if ('siteResults' in patch) visit.siteResults = patch.siteResults ?? {}
+        if ('outcome' in patch) visit.outcome = patch.outcome ?? null
+        // As stamp_signoff does: who signed and when it was saved, beside what was sent.
+        if ('signoff' in patch) {
+          visit.signoff = patch.signoff ? { ...patch.signoff, signed_by: 'user', recorded_at: this.now() } : null
+        }
         if ('completedAt' in patch && patch.completedAt !== visit.completedAt) {
           if (!patch.completedAt) {
             const open = this.openVisitAt(visit.locationId, visit.kind)

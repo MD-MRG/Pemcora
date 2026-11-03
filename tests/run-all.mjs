@@ -43,6 +43,7 @@ const SUITES = [
   'workflow-pages',
   'answers',
   'site-step',
+  'signoff',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

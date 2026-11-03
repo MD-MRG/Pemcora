@@ -244,6 +244,8 @@ export function mergeVisit(local, server) {
     technician: server.technician || local.technician || '',
     completedAt: server.completedAt ?? local.completedAt ?? null,
     exportPreference: server.exportPreference ?? local.exportPreference ?? null,
+    outcome: server.outcome ?? local.outcome ?? null,
+    signoff: server.signoff ?? local.signoff ?? null,
     rooms,
     siteResults: mergeSite(undefined, local.siteResults, server.siteResults) ?? {},
     exports: exports.sort((a, b) => a.revision - b.revision),

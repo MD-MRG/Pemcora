@@ -394,6 +394,22 @@ function finish(visit) {
   visit.firstCompletedAt = visit.completedAt
 }
 
+/**
+ * Signs a visit off (C1): the outcome the technician declares, and their name,
+ * licence number and signature. Signing is what finishes an electrical or smoke
+ * alarm check, so it finishes the visit too.
+ */
+export function signOffVisit(clientId, locationId, visitId, { outcome, signoff }) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return false
+  visit.outcome = outcome
+  visit.signoff = signoff
+  if (!visit.completedAt) finish(visit)
+  write(clients)
+  return true
+}
+
 export function completeVisit(clientId, locationId, visitId) {
   const clients = read()
   const visit = findVisit(clients, clientId, locationId, visitId)

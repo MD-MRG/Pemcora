@@ -182,6 +182,10 @@ const visitFromRow = r => ({
   // The whole-site step: sections done once per visit, and those repeated for
   // each item at the site. Shaped like a room (testTypes.js).
   siteResults: r.site_results ?? {},
+  // The technician's declaration and signature at sign-off (C1), as the database
+  // stamped it: who was signed in and when it was saved are added there.
+  outcome: r.outcome ?? null,
+  signoff: r.signoff ?? null,
   rooms: Object.fromEntries(
     (r.visit_rooms ?? [])
       .filter(vr => vr.room_id)
@@ -309,7 +313,9 @@ export async function getMemberPrefs(teamId, userId) {
     .eq('user_id', userId)
     .maybeSingle()
   if (error) throw error
-  return { defaultTechnician: data?.default_technician ?? '' }
+  // The licence number is the member's own (0007). C3 lets them set it; until
+  // then it is read, to fill in the sign-off.
+  return { defaultTechnician: data?.default_technician ?? '', licenceNumber: data?.licence_number ?? '' }
 }
 
 export async function saveMemberPrefs(teamId, userId, patch) {
@@ -1036,6 +1042,8 @@ export async function updateVisit(visitId, patch) {
   if ('completedAt' in patch) row.completed_at = patch.completedAt
   if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
   if ('siteResults' in patch) row.site_results = patch.siteResults ?? {}
+  if ('outcome' in patch) row.outcome = patch.outcome ?? null
+  if ('signoff' in patch) row.signoff = patch.signoff ?? null
   const { data, error } = await supabase
     .from('visits')
     .update(row)

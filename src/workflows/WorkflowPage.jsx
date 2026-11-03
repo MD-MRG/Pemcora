@@ -20,6 +20,7 @@ import {
   retryHeldVisit,
   discardHeldVisit,
   completeVisit,
+  signOffVisit,
   roomsWithStatus,
   addRoomToLocation,
   getRoomEntry,
@@ -36,6 +37,7 @@ import { getSettings } from '../lib/settingsStore.js'
 import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import SignOffDialog from '../components/SignOffDialog.jsx'
 import { downloadReport } from '../lib/report.js'
 import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
@@ -87,7 +89,10 @@ function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, s
         </>
       ) : (
         <>
-          <h3 className="text-[15px] font-bold">Last visit completed {fmt(visit.completedAt)}</h3>
+          <h3 className="text-[15px] font-bold">
+            Last visit completed {fmt(visit.completedAt)}
+            {visit.outcome && <> · {visit.outcome === 'compliant' ? 'Compliant' : 'Non-compliant'}</>}
+          </h3>
           <p className="text-ink-soft mt-1 text-[13px]">
             {visit.exports?.length
               ? `${visit.exports.length} report(s) exported`
@@ -292,6 +297,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [adding, setAdding] = useState(false)
   const [askExport, setAskExport] = useState(false)
   const [askFinish, setAskFinish] = useState(false)
+  // Signing off a check that ends that way, then exporting if that's what was asked.
+  const [signing, setSigning] = useState(null)
   const [unfinished, setUnfinished] = useState(null)
   const [askDeleteRoom, setAskDeleteRoom] = useState(null)
   const [askDeleteReport, setAskDeleteReport] = useState(null)
@@ -344,22 +351,22 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     return [...map.entries()]
   }, [rooms])
 
-  const runExport = async (mode, remember = false) => {
-    if (!current) return
+  const runExport = async (mode, remember = false, visit = current) => {
+    if (!visit) return
     const revision =
-      (current.exports ?? []).length === 0
+      (visit.exports ?? []).length === 0
         ? 1
         : mode === 'replace'
-          ? nextRevision(current) - 1
-          : nextRevision(current)
+          ? nextRevision(visit) - 1
+          : nextRevision(visit)
     const filename = await downloadReport({
-      client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
+      client, location, visit, rooms, revision, reportTitle: config.reportTitle,
       sheetName: config.sheetName,
       assets,
       settings: getSettings(),
     })
-    recordExport(client.id, location.id, current.id, { mode, filename })
-    if (remember) setExportPreference(client.id, location.id, current.id, mode)
+    recordExport(client.id, location.id, visit.id, { mode, filename })
+    if (remember) setExportPreference(client.id, location.id, visit.id, mode)
     setAskExport(false)
     onChanged()
   }
@@ -504,6 +511,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         }}
         onExport={() => {
           if (!current || awaitingTimeframe()) return
+          // Exporting finishes an open visit, and a check that's signed off is
+          // finished by signing. So sign first, then the report goes.
+          if (config.signoff && !current.completedAt) return setSigning({ thenExport: true })
           const already = (current.exports ?? []).length > 0
           // Only ask once a report exists, and skip the prompt if the
           // technician chose to remember an answer for this visit.
@@ -516,7 +526,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           onChanged()
         }}
         onFinish={() => {
-          if (!awaitingTimeframe()) setAskFinish(true)
+          if (awaitingTimeframe()) return
+          if (config.signoff) setSigning({ thenExport: false })
+          else setAskFinish(true)
         }}
         canManage={canManage}
         onReopen={() => {
@@ -669,6 +681,27 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         >
           It moves into history and a new visit can be started. Results are kept.
         </ConfirmDialog>
+      )}
+
+      {signing && current && (
+        <SignOffDialog
+          title={`Sign off this ${config.progressNoun.toLowerCase()}`}
+          outcome={current.outcome}
+          signoff={current.signoff}
+          technician={current.technician || getSettings().technician}
+          licenceNumber={getSettings().licenceNumber}
+          fails={rooms.reduce((n, r) => n + (r.fails ?? 0), 0) + siteFailCount}
+          onCancel={() => setSigning(null)}
+          onSign={answer => {
+            signOffVisit(client.id, location.id, current.id, answer)
+            const { thenExport } = signing
+            setSigning(null)
+            onChanged()
+            if (!thenExport) return
+            const signed = listVisits(client.id, location.id, config.kind).find(v => v.id === current.id)
+            runExport(signed?.exportPreference ?? 'revision', false, signed)
+          }}
+        />
       )}
 
       {askDeleteRoom && (

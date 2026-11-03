@@ -35,6 +35,7 @@ export const MAX_LOGO_BYTES = 200 * 1024
 const empty = () => ({
   company: { name: '', abn: '', phone: '', email: '' },
   technician: '',
+  licenceNumber: '', // the member's own, from member_prefs; set in Settings from C3
   plate: 'brass',
   logoFull: null, // { src, reportSrc, name }
   logoCollapsed: null,

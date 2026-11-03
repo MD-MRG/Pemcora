@@ -34,6 +34,9 @@ export default {
         emptyLine: 'No electrical safety check recorded for this location',
         reportTitle: 'Electrical Safety Check',
         sheetName: 'Electrical Safety Check',
+        // Finished by signing off: the outcome, and the technician's name, licence
+        // number and signature (C1).
+        signoff: true,
       },
       seed: VIC_ELECTRICAL_SAFETY,
     },
@@ -57,6 +60,9 @@ export default {
         emptyLine: 'No smoke alarm check recorded for this location',
         reportTitle: 'Smoke Alarm Safety Check',
         sheetName: 'Smoke Alarm Safety Check',
+        // Finished by signing off: the outcome, and the technician's name, licence
+        // number and signature (C1).
+        signoff: true,
         // A failed smoke alarm's note is the reason it failed (M.D.'s note in B2).
         notePrompt: 'Why did it fail?',
       },

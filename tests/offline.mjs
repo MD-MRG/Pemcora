@@ -773,6 +773,19 @@ try {
       script = [{ status: 200, body: [{ id: 'a1', location_id: 'l1', room_id: null, asset_type: 'rcd', label: '', make: '', model: '', serial: '', attributes: {}, installed_on: null, expires_on: '2036-01-01', removed_at: null, created_at: '2026-10-01T00:00:00+00:00' }] }]
       out = await call('listAssets', ['t'])
       log('the team\'s items are read in one go', out.data?.[0]?.locationId === 'l1' && out.data[0].expiresOn === '2036-01-01' && out.data[0].roomId === null, JSON.stringify(out))
+
+      // Signing off (C1f).
+      const signoff = { technician: 'Sam', licence_number: 'A1', signed_at: '2026-10-01T00:00:00Z', signature: 'M1 1L2 2' }
+      script = [{ status: 200, body: [{ id: 'v1', completed_at: '2026-10-01T01:00:00+00:00' }] }]
+      out = await call('updateVisit', ['v1', { outcome: 'compliant', signoff, completedAt: '2026-10-01T01:00:00Z' }])
+      log('the outcome and sign-off are saved on the visit',
+        sent.at(-1).body?.outcome === 'compliant' && sent.at(-1).body?.signoff?.signature === 'M1 1L2 2', JSON.stringify(sent.at(-1).body))
+      script = [{ status: 201, body: row('mine', { outcome: 'non_compliant', signoff: { ...signoff, signed_by: 'u' } }) }]
+      out = await call('startVisit', startArgs)
+      log('and read back with it', out.data?.outcome === 'non_compliant' && out.data?.signoff?.signed_by === 'u', JSON.stringify(out.error))
+      script = [{ status: 200, body: [{ default_technician: 'Sam', licence_number: 'A1' }] }]
+      out = await call('getMemberPrefs', ['t', 'u'])
+      log('the technician\'s own licence number is read', out.data?.licenceNumber === 'A1' && out.data.defaultTechnician === 'Sam', JSON.stringify(out))
     }
     await ctx.close()
   }

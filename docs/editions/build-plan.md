@@ -1213,6 +1213,19 @@ step:
     a test with `onFail: 'replace'` says the alarm has to be replaced. The report already
     printed that (B2c).
   - The report gets the site's items, removed ones included, so it names each alarm.
+- How C1f (sign-off) came out:
+  - The electrical and smoke alarm workflows are finished by signing off (`signoff` in their
+    pack page). Finish visit, and Export report on an open visit, open the sign-off: the
+    outcome (compliant or non-compliant), the name, the licence or registration number and a
+    signature. All four are needed. AV and Custom List finish exactly as before.
+  - The outcome is the technician's declaration, not a count of fails; the dialog says how
+    many failed and that a fault fixed on the spot still leaves the property compliant.
+  - The signature is one SVG path in a 600 × 180 box, a few kilobytes, so it fits the
+    database's 50 KB limit on every plan.
+  - A correction is signed again, starting from what was signed before.
+  - The Excel report gains "Outcome" and "Signed off by" rows when a visit has them.
+  - The licence number fills in from the technician's own `member_prefs.licence_number`.
+    Nothing can set it until C3, so for now it is typed at sign-off.
 
 #### C2. Equipment panel per site
 
