@@ -7,12 +7,14 @@
 
 import { ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
 import { replaceOnFail } from './shared/smokeAlarm.js'
+import { HOME_ROOM_TYPES } from './shared/roomTypes.js'
 
 export default {
   id: 'qld_electrical',
   label: 'Queensland electrical and smoke alarm compliance',
   tagline: 'Electrical compliance',
   proposed: true,
+  roomTypes: HOME_ROOM_TYPES,
   workflows: [
     {
       // Rentals also need it within 30 days before each lease starts or renews;
@@ -20,6 +22,13 @@ export default {
       // (decision D10). The report doubles as the compliance certificate.
       id: 'qld_smoke_alarm',
       label: 'Smoke alarm compliance inspection',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/qld-smoke-alarm',
+        label: 'QLD smoke alarms',
+        blurb: 'Queensland smoke alarm compliance inspections, every year',
+        icon: 'alarm',
+      },
       page: {
         title: 'Smoke Alarm Compliance Inspection',
         progressNoun: 'Smoke alarm inspection',
@@ -74,6 +83,13 @@ export default {
       // Starts with the baseline list; step G2 adds Queensland's own rules.
       id: 'qld_electrical_safety',
       label: 'Electrical safety check',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/qld-electrical-safety',
+        label: 'QLD electrical safety',
+        blurb: 'Queensland electrical safety checks, every 2 years unless you set otherwise',
+        icon: 'electrical',
+      },
       page: {
         title: 'Electrical Safety Check',
         progressNoun: 'Electrical safety check',

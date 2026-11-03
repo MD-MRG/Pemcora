@@ -12,6 +12,13 @@ import CustomList from './pages/CustomList.jsx'
 import Teams from './pages/Teams.jsx'
 import Settings from './pages/Settings.jsx'
 import ReceivingHolding from './pages/ReceivingHolding.jsx'
+import Workflow from './pages/Workflow.jsx'
+import { WORKFLOW_NAV } from './nav.js'
+
+// Every other workflow's page comes from the pack registry. These three have
+// files of their own.
+const OWN_PAGES = new Set(['maintenance', 'commissioning', 'custom'])
+const REGISTRY_PAGES = WORKFLOW_NAV.filter(item => !OWN_PAGES.has(item.workflow))
 
 // HashRouter: real URLs and a working back button, with no GitHub Pages
 // 404 rewrite needed and no dependency on the deploy sub-path.
@@ -32,6 +39,9 @@ export default function App() {
                 <Route path="/commissioning" element={<Commissioning />} />
                 <Route path="/maintenance" element={<PreventativeMaintenance />} />
                 <Route path="/custom-list" element={<CustomList />} />
+                {REGISTRY_PAGES.map(item => (
+                  <Route key={item.path} path={item.path} element={<Workflow id={item.workflow} />} />
+                ))}
                 <Route path="/teams" element={<Teams />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/properties" element={<ReceivingHolding page="properties" />} />

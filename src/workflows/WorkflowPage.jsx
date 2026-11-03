@@ -1,12 +1,13 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
 import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
-import { useCanManage, useEntitlements } from '../context/team.js'
+import { useCanManage, useEntitlements, useRoomTypes } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import ResultSelector from '../components/ResultSelector.jsx'
 import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
+import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
@@ -32,7 +33,7 @@ import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { downloadReport } from '../lib/report.js'
-import { isFail, MAIN } from '../lib/testTypes.js'
+import { isFail, MAIN, sectionsForRoomType } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
@@ -197,11 +198,12 @@ function ReportList({ visit, canManage, onDelete }) {
 }
 
 /* ── Add room — a floor is required, so the room lands in the right place ─── */
-function AddRoomForm({ floors, onAdd, onCancel }) {
+function AddRoomForm({ floors, roomTypes, onAdd, onCancel }) {
   const [floorId, setFloorId] = useState(floors[0]?.id ?? '__new')
   const [newFloorLabel, setNewFloorLabel] = useState('')
   const [name, setName] = useState('')
   const [planNumber, setPlanNumber] = useState('')
+  const [roomType, setRoomType] = useState('')
 
   const creatingFloor = floorId === '__new'
   const ready = name.trim() && (!creatingFloor || newFloorLabel.trim())
@@ -253,6 +255,9 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
           onChange={setPlanNumber}
           placeholder="Plan number"
         />
+        {roomTypes.length > 0 && (
+          <RoomTypeSelect roomTypes={roomTypes} value={roomType} onChange={setRoomType} label="Room type" />
+        )}
       </div>
 
       <div className="mt-4 flex gap-2">
@@ -260,7 +265,7 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
           type="button"
           disabled={!ready}
           onClick={() =>
-            onAdd({ floorId: creatingFloor ? null : floorId, newFloorLabel, name, planNumber })
+            onAdd({ floorId: creatingFloor ? null : floorId, newFloorLabel, name, planNumber, roomType })
           }
           className="bg-navy min-h-[44px] rounded-lg px-5 text-[13.5px] font-semibold text-white enabled:hover:bg-[#24486e] disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -292,6 +297,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [askDiscard, setAskDiscard] = useState(null)
   const [sheet, setSheet] = useState(null)
   const entitlements = useEntitlements()
+  const roomTypes = useRoomTypes()
 
   // A save in the background can refuse a visit or join it to another device's,
   // and this page has to show that without anyone touching it.
@@ -495,6 +501,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
       {adding ? (
         <AddRoomForm
           floors={floors}
+          roomTypes={roomTypes}
           onCancel={() => setAdding(false)}
           onAdd={payload => {
             addRoomToLocation(client.id, location.id, payload)
@@ -713,11 +720,15 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const snapshot = stored?.template ?? template
 
   const [results, setResults] = useState(() => stored?.results ?? { main: {} })
+  // A room opened for the first time starts as the last one did, plus whatever
+  // its type switches on: the bathroom section in a bathroom.
   const [sections, setSections] = useState(
     () =>
-      stored?.sections ??
-      (visit ? lastSectionToggles(client.id, location.id, visit.id) : null) ??
-      Object.fromEntries(snapshot.sections.map(s => [s.id, false])),
+      stored?.sections ?? {
+        ...((visit ? lastSectionToggles(client.id, location.id, visit.id) : null) ??
+          Object.fromEntries(snapshot.sections.map(s => [s.id, false]))),
+        ...sectionsForRoomType(snapshot, room?.roomType),
+      },
   )
   const [troubleshooting, setTroubleshooting] = useState(() => stored?.troubleshooting ?? {})
   const [comments, setComments] = useState(() => stored?.comments ?? '')

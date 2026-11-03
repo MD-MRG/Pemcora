@@ -1176,6 +1176,18 @@ step:
   - A room deleted on this device or another leaves its items at the site, unpinned, as the
     database's foreign key does. An edit to an item deleted with its site is dropped, so it
     can't jam saving.
+- How C1c (room types, pages from the registry) came out:
+  - Each workflow's page, its name and its place in the navigation come from its pack file
+    (`nav`), and Home names and links every visit from there. The AV pages keep their
+    routes, names and order. Every other workflow uses one `src/pages/Workflow.jsx`.
+  - A pack still marked `proposed` is never assumed, even while the app doesn't know what
+    the team holds: its pages and room types show only to a team known to hold it. On the
+    live site that is a team M.D. gives it to, so nobody else sees the unchecked lists.
+  - The packs that check rooms by type share one list of a home's rooms
+    (`shared/roomTypes.js`): bedroom, hallway, living area, kitchen, bathroom or ensuite,
+    laundry, garage, stairway, other. The electrician's check of the lists covers it too.
+  - A room opened for the first time switches on the room sections its type names, on top
+    of the last room's choice. No list uses that yet.
 
 #### C2. Equipment panel per site
 

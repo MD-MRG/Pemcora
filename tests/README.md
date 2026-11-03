@@ -124,6 +124,20 @@ including a team made with its answer lost.
 node tests/signup.mjs
 ```
 
+## The workflow page (Phase C)
+
+`workflow-pages.mjs` is step C1c. In Node: every workflow's page, name and route come from
+the pack registry, Home names a visit by its own workflow, a pack still marked proposed is
+never assumed, and room types go only to a team whose packs have them. Then in a browser in
+test mode, with a team's plan put on the page as DataBoot would: an AV team's screens are as
+they were, a team holding the Queensland pack sees its pages, Resume lands on them, and a
+room's type is saved from the floor plan editor and from Add room and switches on the sections
+it names (35 checks).
+
+```
+node tests/workflow-pages.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

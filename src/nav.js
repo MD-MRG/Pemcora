@@ -10,9 +10,11 @@ import {
   IconProperties,
   IconReports,
   IconDue,
+  IconElectrical,
+  IconAlarm,
 } from './components/icons.jsx'
-import { workflow } from './data/packs/index.js'
-import { holdsPack, isProvider } from './lib/entitlements.js'
+import { WORKFLOWS } from './data/packs/index.js'
+import { isProvider, usesPack } from './lib/entitlements.js'
 
 const TEAMS = {
   key: 'teams',
@@ -25,6 +27,32 @@ const TEAMS = {
   // own account too, since a nav that merely hides a link is not a lock.
   admin: true,
 }
+
+const ICONS = {
+  commissioning: IconCommissioning,
+  maintenance: IconMaintenance,
+  list: IconList,
+  electrical: IconElectrical,
+  alarm: IconAlarm,
+}
+
+// The AV pages first, in the order they have always had; then every other
+// workflow in the pack registry's order.
+const FIRST = ['commissioning', 'maintenance', 'custom']
+const rank = w => (FIRST.includes(w.id) ? FIRST.indexOf(w.id) : FIRST.length)
+
+// One page per workflow, from the pack registry (src/data/packs/).
+export const WORKFLOW_NAV = WORKFLOWS.map((w, i) => ({ w, i }))
+  .sort((a, b) => rank(a.w) - rank(b.w) || a.i - b.i)
+  .map(({ w }) => ({
+    key: w.nav.key ?? w.id,
+    label: w.nav.label,
+    path: w.nav.path,
+    icon: ICONS[w.nav.icon] ?? IconList,
+    blurb: w.nav.blurb,
+    workflow: w.id,
+    pack: w.packId,
+  }))
 
 // Single source of truth for navigation, routes and page headings.
 // `blurb` shows in the context bar under the title. `pack` is what a team has to
@@ -54,33 +82,7 @@ export const MAIN_NAV = [
     blurb: 'Find a client and amend their details, sites and contacts',
     pack: 'core',
   },
-  {
-    key: 'commissioning',
-    label: 'Commissioning',
-    path: '/commissioning',
-    icon: IconCommissioning,
-    blurb: 'Per-room device checks, firmware and signal verification, sign-off',
-    workflow: 'commissioning',
-    pack: workflow('commissioning').packId,
-  },
-  {
-    key: 'maintenance',
-    label: 'Preventative Maintenance',
-    path: '/maintenance',
-    icon: IconMaintenance,
-    blurb: 'Room-by-room PM visits, faults raised, and the report that goes out',
-    workflow: 'maintenance',
-    pack: workflow('maintenance').packId,
-  },
-  {
-    key: 'custom-list',
-    label: 'Custom List',
-    path: '/custom-list',
-    icon: IconList,
-    blurb: 'Build a one-off checklist from your own test items',
-    workflow: 'custom',
-    pack: workflow('custom').packId,
-  },
+  ...WORKFLOW_NAV,
   TEAMS,
 ]
 
@@ -133,7 +135,7 @@ export const navByPath = path =>
 /** The main navigation this team sees. Not knowing what it has hides nothing. */
 export const navFor = entitlements =>
   isProvider(entitlements)
-    ? MAIN_NAV.filter(item => holdsPack(entitlements, item.pack))
+    ? MAIN_NAV.filter(item => usesPack(entitlements, item.pack))
     : RECEIVING_NAV
 
 /**
@@ -149,6 +151,6 @@ export function redirectFor(path, entitlements, hasVisitsOfKind) {
 
   if (!isProvider(entitlements)) return RECEIVING_PAGES.includes(item) ? null : RECEIVING_HOME
   // A landlord's pages name no pack, so no inspecting team holds them.
-  if (holdsPack(entitlements, item.pack)) return null
+  if (usesPack(entitlements, item.pack)) return null
   return item.workflow && hasVisitsOfKind(item.workflow) ? null : '/'
 }

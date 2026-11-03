@@ -8,16 +8,25 @@
 
 import { ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
 import { replaceOnFail } from './shared/smokeAlarm.js'
+import { HOME_ROOM_TYPES } from './shared/roomTypes.js'
 
 export default {
   id: 'electrical_general',
   label: 'Electrical compliance baseline',
   tagline: 'Electrical compliance',
   proposed: true,
+  roomTypes: HOME_ROOM_TYPES,
   workflows: [
     {
       id: 'electrical_safety',
       label: 'Electrical safety check',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/electrical-safety',
+        label: 'Electrical safety check',
+        blurb: 'Electrical safety checks to AS/NZS 3019, every 2 years unless you set otherwise',
+        icon: 'electrical',
+      },
       page: {
         title: 'Electrical Safety Check',
         progressNoun: 'Electrical safety check',
@@ -33,6 +42,13 @@ export default {
       // The next check's due date comes from Pemcora's records, not the list.
       id: 'smoke_alarm_check',
       label: 'Smoke alarm check',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/smoke-alarm-check',
+        label: 'Smoke alarm check',
+        blurb: 'Smoke alarm checks, every year unless you set otherwise',
+        icon: 'alarm',
+      },
       page: {
         title: 'Smoke Alarm Check',
         progressNoun: 'Smoke alarm check',

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Field from './Field.jsx'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { IconTrash } from './icons.jsx'
+import { useRoomTypes } from '../context/team.js'
 
 // Floors and their rooms, shared by New Client and Edit Client so the two can't
 // drift apart. Each floor owns its New Room button; one Another floor sits at
@@ -23,7 +24,32 @@ export function AddButton({ onClick, children, tone = 'soft' }) {
   )
 }
 
-function FloorBlock({ floor, index, setFloorLabel, setRoom, addRoom, removeRoom, registerRef }) {
+// What a room is, for the packs that check rooms by type, such as smoke alarms in
+// every bedroom. A type no longer offered still shows, so it isn't lost by saving.
+export function RoomTypeSelect({ roomTypes, value, onChange, label, ariaLabel }) {
+  const offered = roomTypes.some(t => t.id === value)
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[12.5px] font-semibold tracking-[.01em] text-ink-soft">{label}</span>
+      <select
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        aria-label={ariaLabel}
+        className="border-hair w-full rounded-lg border bg-white px-3 py-2.5 text-[14.5px] text-ink outline-none focus:border-navy"
+      >
+        <option value="">No type</option>
+        {roomTypes.map(t => (
+          <option key={t.id} value={t.id}>
+            {t.label}
+          </option>
+        ))}
+        {value && !offered && <option value={value}>{value}</option>}
+      </select>
+    </label>
+  )
+}
+
+function FloorBlock({ floor, index, roomTypes, setFloorLabel, setRoom, addRoom, removeRoom, registerRef }) {
   return (
     <section className="border-hair rounded-xl border bg-white p-4 shadow-sm">
       <Field
@@ -37,7 +63,9 @@ function FloorBlock({ floor, index, setFloorLabel, setRoom, addRoom, removeRoom,
       <div className="mt-4 flex flex-col gap-3">
         {floor.rooms.map((room, ri) => (
           <div key={room.id} className="flex items-end gap-2">
-            <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
+            <div
+              className={`grid min-w-0 flex-1 grid-cols-1 gap-2 ${roomTypes.length ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}
+            >
               <Field
                 label={ri === 0 ? 'Room' : ''}
                 aria-label={`Floor ${index + 1} room ${ri + 1} name`}
@@ -53,6 +81,15 @@ function FloorBlock({ floor, index, setFloorLabel, setRoom, addRoom, removeRoom,
                 onChange={v => setRoom(floor.id, room.id, 'planNumber', v)}
                 placeholder="Plan number"
               />
+              {roomTypes.length > 0 && (
+                <RoomTypeSelect
+                  roomTypes={roomTypes}
+                  value={room.roomType}
+                  onChange={v => setRoom(floor.id, room.id, 'roomType', v)}
+                  label={ri === 0 ? 'Room type' : ''}
+                  ariaLabel={`Floor ${index + 1} room ${ri + 1} type`}
+                />
+              )}
             </div>
             {/* Only where a caller asked for it. New Client deliberately has no
                 delete controls — you are building the plan, and the way to undo
@@ -88,6 +125,9 @@ export default function FloorsEditor({
   removeRoom,
   addFloor,
 }) {
+  // Offered only to a team whose packs check rooms by type. Others see the editor
+  // as it always was.
+  const roomTypes = useRoomTypes()
   // Confirm only a room that holds something. The page always shows an empty
   // room to type into, and making someone confirm the removal of a blank they
   // just added is friction with nothing behind it.
@@ -115,6 +155,7 @@ export default function FloorsEditor({
           key={floor.id}
           floor={floor}
           index={i}
+          roomTypes={roomTypes}
           setFloorLabel={setFloorLabel}
           setRoom={setRoom}
           addRoom={addRoom}

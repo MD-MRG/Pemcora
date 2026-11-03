@@ -14,7 +14,7 @@ import * as api from './api.js'
 import { heldVisits, retryHeld } from './cache.js'
 import { prefs } from './prefs.js'
 import { isNetworkFailure } from './saveErrors.js'
-import { offeredPacks, packById, workflow } from '../data/packs/index.js'
+import { PACKS, offeredPacks, packById, workflow } from '../data/packs/index.js'
 
 // The allowance runs by the calendar month in Sydney, whatever the device's clock
 // says about where it is (2.5).
@@ -73,6 +73,24 @@ export function closeEntitlements() {
 export const isProvider = e => !e || e.accountType === 'provider'
 
 export const holdsPack = (e, packId) => !e || packId === 'core' || e.packs.includes(packId)
+
+/**
+ * Does this team work under this pack: see its pages, give rooms its types? A pack
+ * whose lists a licensed electrician hasn't checked yet (`proposed`) is never
+ * assumed, even not knowing: only a team known to hold it sees it.
+ */
+export const usesPack = (e, packId) =>
+  packById(packId)?.proposed ? !!e?.packs?.includes(packId) : holdsPack(e, packId)
+
+/** The types this team's rooms can be given, from the packs it uses, none twice. */
+export function roomTypesFor(e) {
+  const types = new Map()
+  for (const pack of PACKS) {
+    if (!usesPack(e, pack.id)) continue
+    for (const type of pack.roomTypes ?? []) if (!types.has(type.id)) types.set(type.id, type)
+  }
+  return [...types.values()]
+}
 
 /** The month's inspections, while the limits are on and this team has a limit. */
 export function allowance(e) {

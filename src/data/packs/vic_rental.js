@@ -6,17 +6,26 @@
 
 import { VIC_ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
 import { replaceOnFail } from './shared/smokeAlarm.js'
+import { HOME_ROOM_TYPES } from './shared/roomTypes.js'
 
 export default {
   id: 'vic_rental',
   label: 'Victorian rental safety checks',
   tagline: 'Electrical compliance',
   proposed: true,
+  roomTypes: HOME_ROOM_TYPES,
   workflows: [
     {
       // Mirrors Energy Safe Victoria's report form section for section.
       id: 'vic_electrical_safety',
       label: 'Electrical safety check',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/vic-electrical-safety',
+        label: 'VIC electrical safety',
+        blurb: 'Victorian rental electrical safety checks, every 2 years',
+        icon: 'electrical',
+      },
       page: {
         title: 'Electrical Safety Check',
         progressNoun: 'Electrical safety check',
@@ -33,6 +42,13 @@ export default {
       // check's due date comes from Pemcora's records, not from the list.
       id: 'vic_smoke_alarm',
       label: 'Smoke alarm safety check',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/vic-smoke-alarm',
+        label: 'VIC smoke alarms',
+        blurb: 'Victorian rental smoke alarm checks, every year',
+        icon: 'alarm',
+      },
       page: {
         title: 'Smoke Alarm Safety Check',
         progressNoun: 'Smoke alarm safety check',

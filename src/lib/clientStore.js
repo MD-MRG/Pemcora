@@ -424,7 +424,7 @@ export function roomsWithStatus(clientId, locationId, visit) {
  * and shows up in Edit Client too. A floor is required — either an existing
  * one or a new label — so the room lands in the right part of the list.
  */
-export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel, name, planNumber }) {
+export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel, name, planNumber, roomType = '' }) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location) return { outcome: 'missing' }
@@ -442,7 +442,12 @@ export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel
     }
   }
 
-  const room = { id: uid(), name: String(name ?? '').trim(), planNumber: String(planNumber ?? '').trim() }
+  const room = {
+    id: uid(),
+    name: String(name ?? '').trim(),
+    planNumber: String(planNumber ?? '').trim(),
+    ...(roomType ? { roomType } : {}),
+  }
   floor.rooms.push(room)
   write(clients)
   return { outcome: 'added', floorId: floor.id, roomId: room.id }

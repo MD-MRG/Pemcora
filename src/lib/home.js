@@ -6,23 +6,18 @@
 
 import { normalise } from './clientStore.js'
 import { noteIsFinished, noteKey, roomFails, siteFails } from './testTypes.js'
+import { WORKFLOWS } from '../data/packs/index.js'
 
 // Visits stored before Commissioning existed carry no kind; they were all PM.
 // Same fallback as clientStore.js — if that one changes, this must too.
 const kindOf = visit => visit.kind ?? 'maintenance'
 
-export const KIND_LABEL = {
-  maintenance: 'Preventative Maintenance',
-  commissioning: 'Commissioning',
-  custom: 'Custom List',
-}
-
-// Where a Resume lands. Mirrors the routes in App.jsx.
-export const KIND_PATH = {
-  maintenance: '/maintenance',
-  commissioning: '/commissioning',
-  custom: '/custom-list',
-}
+// Each workflow's name and page, from the pack registry. A kind it doesn't know
+// reads as Preventative Maintenance, as a visit with none always has.
+const NAV = Object.fromEntries(WORKFLOWS.map(w => [w.id, w.nav]))
+export const kindLabel = kind => (NAV[kind] ?? NAV.maintenance).label
+// Where a Resume lands: the workflow's route in App.jsx.
+export const kindPath = kind => (NAV[kind] ?? NAV.maintenance).path
 
 const allVisits = clients =>
   clients.flatMap(client =>
@@ -90,8 +85,8 @@ export function openWork(clients) {
         locationId: location.id,
         where: [location.address, location.suburb].filter(Boolean).join(', '),
         kind: kindOf(visit),
-        kindLabel: KIND_LABEL[kindOf(visit)] ?? KIND_LABEL.maintenance,
-        path: KIND_PATH[kindOf(visit)] ?? KIND_PATH.maintenance,
+        kindLabel: kindLabel(kindOf(visit)),
+        path: kindPath(kindOf(visit)),
         startedAt: visit.startedAt,
         days: daysSince(visit.startedAt),
         total: rooms.length,
@@ -153,8 +148,8 @@ export function attention(clients, held = {}) {
       locationId: record.locationId,
       where: record.where,
       kind: record.kind,
-      kindLabel: KIND_LABEL[record.kind] ?? KIND_LABEL.maintenance,
-      path: KIND_PATH[record.kind] ?? KIND_PATH.maintenance,
+      kindLabel: kindLabel(record.kind),
+      path: kindPath(record.kind),
       at: record.at,
       message: record.message,
       // Its site has been deleted, so there is no visit page left to open.
@@ -170,8 +165,8 @@ export function attention(clients, held = {}) {
       locationId: location.id,
       where: [location.address, location.suburb].filter(Boolean).join(', '),
       kind: kindOf(visit),
-      kindLabel: KIND_LABEL[kindOf(visit)] ?? KIND_LABEL.maintenance,
-      path: KIND_PATH[kindOf(visit)] ?? KIND_PATH.maintenance,
+      kindLabel: kindLabel(kindOf(visit)),
+      path: kindPath(kindOf(visit)),
     }
 
     if (visit.completedAt && exportCount(visit) === 0) {

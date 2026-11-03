@@ -1,4 +1,4 @@
-// Runs the thirteen localStorage suites, the three Node-only ones (the pack
+// Runs the localStorage suites, the three Node-only ones (the pack
 // registry, the template types and the save queue), the two offline suites and the
 // entitlements suite, and summarises them.
 //
@@ -40,6 +40,7 @@ const SUITES = [
   'offline-open',
   'entitlements',
   'signup',
+  'workflow-pages',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another
