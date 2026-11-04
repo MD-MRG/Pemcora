@@ -11,6 +11,7 @@ import PreventativeMaintenance from './pages/PreventativeMaintenance.jsx'
 import CustomList from './pages/CustomList.jsx'
 import Teams from './pages/Teams.jsx'
 import Settings from './pages/Settings.jsx'
+import Due from './pages/Due.jsx'
 import ReceivingHolding from './pages/ReceivingHolding.jsx'
 import Workflow from './pages/Workflow.jsx'
 import { WORKFLOW_NAV } from './nav.js'
@@ -42,6 +43,7 @@ export default function App() {
                 {REGISTRY_PAGES.map(item => (
                   <Route key={item.path} path={item.path} element={<Workflow id={item.workflow} />} />
                 ))}
+                <Route path="/checks-due" element={<Due />} />
                 <Route path="/teams" element={<Teams />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/properties" element={<ReceivingHolding page="properties" />} />

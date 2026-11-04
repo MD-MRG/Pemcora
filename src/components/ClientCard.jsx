@@ -6,9 +6,6 @@ import { getSettings } from '../lib/settingsStore.js'
 import { useEntitlements } from '../context/team.js'
 import { recurringWorkflows } from '../lib/intervals.js'
 
-// A client's own details on Edit Client, above its sites (build plan C3): who
-// its reports and re-check reminders go to, and whether it gets reminders. They
-// save as they're typed, offline too, like the rest of the client.
 // This client's own intervals, under its contact: only for a team with a
 // recurring check.
 function IntervalsHere({ client }) {
@@ -25,6 +22,9 @@ function IntervalsHere({ client }) {
   )
 }
 
+// A client's own details on Edit Client, above its sites (build plan C3): who
+// its reports and re-check reminders go to, and whether it gets reminders. They
+// save as they're typed, offline too, like the rest of the client.
 export default function ClientCard({ client, children }) {
   const [details, setDetails] = useState(() => ({
     contactName: client.contactName ?? '',

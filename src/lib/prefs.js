@@ -7,6 +7,7 @@ const KEY = {
   lastUser: 'fc.session.user',
   lastTeams: 'fc.session.teams',
   lastEntitlements: 'fc.session.entitlements',
+  lastDue: 'fc.session.due',
 }
 
 function read(key, fallback) {
@@ -59,4 +60,12 @@ export const prefs = {
     write(KEY.lastEntitlements, { userId, teams: { ...teams, [teamId]: entitlements } })
   },
   clearLastEntitlements: () => write(KEY.lastEntitlements, null),
+  // The Due list as the database last gave it, to show with no signal, dated.
+  // Only what the page shows: no contact's email. Cleared on signing out.
+  getLastDue: teamId => {
+    const last = read(KEY.lastDue, null)
+    return last?.teamId === teamId ? last : null
+  },
+  setLastDue: (teamId, rows) => write(KEY.lastDue, { teamId, at: new Date().toISOString(), rows }),
+  clearLastDue: () => write(KEY.lastDue, null),
 }

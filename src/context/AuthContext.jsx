@@ -67,6 +67,7 @@ export function AuthProvider({ children }) {
         prefs.setLastUser(null)
         prefs.setLastTeams(null, null)
         prefs.clearLastEntitlements()
+        prefs.clearLastDue()
       } else if (event === 'INITIAL_SESSION') {
         // The library reports null here when it just couldn't reach the server.
         // getSession() above knows the difference, and decides.
@@ -134,6 +135,7 @@ export function AuthProvider({ children }) {
       prefs.setLastUser(null)
       prefs.setLastTeams(null, null)
       prefs.clearLastEntitlements()
+      prefs.clearLastDue()
       setSession(null)
       return result
     },

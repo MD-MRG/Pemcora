@@ -142,7 +142,8 @@ try {
     const AV = plan(['core', 'av'])
     const QLD = plan(['core', 'av', 'qld_electrical'])
     return {
-      order: MAIN_NAV.slice(3, 6).map(n => n.key).join(),
+      // After Home, Due (C4), New Client and Edit Client.
+      order: MAIN_NAV.slice(4, 7).map(n => n.key).join(),
       unknown: navFor(null).map(n => n.path).join(),
       avElectrical: navFor(AV).some(n => n.pack === 'qld_electrical'),
       qldPages: navFor(QLD).filter(n => n.pack === 'qld_electrical').map(n => n.path).join(),
@@ -153,7 +154,7 @@ try {
   })
   log('the AV pages keep their order in the navigation', nav.order === 'commissioning,maintenance,custom-list', nav.order)
   log('not knowing, the navigation is today\'s',
-    nav.unknown === '/,/new-client,/edit-client,/commissioning,/maintenance,/custom-list,/teams', nav.unknown)
+    nav.unknown === '/,/checks-due,/new-client,/edit-client,/commissioning,/maintenance,/custom-list,/teams', nav.unknown)
   log('an AV team sees no electrical pages', !nav.avElectrical)
   log('a team holding a pack sees its pages', nav.qldPages === '/qld-smoke-alarm,/qld-electrical-safety', nav.qldPages)
   log('a proposed pack\'s address goes Home for a team without it', nav.withoutIt === '/')

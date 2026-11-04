@@ -1348,6 +1348,24 @@ step:
   "no longer needed". It takes that from `reminder_opted_out()`, not from the check's own
   switch, which a team can make read "on" again by re-creating the check while the
   contact's email is blank.
+- Decided with M.D. before building it (4 November):
+  - `reminder_opted_out()` and the opt-out list are closed to signed-in users, and
+    `due_list()` doesn't say who opted out, so the page can't follow the bullet above as the
+    database stands. A new migration, 0009, adds a read-only function for team members that
+    asks `reminder_opted_out()`. M.D. applies it; until then the page works without
+    opt-outs.
+  - Two commits: C4 the page; C4b each check's reminders switch and "no longer needed", with
+    0009.
+  - With no signal the page shows the last list this device was given, saying when, with the
+    switches off until the connection is back.
+- How C4 (the page) came out:
+  - "Due" sits under Home for a team that inspects, at `#/checks-due`: a landlord's Due page
+    keeps `#/due`. It lists, in this order, checks overdue, those due in the next 60 days,
+    sites on a regular interval not done yet, and alarms expiring in the next 3 months, each
+    with its client and site, and dates in words ("32 days overdue").
+  - Filtered by client when more than one has anything on the list.
+  - The device keeps the last list for when there's no signal, without the contacts' emails
+    `due_list()` carries for the reminder job. Signing out removes it.
 
 #### C5. Signed-in devices (M.D.'s note)
 

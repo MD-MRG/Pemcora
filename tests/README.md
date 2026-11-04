@@ -203,6 +203,16 @@ offline, and never for one the law fixes (36 checks).
 node tests/client-settings.mjs
 ```
 
+`due.mjs` is step C4. The Due page's rules in Node, then the page in a browser answering
+every request off the machine itself, as `due_list()` would: the list in its order, named and
+dated in words, filtered by client, the last list kept on the device without the contacts'
+emails and shown dated with no signal, and a landlord's `/due` left as it was (20 checks).
+`offline-open.mjs` checks that signing out removes the kept list.
+
+```
+node tests/due.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

@@ -956,6 +956,42 @@ export async function updateAsset(assetId, patch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// What's due (C4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const dueFromRow = r => ({
+  kind: r.kind, // 'overdue' | 'due' | 'not_done_yet' | 'expiring'
+  dueOn: r.due_on ?? null,
+  itemId: r.item_id ?? null,
+  assetId: r.asset_id ?? null,
+  // A workflow's id, or for an expiring item its type.
+  obligation: r.obligation,
+  label: r.label ?? '',
+  lastDoneOn: r.last_done_on ?? null,
+  remindersEnabled: r.reminders_enabled ?? null,
+  clientId: r.client_id,
+  clientName: r.client_name ?? '',
+  locationId: r.location_id,
+  address: r.address ?? '',
+  suburb: r.suburb ?? '',
+})
+
+/**
+ * The team's checks overdue or due within `withinDays`, the sites on a regular
+ * interval not done yet, and items expiring within `expiryMonths`, worked out by
+ * the database from its own records (0007).
+ */
+export async function getDueList(teamId, withinDays = 60, expiryMonths = 3) {
+  const { data, error } = await supabase.rpc('due_list', {
+    p_team_id: teamId,
+    p_within_days: withinDays,
+    p_expiry_months: expiryMonths,
+  })
+  if (error) throw error
+  return (data ?? []).map(dueFromRow)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // How often checks are due (C3)
 // ─────────────────────────────────────────────────────────────────────────────
 //

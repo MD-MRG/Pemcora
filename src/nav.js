@@ -66,6 +66,16 @@ export const MAIN_NAV = [
     blurb: 'Work in progress, anything needing attention, and your team totals',
     pack: 'core',
   },
+  // A landlord's Due page is /due (RECEIVING_PAGES); an inspecting team's is
+  // its own page, at its own address.
+  {
+    key: 'checks-due',
+    label: 'Due',
+    path: '/checks-due',
+    icon: IconDue,
+    blurb: 'Checks overdue or coming due, sites not done yet, and alarms expiring',
+    pack: 'core',
+  },
   {
     key: 'new-client',
     label: 'New Client',

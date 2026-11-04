@@ -368,14 +368,17 @@ try {
       await ctx.unroute(`${BACKEND}/**`)
       await ctx.setOffline(true)
 
+      // A Due list kept on the device goes too (C4).
+      await page.evaluate(() => localStorage.setItem('fc.session.due', JSON.stringify({ teamId: 't', at: 'x', rows: [] })))
       await page.locator('nav a').filter({ hasText: 'Settings' }).click()
       await page.getByRole('button', { name: 'Sign out' }).click()
       await until(async () => (await page.getByRole('dialog').count()) === 1)
       const leave = page.getByRole('dialog').getByRole('button', { name: /sign out/i }).last()
       await leave.click()
       await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1)
-      log('signing out leaves none of it behind',
-        (await page.evaluate(() => localStorage.getItem('fc.session.entitlements'))) === null)
+      log('signing out leaves none of it behind, nor the Due list',
+        (await page.evaluate(() => localStorage.getItem('fc.session.entitlements'))) === null &&
+          (await page.evaluate(() => localStorage.getItem('fc.session.due'))) === null)
       await ctx.close()
     }
     {
