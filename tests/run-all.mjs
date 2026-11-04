@@ -49,6 +49,7 @@ const SUITES = [
   'client-settings',
   'due',
   'devices',
+  'renewal',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

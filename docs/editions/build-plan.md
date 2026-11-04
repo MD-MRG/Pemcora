@@ -1449,6 +1449,19 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
     connects again keeps what it holds.
   - Before 0010 is applied, the list says it comes with an update and only "Sign out all
     other devices" is offered. With no signal, nothing is offered.
+- How C5c (a device finding it was signed out) came out:
+  - `src/lib/renewal.js` wraps the Supabase client's fetch and notes the Auth server's
+    `error_code` when it refuses a renewal, never its message. `refresh_token_not_found`
+    and `session_not_found` mean the login no longer exists. A renewal with no answer notes
+    nothing, so B3b's case is unchanged.
+  - The login library signs out by itself after such a refusal, whether the app has just
+    opened or has been open a while. When it does, and this device didn't ask to sign out,
+    the app goes to the sign-in screen saying "This device was signed out from another
+    device", forgets who was signed in, and wipes the device's copies of the team's data,
+    keeping only work that exists nowhere else (D12). Any other refusal is a plain sign-out
+    that wipes nothing, as before.
+  - `tests/devices-e2e.mjs` is the live run with two logins: M.D. runs it once 0010 is
+    applied.
 
 ### Phase D — Reports and landlords
 
@@ -1656,10 +1669,13 @@ Northern Territory, and for Queensland's electrical check:
   finished visit or delete a whole visit, with its records, by calling the database directly.
   The screens don't offer either to a member. Reopening keeps the first completion date, and
   a deleted visit's inspection isn't given back.
-- Until step C5, a lost device can't be signed out from another one: Sign out ends only the
-  device it's pressed on. M.D. can end every login of one account in the SQL editor with
-  `delete from auth.sessions where user_id = (select id from auth.users where email = '…');`.
-  That device's current token still works for up to an hour.
+- A device signed out from another one keeps working until its current login token runs out,
+  up to an hour (the project's token lifetime). A shorter lifetime narrows that window; making
+  it immediate would mean checking the login on every request. The Account card says so.
+- A lost device that never connects again keeps what it held: B3b opens the app with no
+  signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
+  says so too.
+- Until 0010 is applied, the Account card can only sign out all other devices at once.
 - A label photo needs a connection when it's taken: the device keeps no copy to send later
   (M.D.'s choice for C2). Everything else about the item saves offline. A photo replaced by a
   newer one stays in the bucket, and the screens show only the newest.

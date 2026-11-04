@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { prefs } from '../lib/prefs.js'
+import { forgetRenewalRefusal, loginWasEnded } from '../lib/renewal.js'
+import { closeSession } from '../lib/cache.js'
+import { clearCopies } from '../lib/offlineStore.js'
 import {
   supabase,
   isSupabaseConfigured,
@@ -23,6 +26,23 @@ const offlineSession = user => ({ user, offline: true })
 // retrying for up to half a minute on a connection that goes nowhere.
 const AUTH_PATIENCE = 3000
 
+// Who was signed in here, gone: what signing out on this device clears too.
+const forgetWhoWasHere = () => {
+  prefs.setLastUser(null)
+  prefs.setLastTeams(null, null)
+  prefs.clearLastEntitlements()
+  prefs.clearLastDue()
+}
+
+// This device's login was ended from another device (build plan C5, decision
+// D12). Everything the team already has goes from the device. Work that exists
+// nowhere else stays, under that person, and is sent the next time they sign in
+// here, as Sign out's "Keep it" does.
+async function wipeEndedLogin(userId) {
+  closeSession()
+  if (userId) await clearCopies(userId, { keepUnsaved: true })
+}
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -30,6 +50,10 @@ export function AuthProvider({ children }) {
   // proof — so without this flag a reset email would drop someone into the app
   // still holding the password they could not remember.
   const [recovering, setRecovering] = useState(isPasswordRecovery)
+  // This device was signed out from another one: the sign-in screen says so.
+  const [endedElsewhere, setEndedElsewhere] = useState(false)
+  // A sign-out from this device is not one from elsewhere.
+  const signingOut = useRef(false)
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -63,11 +87,19 @@ export function AuthProvider({ children }) {
       if (event === 'PASSWORD_RECOVERY') setRecovering(true)
       if (s?.user) {
         prefs.setLastUser({ id: s.user.id, email: s.user.email })
+        if (event === 'SIGNED_IN') setEndedElsewhere(false)
       } else if (event === 'SIGNED_OUT') {
-        prefs.setLastUser(null)
-        prefs.setLastTeams(null, null)
-        prefs.clearLastEntitlements()
-        prefs.clearLastDue()
+        // The library signs out by itself when a renewal is refused, whether the
+        // app has just opened or has been open a while. If the Auth server said
+        // this login no longer exists, it was ended elsewhere.
+        const userId = prefs.getLastUser()?.id
+        const ended = !signingOut.current && loginWasEnded()
+        forgetWhoWasHere()
+        if (ended) {
+          forgetRenewalRefusal()
+          setEndedElsewhere(true)
+          wipeEndedLogin(userId)
+        }
       } else if (event === 'INITIAL_SESSION') {
         // The library reports null here when it just couldn't reach the server.
         // getSession() above knows the difference, and decides.
@@ -94,6 +126,7 @@ export function AuthProvider({ children }) {
     session,
     user: session?.user ?? null,
     recovering,
+    endedElsewhere,
     signIn: (email, password) =>
       supabase
         ? supabase.auth.signInWithPassword({ email, password })
@@ -128,16 +161,18 @@ export function AuthProvider({ children }) {
       // token, then give up before doing anything. Signing out has to work regardless:
       // the stored login goes, and the token runs out by itself.
       const reachable = navigator.onLine !== false && !session?.offline
-      // This device only. Left to itself the library ends the login on every device,
-      // which signs the same person out of a phone mid-visit.
-      const result = reachable ? await supabase.auth.signOut({ scope: 'local' }) : { error: null }
-      if (!reachable || result.error) localStorage.removeItem(supabase.auth.storageKey)
-      prefs.setLastUser(null)
-      prefs.setLastTeams(null, null)
-      prefs.clearLastEntitlements()
-      prefs.clearLastDue()
-      setSession(null)
-      return result
+      signingOut.current = true
+      try {
+        // This device only. Left to itself the library ends the login on every
+        // device, which signs the same person out of a phone mid-visit.
+        const result = reachable ? await supabase.auth.signOut({ scope: 'local' }) : { error: null }
+        if (!reachable || result.error) localStorage.removeItem(supabase.auth.storageKey)
+        forgetWhoWasHere()
+        setSession(null)
+        return result
+      } finally {
+        signingOut.current = false
+      }
     },
   }
 

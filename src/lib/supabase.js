@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { watchRenewals } from './renewal.js'
 
 const url = import.meta.env?.VITE_SUPABASE_URL
 const anonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY
@@ -113,6 +114,7 @@ const patientFetch = (input, init = {}) => {
 export const supabase = isSupabaseConfigured
   ? createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true },
-      global: { fetch: patientFetch },
+      // watchRenewals notes why the Auth server refused a renewal (C5).
+      global: { fetch: watchRenewals(patientFetch) },
     })
   : null

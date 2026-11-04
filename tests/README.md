@@ -72,7 +72,9 @@ service worker, so it builds one under `node_modules/.cache` (not `dist/`) and s
 itself, with a backend address that doesn't exist, so nothing can reach the live project.
 It covers an expired login, working a whole visit and exporting its report with no
 connection, a network that goes nowhere, signing out offline, a deploy getting through, and
-how the app reads what a team has, and a new person going through the real gate (57 checks). The suite runs in `npm test`, or on its own with no dev server:
+how the app reads what a team has, a new person going through the real gate, and a device whose
+login was ended from another device, opening or already open: the sign-in screen saying so, and
+only work that exists nowhere else kept (71 checks). The suite runs in `npm test`, or on its own with no dev server:
 
 ```
 node tests/offline-open.mjs
@@ -223,6 +225,23 @@ against the answers the database gives (27 checks). `devices-e2e.mjs` does it fo
 
 ```
 node tests/devices.mjs
+```
+
+`renewal.mjs` is step C5c, in Node with no dev server: telling a login ended elsewhere from a
+renewal that just failed, by the Auth server's error code, never its message (10 checks).
+
+```
+node tests/renewal.mjs
+```
+
+`devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
+only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
+the logins, ends one from another and the rest at once, checks the ended ones can't renew
+and the other can, then has the app in a browser find it was signed out. It makes no team,
+changes no data, and ends every login it made.
+
+```
+node tests/devices-e2e.mjs <email> <password>
 ```
 
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
