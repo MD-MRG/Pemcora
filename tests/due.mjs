@@ -148,90 +148,97 @@ try {
   await open()
   log('with no team, it says the list needs one', /Sign in to a team to see it/.test(await main()) && db.calls.length === 0)
 
-  await holds(ENTITLEMENTS)
-  await page.getByRole('region', { name: 'Overdue' }).waitFor()
-  const order = await page.locator('main section').evaluateAll(s => s.map(x => x.getAttribute('aria-label')))
-  log('the list comes in its order', order.join(' | ') === 'Overdue | Due in the next 60 days | Not done yet | Alarms expiring in the next 3 months', order.join(' | '))
-  log('asked of due_list() for this team, 60 days and 3 months ahead',
-    JSON.stringify(db.calls.at(-1)) === '{"p_team_id":"team","p_within_days":60,"p_expiry_months":3}', JSON.stringify(db.calls.at(-1)))
-  const overdue = await page.getByRole('region', { name: 'Overdue' }).textContent()
-  log('each check named as its page is, with its client, site and dates',
-    /QLD electrical safety/.test(overdue) && /Rental Co · 10 Smith St, Toowong/.test(overdue) && /days overdue/.test(overdue) && /Last done /.test(overdue), overdue)
-  log('a site not done yet, and an alarm by its own name',
-    /Preventative Maintenance[\s\S]*Acme AV[\s\S]*No visit yet/.test(await page.getByRole('region', { name: 'Not done yet' }).textContent()) &&
-      /Hall alarm[\s\S]*Expires /.test(await page.getByRole('region', { name: 'Alarms expiring in the next 3 months' }).textContent()))
-  await page.screenshot({ path: `${DIR}/due-page.png`, fullPage: true })
+  // What follows asks the database, answered here, so it needs a backend address
+  // in .env, as the other suites' database checks do. CI has none.
+  const configured = await page.evaluate(async () => (await import('/src/lib/supabase.js')).isSupabaseConfigured)
+  if (!configured) {
+    console.log('(the Due list checks need VITE_SUPABASE_URL in .env, and were skipped)')
+  } else {
+    await holds(ENTITLEMENTS)
+    await page.getByRole('region', { name: 'Overdue' }).waitFor()
+    const order = await page.locator('main section').evaluateAll(s => s.map(x => x.getAttribute('aria-label')))
+    log('the list comes in its order', order.join(' | ') === 'Overdue | Due in the next 60 days | Not done yet | Alarms expiring in the next 3 months', order.join(' | '))
+    log('asked of due_list() for this team, 60 days and 3 months ahead',
+      JSON.stringify(db.calls.at(-1)) === '{"p_team_id":"team","p_within_days":60,"p_expiry_months":3}', JSON.stringify(db.calls.at(-1)))
+    const overdue = await page.getByRole('region', { name: 'Overdue' }).textContent()
+    log('each check named as its page is, with its client, site and dates',
+      /QLD electrical safety/.test(overdue) && /Rental Co · 10 Smith St, Toowong/.test(overdue) && /days overdue/.test(overdue) && /Last done /.test(overdue), overdue)
+    log('a site not done yet, and an alarm by its own name',
+      /Preventative Maintenance[\s\S]*Acme AV[\s\S]*No visit yet/.test(await page.getByRole('region', { name: 'Not done yet' }).textContent()) &&
+        /Hall alarm[\s\S]*Expires /.test(await page.getByRole('region', { name: 'Alarms expiring in the next 3 months' }).textContent()))
+    await page.screenshot({ path: `${DIR}/due-page.png`, fullPage: true })
 
-  await page.getByLabel('Client').selectOption({ label: 'Acme AV' })
-  log('filtered by client, only theirs is left',
-    (await page.locator('main section').count()) === 1 && /Acme AV/.test(await main()) && !/Rental Co ·/.test(await main()))
-  await page.getByLabel('Client').selectOption({ label: 'All clients' })
+    await page.getByLabel('Client').selectOption({ label: 'Acme AV' })
+    log('filtered by client, only theirs is left',
+      (await page.locator('main section').count()) === 1 && /Acme AV/.test(await main()) && !/Rental Co ·/.test(await main()))
+    await page.getByLabel('Client').selectOption({ label: 'All clients' })
 
-  const kept = await page.evaluate(() => localStorage.getItem('fc.session.due'))
-  log('the device keeps the list, without the contacts\' emails', /Hall alarm/.test(kept ?? '') && !/@/.test(kept ?? ''), kept?.slice(0, 120))
+    const kept = await page.evaluate(() => localStorage.getItem('fc.session.due'))
+    log('the device keeps the list, without the contacts\' emails', /Hall alarm/.test(kept ?? '') && !/@/.test(kept ?? ''), kept?.slice(0, 120))
 
-  // ── Each check's reminders, and "no longer needed" (C4b) ───────────────────
-  const reminders = what => page.getByRole('checkbox', { name: `Reminders for ${what} at 10 Smith St` })
-  log('a check has its own reminders switch, on', (await reminders('QLD electrical safety').isChecked()))
-  log('a site with no check yet, and an alarm, have none',
-    (await page.getByRole('region', { name: 'Not done yet' }).getByRole('checkbox').count()) === 0 &&
-      (await page.getByRole('region', { name: 'Alarms expiring in the next 3 months' }).getByRole('checkbox').count()) === 0)
-  const dueText = await page.getByRole('region', { name: 'Due in the next 60 days' }).textContent()
-  log('a check the client said is no longer needed says so, from the opt-out list, with no switch',
-    /No longer needed[\s\S]*from a reminder email/.test(dueText) && (await reminders('QLD smoke alarms').count()) === 0, dueText)
-  await reminders('QLD electrical safety').uncheck()
-  await page.waitForFunction(() => /"remindersEnabled":false/.test(localStorage.getItem('fc.session.due') ?? ''))
-  log('switching one off saves it on that check',
-    JSON.stringify(db.patches.at(-1)) === '{"id":"i1","body":{"reminders_enabled":false}}' && !(await reminders('QLD electrical safety').isChecked()),
-    JSON.stringify(db.patches.at(-1)))
-  db.optedOut.add('i1')
-  // A plain click: the box moves, then goes back when the database says no.
-  await reminders('QLD electrical safety').click()
-  log('one the database won\'t turn back on says why',
-    await page.getByRole('alert').filter({ hasText: 'turned these off from the email' }).waitFor().then(() => true, () => false) &&
-      !(await reminders('QLD electrical safety').isChecked()))
-  db.optedOut.clear()
-  await page.screenshot({ path: `${DIR}/due-switches.png`, fullPage: true })
+    // ── Each check's reminders, and "no longer needed" (C4b) ───────────────────
+    const reminders = what => page.getByRole('checkbox', { name: `Reminders for ${what} at 10 Smith St` })
+    log('a check has its own reminders switch, on', (await reminders('QLD electrical safety').isChecked()))
+    log('a site with no check yet, and an alarm, have none',
+      (await page.getByRole('region', { name: 'Not done yet' }).getByRole('checkbox').count()) === 0 &&
+        (await page.getByRole('region', { name: 'Alarms expiring in the next 3 months' }).getByRole('checkbox').count()) === 0)
+    const dueText = await page.getByRole('region', { name: 'Due in the next 60 days' }).textContent()
+    log('a check the client said is no longer needed says so, from the opt-out list, with no switch',
+      /No longer needed[\s\S]*from a reminder email/.test(dueText) && (await reminders('QLD smoke alarms').count()) === 0, dueText)
+    await reminders('QLD electrical safety').uncheck()
+    await page.waitForFunction(() => /"remindersEnabled":false/.test(localStorage.getItem('fc.session.due') ?? ''))
+    log('switching one off saves it on that check',
+      JSON.stringify(db.patches.at(-1)) === '{"id":"i1","body":{"reminders_enabled":false}}' && !(await reminders('QLD electrical safety').isChecked()),
+      JSON.stringify(db.patches.at(-1)))
+    db.optedOut.add('i1')
+    // A plain click: the box moves, then goes back when the database says no.
+    await reminders('QLD electrical safety').click()
+    log('one the database won\'t turn back on says why',
+      await page.getByRole('alert').filter({ hasText: 'turned these off from the email' }).waitFor().then(() => true, () => false) &&
+        !(await reminders('QLD electrical safety').isChecked()))
+    db.optedOut.clear()
+    await page.screenshot({ path: `${DIR}/due-switches.png`, fullPage: true })
 
-  // Before 0009 is applied.
-  db.optOuts = null
-  await open()
-  await holds(ENTITLEMENTS)
-  await page.getByRole('region', { name: 'Overdue' }).waitFor()
-  log('without 0009 the page still works, and marks nothing no longer needed',
-    !/No longer needed/.test(await main()) && (await reminders('QLD smoke alarms').count()) === 1)
-  db.optOuts = [{ item_id: 'i2', location_id: 'l1', obligation: 'qld_smoke_alarm', opted_out_at: '2026-10-20T00:00:00+00:00' }]
+    // Before 0009 is applied.
+    db.optOuts = null
+    await open()
+    await holds(ENTITLEMENTS)
+    await page.getByRole('region', { name: 'Overdue' }).waitFor()
+    log('without 0009 the page still works, and marks nothing no longer needed',
+      !/No longer needed/.test(await main()) && (await reminders('QLD smoke alarms').count()) === 1)
+    db.optOuts = [{ item_id: 'i2', location_id: 'l1', obligation: 'qld_smoke_alarm', opted_out_at: '2026-10-20T00:00:00+00:00' }]
 
-  // With the team's reminders off.
-  await page.evaluate(() => localStorage.setItem('fc.settings', JSON.stringify({ remindersEnabled: false })))
-  await open()
-  await holds(ENTITLEMENTS)
-  await page.getByRole('region', { name: 'Overdue' }).waitFor()
-  log('with the team\'s reminders off, the page says none go out', /switched off for the whole team in Settings/.test(await main()))
-  await page.evaluate(() => localStorage.removeItem('fc.settings'))
+    // With the team's reminders off.
+    await page.evaluate(() => localStorage.setItem('fc.settings', JSON.stringify({ remindersEnabled: false })))
+    await open()
+    await holds(ENTITLEMENTS)
+    await page.getByRole('region', { name: 'Overdue' }).waitFor()
+    log('with the team\'s reminders off, the page says none go out', /switched off for the whole team in Settings/.test(await main()))
+    await page.evaluate(() => localStorage.removeItem('fc.settings'))
 
-  // No signal: the last list, dated.
-  await ctx.setOffline(true)
-  db.down = true
-  await page.evaluate(async () => {
-    // A fresh read with the connection gone, as opening the page later would.
-    location.hash = '#/'
-  })
-  await page.getByRole('link', { name: 'Due', exact: true }).click()
-  await page.getByRole('region', { name: 'Overdue' }).waitFor()
-  log('with no signal it shows the last list, saying when it was', /No connection\. This is the list as it was /.test(await main()), (await main()).slice(0, 200))
-  log('with the switches off until it\'s back', await reminders('QLD electrical safety').isDisabled())
-  log('and still says which the client said are no longer needed', /No longer needed/.test(await main()))
-  await ctx.setOffline(false)
-  db.down = false
+    // No signal: the last list, dated.
+    await ctx.setOffline(true)
+    db.down = true
+    await page.evaluate(async () => {
+      // A fresh read with the connection gone, as opening the page later would.
+      location.hash = '#/'
+    })
+    await page.getByRole('link', { name: 'Due', exact: true }).click()
+    await page.getByRole('region', { name: 'Overdue' }).waitFor()
+    log('with no signal it shows the last list, saying when it was', /No connection\. This is the list as it was /.test(await main()), (await main()).slice(0, 200))
+    log('with the switches off until it\'s back', await reminders('QLD electrical safety').isDisabled())
+    log('and still says which the client said are no longer needed', /No longer needed/.test(await main()))
+    await ctx.setOffline(false)
+    db.down = false
 
-  // Signing out takes it with it.
-  await page.evaluate(async () => {
-    const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/prefs.js')).pop()
-    const { prefs } = await import(url ?? '/src/lib/prefs.js')
-    prefs.clearLastDue()
-  })
-  log('clearing it leaves nothing behind', (await page.evaluate(() => localStorage.getItem('fc.session.due'))) === null)
+    // Signing out takes it with it.
+    await page.evaluate(async () => {
+      const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/prefs.js')).pop()
+      const { prefs } = await import(url ?? '/src/lib/prefs.js')
+      prefs.clearLastDue()
+    })
+    log('clearing it leaves nothing behind', (await page.evaluate(() => localStorage.getItem('fc.session.due'))) === null)
+  }
 
   // A landlord's /due is theirs.
   await page.goto(BASE + '#/due', { waitUntil: 'networkidle' })

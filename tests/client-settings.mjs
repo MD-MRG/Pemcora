@@ -211,70 +211,78 @@ try {
   await goto('#/new-client')
   log('New Client is unchanged: no contact fields', (await page.getByLabel('Contact email').count()) === 0)
 
-  // ── How often checks are due (C3c) ─────────────────────────────────────────
-  const shown = scope => scope.getByText('Saved. Due dates have moved to match.').waitFor().then(() => true, () => false)
-  await goto('#/settings')
-  log('with no team, the interval waits for one', /How often checks are due[\s\S]*Set once you're signed in to a team/.test(await main()))
-  await holds(ELECTRICAL)
-  const elec = () => page.getByLabel('QLD electrical safety: every how many months')
-  await elec().waitFor()
-  log('a QLD team sets its electrical check, and is told the smoke alarms are set by law',
-    (await elec().count()) === 1 && /QLD smoke alarms — every 12 months, set by law/.test(await main()) &&
-      (await page.getByLabel('QLD smoke alarms: every how many months').count()) === 0)
-  log('a blank one says it follows the pack\'s default', /Left blank: every 24 months, the pack default\./.test(await main()))
-  await elec().fill('0')
-  log('0 months is refused before anything is sent', /Between 1 and 120 months/.test(await main()) && db.rpcs.length === 0)
-  await elec().fill('36')
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
-  log('the team default goes to the database, which moves the due dates',
-    (await shown(page)) &&
-      JSON.stringify(db.rpcs.at(-1)) === '{"p_team_id":"team","p_workflow_id":"qld_electrical_safety","p_client_id":null,"p_months":36}',
-    JSON.stringify(db.rpcs.at(-1)))
-  // The row starts again from what the database now holds; the word stays.
-  await page.waitForTimeout(800)
-  log('and still says so once it has read the value back',
-    (await page.getByText('Saved. Due dates have moved to match.').count()) === 1 && (await elec().inputValue()) === '36')
-  await page.screenshot({ path: `${DIR}/client-settings-intervals.png`, fullPage: true })
-  await goto('#/settings')
-  await holds(ELECTRICAL)
-  await elec().waitFor()
-  log('and is read back from it', (await elec().inputValue()) === '36')
+  // What follows asks the database, answered here, so it needs a backend address
+  // in .env, as the other suites' database checks do. CI has none.
+  const configured = await page.evaluate(async () => (await import('/src/lib/supabase.js')).isSupabaseConfigured)
+  if (!configured) {
+    console.log('(the interval checks need VITE_SUPABASE_URL in .env, and were skipped)')
+  } else {
+    // ── How often checks are due (C3c) ─────────────────────────────────────────
+    const shown = scope => scope.getByText('Saved. Due dates have moved to match.').waitFor().then(() => true, () => false)
+    await goto('#/settings')
+    log('with no team, the interval waits for one', /How often checks are due[\s\S]*Set once you're signed in to a team/.test(await main()))
+    await holds(ELECTRICAL)
+    const elec = () => page.getByLabel('QLD electrical safety: every how many months')
+    await elec().waitFor()
+    log('a QLD team sets its electrical check, and is told the smoke alarms are set by law',
+      (await elec().count()) === 1 && /QLD smoke alarms — every 12 months, set by law/.test(await main()) &&
+        (await page.getByLabel('QLD smoke alarms: every how many months').count()) === 0)
+    log('a blank one says it follows the pack\'s default', /Left blank: every 24 months, the pack default\./.test(await main()))
+    await elec().fill('0')
+    log('0 months is refused before anything is sent', /Between 1 and 120 months/.test(await main()) && db.rpcs.length === 0)
+    await elec().fill('36')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    log('the team default goes to the database, which moves the due dates',
+      (await shown(page)) &&
+        JSON.stringify(db.rpcs.at(-1)) === '{"p_team_id":"team","p_workflow_id":"qld_electrical_safety","p_client_id":null,"p_months":36}',
+      JSON.stringify(db.rpcs.at(-1)))
+    // The row starts again from what the database now holds; the word stays.
+    await page.waitForTimeout(800)
+    log('and still says so once it has read the value back',
+      (await page.getByText('Saved. Due dates have moved to match.').count()) === 1 && (await elec().inputValue()) === '36')
+    await page.screenshot({ path: `${DIR}/client-settings-intervals.png`, fullPage: true })
+    await goto('#/settings')
+    await holds(ELECTRICAL)
+    await elec().waitFor()
+    log('and is read back from it', (await elec().inputValue()) === '36')
 
-  // A client's own.
-  await goto('#/edit-client')
-  await holds(ELECTRICAL)
-  await page.locator('tbody tr').filter({ hasText: 'Rental Co' }).click()
-  const own = () => card().getByLabel('QLD electrical safety: every how many months')
-  await own().waitFor()
-  log('a client with none of its own follows the team default', /Left blank: every 36 months, the team default\./.test(await card().textContent()))
-  await own().fill('12')
-  await card().getByRole('button', { name: 'Save', exact: true }).click()
-  log('its own goes in for that client only', (await shown(card())) && db.rpcs.at(-1)?.p_client_id === 'c1' && db.rpcs.at(-1).p_months === 12)
-  await own().fill('')
-  await card().getByRole('button', { name: 'Save', exact: true }).click()
-  log('and cleared, it goes back to the team default',
-    (await shown(card())) && db.rpcs.at(-1)?.p_client_id === 'c1' && db.rpcs.at(-1).p_months === null && !db.intervals.some(r => r.client_id === 'c1'))
+    // A client's own.
+    await goto('#/edit-client')
+    await holds(ELECTRICAL)
+    await page.locator('tbody tr').filter({ hasText: 'Rental Co' }).click()
+    const own = () => card().getByLabel('QLD electrical safety: every how many months')
+    await own().waitFor()
+    log('a client with none of its own follows the team default', /Left blank: every 36 months, the team default\./.test(await card().textContent()))
+    await own().fill('12')
+    await card().getByRole('button', { name: 'Save', exact: true }).click()
+    log('its own goes in for that client only', (await shown(card())) && db.rpcs.at(-1)?.p_client_id === 'c1' && db.rpcs.at(-1).p_months === 12)
+    await own().fill('')
+    await card().getByRole('button', { name: 'Save', exact: true }).click()
+    log('and cleared, it goes back to the team default',
+      (await shown(card())) && db.rpcs.at(-1)?.p_client_id === 'c1' && db.rpcs.at(-1).p_months === null && !db.intervals.some(r => r.client_id === 'c1'))
 
-  // Refused, and offline.
-  db.refuse = { code: 'P0001', message: 'Only an owner or admin can set how often a check is done', hint: null, details: null }
-  await own().fill('6')
-  await card().getByRole('button', { name: 'Save', exact: true }).click()
-  log('the database\'s refusal is shown',
-    await card().getByRole('alert').filter({ hasText: 'Only an owner or admin' }).waitFor().then(() => true, () => false))
-  db.refuse = null
-  const asked = db.rpcs.length
-  await ctx.setOffline(true)
-  await card().getByRole('button', { name: 'Save', exact: true }).click()
-  log('with no signal it says it needs a connection, and sends nothing',
-    /needs a connection/.test(await card().getByRole('alert').textContent()) && db.rpcs.length === asked)
-  await ctx.setOffline(false)
+    // Refused, and offline.
+    db.refuse = { code: 'P0001', message: 'Only an owner or admin can set how often a check is done', hint: null, details: null }
+    await own().fill('6')
+    await card().getByRole('button', { name: 'Save', exact: true }).click()
+    log('the database\'s refusal is shown',
+      await card().getByRole('alert').filter({ hasText: 'Only an owner or admin' }).waitFor().then(() => true, () => false))
+    db.refuse = null
+    const asked = db.rpcs.length
+    await ctx.setOffline(true)
+    await card().getByRole('button', { name: 'Save', exact: true }).click()
+    log('with no signal it says it needs a connection, and sends nothing',
+      /needs a connection/.test(await card().getByRole('alert').textContent()) && db.rpcs.length === asked)
+    await ctx.setOffline(false)
 
-  // An AV team's PM.
-  await goto('#/settings')
-  await holds({ ...ELECTRICAL, packs: ['core', 'av'], starterPack: 'av' })
-  await page.getByLabel('Preventative Maintenance: every how many months').waitFor()
-  log('an AV team sets how often PM visits are due, which has no default',
-    /Left blank: not tracked as due\./.test(await main()) && (await elec().count()) === 0)
+    // An AV team's PM.
+    await goto('#/settings')
+    await holds({ ...ELECTRICAL, packs: ['core', 'av'], starterPack: 'av' })
+    await page.getByLabel('Preventative Maintenance: every how many months').waitFor()
+    log('an AV team sets how often PM visits are due, which has no default',
+      /Left blank: not tracked as due\./.test(await main()) && (await elec().count()) === 0)
+  }
+
 } catch (e) {
   log('suite threw before finishing', false, e.message)
 } finally {
