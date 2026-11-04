@@ -956,6 +956,39 @@ export async function updateAsset(assetId, patch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Signed-in devices (C5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Your own logins (0010): id, browser details, when each signed in and was last
+ * used. Null before 0010 is applied: the Account card then offers only "Sign out
+ * all other devices", which needs nothing new.
+ */
+export async function listMyDevices() {
+  const { data, error } = await supabase.rpc('my_devices')
+  if (error?.code === 'PGRST202') return null
+  if (error) throw error
+  return (data ?? []).map(r => ({
+    id: r.id,
+    userAgent: r.user_agent ?? '',
+    signedInAt: r.signed_in_at ?? null,
+    lastUsedAt: r.last_used_at ?? null,
+  }))
+}
+
+/** Ends one of your own logins, so that device can't renew it (0010). */
+export async function endDevice(sessionId) {
+  const { error } = await supabase.rpc('end_device', { p_session_id: sessionId })
+  if (error) throw error
+}
+
+/** Ends every login of yours but this one. Built into Supabase: nothing new. */
+export async function signOutOtherDevices() {
+  const { error } = await supabase.auth.signOut({ scope: 'others' })
+  if (error) throw error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // What's due (C4)
 // ─────────────────────────────────────────────────────────────────────────────
 

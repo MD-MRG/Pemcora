@@ -48,6 +48,7 @@ const SUITES = [
   'label-photo',
   'client-settings',
   'due',
+  'devices',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

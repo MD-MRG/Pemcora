@@ -215,6 +215,16 @@ landlord's `/due` left as it was (33 checks).
 node tests/due.mjs
 ```
 
+`devices.mjs` is step C5b. Naming a device from its browser details and finding this device
+in its own token, in Node; then the signed-in devices list put on the page by itself (it only
+renders with a real login): this device first, signing one out and all the others after
+asking, a refusal, the list before 0010 is applied and with no signal; and `api.js`'s calls
+against the answers the database gives (27 checks). `devices-e2e.mjs` does it for real.
+
+```
+node tests/devices.mjs
+```
+
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend
 
 Every suite above runs in test mode on localStorage. This one deliberately does

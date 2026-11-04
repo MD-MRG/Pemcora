@@ -1438,6 +1438,17 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
     `auth.sessions` on the live project (checked 4 November), while signed-in users can't.
   - The SQL suite's stand-in for Supabase gains `auth.sessions` and `auth.refresh_tokens`
     with the live column types and cascade.
+- How C5b (the list) came out:
+  - The Account card in Settings ends with "Signed-in devices": each login named from its
+    browser details ("Safari on iPhone"), when it signed in and was last used, this device
+    first and marked "This device" from the `session_id` in its own token. Only the
+    database decides whose login is whose; the token is read just to mark the row.
+  - Every other row has "Sign out", which asks first, naming the device and when it was
+    last used. "Sign out all other devices" asks too. Both say what they can't do: the
+    device keeps working until its current login runs out, up to an hour, and one that never
+    connects again keeps what it holds.
+  - Before 0010 is applied, the list says it comes with an update and only "Sign out all
+    other devices" is offered. With no signal, nothing is offered.
 
 ### Phase D — Reports and landlords
 
