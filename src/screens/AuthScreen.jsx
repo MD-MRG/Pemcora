@@ -12,7 +12,7 @@ import ResetPasswordScreen from './ResetPasswordScreen.jsx'
  * confirm trigger can place the new account in the team that invited it.
  */
 export default function AuthScreen({ invite = null }) {
-  const { signIn, signUp } = useAuth()
+  const { signIn, signUp, endedElsewhere } = useAuth()
   const [mode, setMode] = useState(invite ? 'sign-up' : 'sign-in')
   const [email, setEmail] = useState(invite?.email ?? '')
   const [password, setPassword] = useState('')
@@ -127,6 +127,12 @@ export default function AuthScreen({ invite = null }) {
           placeholder={signingUp ? 'At least 8 characters' : ''}
         />
 
+        {endedElsewhere && !signingUp && (
+          <Notice title="This device was signed out from another device.">
+            What your team already had has been removed from it. Anything that hadn't been saved yet
+            is kept here, and is sent once you sign in again.
+          </Notice>
+        )}
         {problem && <Notice blocked title={problem} />}
         {notice && <Notice title={notice} />}
 

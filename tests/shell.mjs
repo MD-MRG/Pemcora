@@ -29,11 +29,11 @@ try {
   await page.goto(URL, { waitUntil: 'networkidle' })
   await page.waitForTimeout(500)
 
-  // 1 · shell + all eight items. Teams is admin-only, and useCanManage() says
+  // 1 · shell + all nine items (Due since C4). Teams is admin-only, and useCanManage() says
   // yes with no session — which is the only way these suites ever run, so it is
   // on the list here just like the rest.
   const items = await page.locator('nav[aria-label="Main"] a').allTextContents()
-  log('all eight nav items present', items.length === 8, `${items.length}: ${items.join(' | ')}`)
+  log('all nine nav items present', items.length === 9, `${items.length}: ${items.join(' | ')}`)
   const activeText = await page.locator('nav a[aria-current="page"]').textContent()
   log('Home active on first load', activeText.trim() === 'Home', activeText.trim())
 
@@ -75,7 +75,7 @@ try {
   const ariaLabels = await page.locator('nav a[aria-label]').count()
   log('toggle collapses to rail', wideBefore === 264 && railW === 68, `${wideBefore} -> ${railW}`)
   log('labels hidden in rail mode', labelsHidden === 0, `${labelsHidden} visible label spans`)
-  log('every rail item keeps an aria-label', ariaLabels === 8, `${ariaLabels}/8`)
+  log('every rail item keeps an aria-label', ariaLabels === 9, `${ariaLabels}/9`)
   await page.screenshot({ path: `${DIR}/fc-rail.png` })
 
   // 5 · preference persists

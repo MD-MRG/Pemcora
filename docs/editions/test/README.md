@@ -1,9 +1,9 @@
-# SQL-level checks for 0006, 0007 and 0008
+# SQL-level checks for 0006 to 0010
 
 `run_tests.py` builds a throwaway database from the real `supabase/migrations/0001–0005`,
-makes a team the way the app used to, applies `0006`, `0007` and `0008` twice (re-run
+makes a team the way the app used to, applies `0006` to `0010` twice (re-run
 safety), then drives every gate, policy and RPC as real signed-in roles with RLS on.
-371 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
+396 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
 seats and invites, the column lock on `teams`, the re-check clock, photo gating,
 storage folders, and the whole report delivery → claim → auto-file loop. Then
 the build plan's Phase A rules: a second device joining an open visit, visit
@@ -18,10 +18,15 @@ accounts), then step A3b: the re-checks' R1–R7 and S1–S3, and the cases foun
 and step B5: every row of the starter table in 2.3, who can delete a report record, and what a
 signed-out caller can reach.
 The R6 and R7 blocks re-run the drafts, so they stay last, and B5 checks again after them that
-re-running 0006 and 0007 by themselves doesn't undo 0008.
+re-running 0006 and 0007 by themselves doesn't undo 0008. Last, step C4: `due_opt_outs()` for
+the team's own members only, including a check made again with the contact's email blank, and
+0009 re-run after everything else. Then step C5: `my_devices()` and `end_device()` for the person's
+own logins only, refresh tokens going with an ended login, nothing for a signed-out caller, and
+0010 re-run last.
 
 `00_supabase_stub.sql` stands in for the parts of Supabase plain Postgres lacks:
-the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.uid()`,
+the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.sessions` and
+`auth.refresh_tokens` (with the live column types and cascade), `auth.uid()`,
 a minimal `storage` schema, and Supabase's default privileges.
 
 ## Running it

@@ -110,6 +110,16 @@ export default {
       // only the test template and the wording differ.
       id: 'maintenance',
       label: 'Preventative maintenance',
+      // How often it recurs, as the database catalogue says (0006). PM has no
+      // default: its cadence is the service contract's, set by the team (C3).
+      interval: { months: null, fixed: false },
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/maintenance',
+        label: 'Preventative Maintenance',
+        blurb: 'Room-by-room PM visits, faults raised, and the report that goes out',
+        icon: 'maintenance',
+      },
       page: {
         title: 'Preventative Maintenance',
         progressNoun: 'Preventative Maintenance',
@@ -126,6 +136,13 @@ export default {
       // apart, so a commissioning in progress never blocks or gets confused with a PM.
       id: 'commissioning',
       label: 'Commissioning',
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/commissioning',
+        label: 'Commissioning',
+        blurb: 'Per-room device checks, firmware and signal verification, sign-off',
+        icon: 'commissioning',
+      },
       page: {
         title: 'Commissioning',
         progressNoun: 'Commissioning',

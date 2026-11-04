@@ -6,17 +6,28 @@
 
 import { VIC_ELECTRICAL_SAFETY } from './shared/electricalSafety.js'
 import { replaceOnFail } from './shared/smokeAlarm.js'
+import { HOME_ROOM_TYPES } from './shared/roomTypes.js'
 
 export default {
   id: 'vic_rental',
   label: 'Victorian rental safety checks',
   tagline: 'Electrical compliance',
   proposed: true,
+  roomTypes: HOME_ROOM_TYPES,
   workflows: [
     {
       // Mirrors Energy Safe Victoria's report form section for section.
       id: 'vic_electrical_safety',
       label: 'Electrical safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 24, fixed: true },
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/vic-electrical-safety',
+        label: 'VIC electrical safety',
+        blurb: 'Victorian rental electrical safety checks, every 2 years',
+        icon: 'electrical',
+      },
       page: {
         title: 'Electrical Safety Check',
         progressNoun: 'Electrical safety check',
@@ -25,6 +36,9 @@ export default {
         emptyLine: 'No electrical safety check recorded for this location',
         reportTitle: 'Electrical Safety Check',
         sheetName: 'Electrical Safety Check',
+        // Finished by signing off: the outcome, and the technician's name, licence
+        // number and signature (C1).
+        signoff: true,
       },
       seed: VIC_ELECTRICAL_SAFETY,
     },
@@ -33,6 +47,15 @@ export default {
       // check's due date comes from Pemcora's records, not from the list.
       id: 'vic_smoke_alarm',
       label: 'Smoke alarm safety check',
+      // How often it recurs, as the database catalogue says (0006).
+      interval: { months: 12, fixed: true },
+      // Its page in the navigation, and where Home's Resume goes.
+      nav: {
+        path: '/vic-smoke-alarm',
+        label: 'VIC smoke alarms',
+        blurb: 'Victorian rental smoke alarm checks, every year',
+        icon: 'alarm',
+      },
       page: {
         title: 'Smoke Alarm Safety Check',
         progressNoun: 'Smoke alarm safety check',
@@ -41,6 +64,11 @@ export default {
         emptyLine: 'No smoke alarm check recorded for this location',
         reportTitle: 'Smoke Alarm Safety Check',
         sheetName: 'Smoke Alarm Safety Check',
+        // Finished by signing off: the outcome, and the technician's name, licence
+        // number and signature (C1).
+        signoff: true,
+        // A failed smoke alarm's note is the reason it failed (M.D.'s note in B2).
+        notePrompt: 'Why did it fail?',
       },
       seed: {
         main: [],

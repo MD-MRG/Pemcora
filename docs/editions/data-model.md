@@ -201,6 +201,9 @@ publishable key in the bundle. Anything React hides, the REST API still answers.
 | `file_report(delivery, location)` | recipient members | files an unfiled report under a property |
 | `revoke_report(delivery)` | provider members | withdraws a report until it's claimed |
 | `due_list(team, within_days, expiry_months)` | members | the Due page: overdue, due soon, "not done yet" sites on a regular interval, and alarms expiring |
+| `due_opt_outs(team)` | members | the Due page's "no longer needed": which of the team's checks a client opted out of, from the opt-out list (0009) |
+| `my_devices()` | signed-in users | your own logins: id, browser details, signed in and last used; no tokens or IP addresses (0010) |
+| `end_device(session)` | signed-in users | ends one of your own logins and its refresh tokens; anyone else's is refused (0010) |
 | `set_workflow_interval(team, workflow, client, months)` | owner/admin | regular intervals (team default or per client); refuses intervals fixed by law; recalculates due dates |
 | `reminder_opt_out(token)` | anyone with the link | a reminder's "No longer needed": switches that check's reminders off and tells the provider |
 

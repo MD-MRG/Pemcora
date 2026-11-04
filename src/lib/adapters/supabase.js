@@ -10,6 +10,8 @@
 //   clients                → the client tree and its visits, any member's to write
 //   settings.company/logo/plate → team_settings, admin-only
 //   settings.technician    → member_prefs, the signed-in member's own row
+//   settings.licenceNumber → member_prefs too
+//   settings.remindersEnabled → team_settings, admin-only
 //   templates              → team_templates, admin-only
 //
 // They are written separately and in that knowledge: a plain member editing
@@ -44,7 +46,7 @@
 
 import * as api from '../api.js'
 import { classifySaveError } from '../saveErrors.js'
-import { deepEqual, mergeRoom, mergeVisit } from '../visitMerge.js'
+import { deepEqual, mergeRoom, mergeSite, mergeVisit } from '../visitMerge.js'
 
 const byId = xs => new Map((xs ?? []).map(x => [x.id, x]))
 const idsOf = xs => new Set((xs ?? []).map(x => x.id))
@@ -57,18 +59,24 @@ const changed = (a, b, keys) => keys.some(k => (a?.[k] ?? '') !== (b?.[k] ?? '')
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
 const LOCATION_KEYS = ['address', 'suburb', 'city', 'state', 'postcode']
-const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference']
+const VISIT_KEYS = ['technician', 'completedAt', 'exportPreference', 'outcome']
+const ASSET_KEYS = ['roomId', 'assetType', 'label', 'make', 'model', 'serial', 'attributes', 'installedOn', 'expiresOn', 'removedAt']
 
 // What someone entered in a room, from either side. The database stores a room
 // nobody has finished as in_progress, so not-started reads the same as that.
 const roomContent = e => ({
   results: e?.results ?? {},
+  readings: e?.readings ?? {},
   troubleshooting: e?.troubleshooting ?? {},
   sections: e?.sections ?? {},
   comments: e?.comments ?? '',
   status: e?.status === 'complete' ? 'complete' : 'in-progress',
 })
 const sameRoom = (a, b) => deepEqual(roomContent(a), roomContent(b))
+
+// The whole-site step has no status, and its test list travels with it.
+const siteContent = s => ({ ...roomContent(s), status: null, template: s?.template ?? {} })
+const sameSite = (a, b) => deepEqual(siteContent(a), siteContent(b))
 
 // The database hangs visits off a location; the app expects them nested inside
 // it, keyed by room. Reshape here so nothing above this file has to know the
@@ -81,11 +89,15 @@ const treeVisit = v => ({
   completedAt: v.completedAt,
   firstCompletedAt: v.firstCompletedAt,
   exportPreference: v.exportPreference,
+  siteResults: v.siteResults ?? {},
+  outcome: v.outcome ?? null,
+  signoff: v.signoff ?? null,
   rooms: Object.fromEntries(
     Object.entries(v.rooms).map(([roomId, r]) => [
       roomId,
       {
         results: r.results,
+        readings: r.readings,
         sections: r.sections,
         troubleshooting: r.troubleshooting,
         comments: r.comments,
@@ -126,9 +138,10 @@ export function supabaseAdapter(teamId, userId, source = api) {
     immediate: false,
 
     async load() {
-      const [clients, visits, settings, templates, prefs] = await Promise.all([
+      const [clients, visits, assets, settings, templates, prefs] = await Promise.all([
         source.listClients(teamId),
         source.listVisitsForTeam(teamId),
+        source.listAssets(teamId),
         source.getTeamSettings(teamId),
         source.getTemplates(teamId),
         source.getMemberPrefs(teamId, userId),
@@ -141,9 +154,15 @@ export function supabaseAdapter(teamId, userId, source = api) {
         byLocation.set(v.locationId, list)
       }
 
+      const assetsAt = new Map()
+      for (const { locationId, ...asset } of assets) {
+        assetsAt.set(locationId, [...(assetsAt.get(locationId) ?? []), asset])
+      }
+
       for (const c of clients) {
         for (const l of c.locations) {
           l.visits = byLocation.get(l.id) ?? []
+          l.assets = assetsAt.get(l.id) ?? []
         }
       }
 
@@ -156,7 +175,9 @@ export function supabaseAdapter(teamId, userId, source = api) {
           logoFull: settings.logoFull,
           logoCollapsed: settings.logoCollapsed,
           plate: settings.plate,
+          remindersEnabled: settings.remindersEnabled ?? true,
           technician: prefs.defaultTechnician ?? '',
+          licenceNumber: prefs.licenceNumber ?? '',
         },
         // Empty rows read back as {}; templateStore treats that as "not seeded
         // yet" and fills them from the pack files on first read.
@@ -198,7 +219,7 @@ export function supabaseAdapter(teamId, userId, source = api) {
         unsavedClients: [...new Set(ctx.unsavedClients)],
         aliases: ctx.aliases,
       }
-      if (ctx.joins.length || ctx.merges.length || ctx.arrivals.length) {
+      if (ctx.joins.length || ctx.merges.length || ctx.arrivals.length || ctx.kept.length) {
         report.rebase = data => rebase(data, ctx)
       }
       return report
@@ -278,6 +299,7 @@ const freshRun = () => ({
   joins: [],
   merges: [],
   arrivals: [],
+  kept: [],
 })
 
 function findLocation(data, locationId) {
@@ -320,10 +342,21 @@ function rebase(data, ctx) {
     if (at >= 0) location.visits[at] = mergeVisit(location.visits[at], server)
   }
 
-  for (const { visitId, roomId, pushed, merged } of ctx.merges) {
+  for (const { visitId, roomId, site, pushed, merged } of ctx.merges) {
     const visit = findVisit(data, visitId)
+    if (site) {
+      if (visit) visit.siteResults = mergeSite(pushed, visit.siteResults, merged)
+      continue
+    }
     if (!visit?.rooms?.[roomId]) continue
     visit.rooms[roomId] = mergeRoom(pushed, visit.rooms[roomId], merged)
+  }
+
+  // A correction finished again: the date is the one the database kept, unless
+  // it has been reopened here since.
+  for (const { visitId, completedAt } of ctx.kept) {
+    const visit = findVisit(data, visitId)
+    if (visit?.completedAt) visit.completedAt = completedAt
   }
   return data
 }
@@ -346,13 +379,14 @@ function note(ctx, what, e) {
 async function pushSettings(ctx, next, previous) {
   if (!next) return previous ?? next
 
-  if (!same(next.technician, previous?.technician)) {
+  const mine = {}
+  if (!same(next.technician, previous?.technician)) mine.defaultTechnician = next.technician
+  if (!same(next.licenceNumber, previous?.licenceNumber)) mine.licenceNumber = next.licenceNumber
+  if (Object.keys(mine).length) {
     try {
-      await ctx.api.saveMemberPrefs(ctx.teamId, ctx.userId, {
-        defaultTechnician: next.technician,
-      })
+      await ctx.api.saveMemberPrefs(ctx.teamId, ctx.userId, mine)
     } catch (e) {
-      note(ctx, 'Saving your technician name', e)
+      note(ctx, 'Saving your technician name and licence number', e)
     }
   }
 
@@ -363,6 +397,9 @@ async function pushSettings(ctx, next, previous) {
     teamPatch.logoCollapsed = next.logoCollapsed
   }
   if (next.plate !== previous?.plate) teamPatch.plate = next.plate
+  if ((next.remindersEnabled ?? true) !== (previous?.remindersEnabled ?? true)) {
+    teamPatch.remindersEnabled = next.remindersEnabled ?? true
+  }
   if (Object.keys(teamPatch).length === 0) return next
 
   // updateTeamSettings turns a zero-row update into a thrown error, which is
@@ -442,6 +479,15 @@ async function pushClient(ctx, client, before) {
     await db.renameClient(client.id, client.name)
   }
 
+  // Its contact and reminders switch: only what changed, or for a new client
+  // what differs from a blank one.
+  const details = Object.fromEntries(
+    Object.entries(api.CLIENT_DETAILS)
+      .filter(([key, [, blank]]) => (client[key] ?? blank) !== (before ? (before[key] ?? blank) : blank))
+      .map(([key, [, blank]]) => [key, client[key] ?? blank]),
+  )
+  if (Object.keys(details).length) await db.updateClientDetails(client.id, details)
+
   const locsBefore = byId(before?.locations)
   const locations = []
   for (const location of client.locations ?? []) {
@@ -512,12 +558,19 @@ async function pushLocation(ctx, client, location, locBefore) {
       if (!roomBefore) {
         await db.addRoom(teamId, floor.id, room, j)
       } else if (
-        changed(roomBefore, room, ['name', 'planNumber']) ||
+        changed(roomBefore, room, ['name', 'planNumber', 'roomType']) ||
         roomBefore.position !== j
       ) {
         await db.updateRoom(room.id, { ...room, position: j })
       }
     }
+  }
+
+  // Equipment, once the rooms it can be pinned to are in. Removed, never deleted,
+  // so there is nothing to delete here.
+  const assetsBefore = byId(locBefore?.assets)
+  for (const asset of location.assets ?? []) {
+    await pushAsset(ctx, location, asset, assetsBefore.get(asset.id))
   }
 
   // One visit at a time, so a refused one stops there. It stays on the device,
@@ -545,6 +598,45 @@ async function pushLocation(ctx, client, location, locBefore) {
     }
   }
   return { ...location, visits }
+}
+
+/**
+ * One item. Only the fields that changed are sent, so two devices editing different
+ * things about the same alarm both keep theirs. An item pinned to a room deleted on
+ * another device stays at the site, unpinned, as the database leaves the items of a
+ * room it deletes.
+ */
+async function pushAsset(ctx, location, asset, before) {
+  const { api: db, teamId } = ctx
+  const gone = e => !ctx.strict && classifySaveError(e) === 'gone'
+
+  if (!before) {
+    try {
+      await db.addAsset(teamId, location.id, asset)
+    } catch (e) {
+      if (!gone(e) || !asset.roomId) throw e
+      await db.addAsset(teamId, location.id, { ...asset, roomId: null })
+    }
+    return
+  }
+
+  const patch = Object.fromEntries(
+    ASSET_KEYS.filter(k => !deepEqual(before[k] ?? null, asset[k] ?? null)).map(k => [k, asset[k] ?? null]),
+  )
+  if (!Object.keys(patch).length) return
+  try {
+    await db.updateAsset(asset.id, patch)
+  } catch (e) {
+    if (!gone(e)) throw e
+    // Its room has gone, or the item itself has, with its site. Unpinned, it
+    // saves in the first case; there is nothing left to save in the second.
+    if (!patch.roomId) return
+    try {
+      await db.updateAsset(asset.id, { ...patch, roomId: null })
+    } catch (again) {
+      if (!gone(again)) throw again
+    }
+  }
 }
 
 function hold(ctx, client, location, visit, reason, error) {
@@ -599,7 +691,29 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
     brandNew = Object.keys(base.rooms).length === 0
   }
 
-  if (changed(base, visit, VISIT_KEYS)) await db.updateVisit(visit.id, visit)
+  // Only what changed, so the whole-site step goes only when it has, and merged.
+  const patch = Object.fromEntries(
+    VISIT_KEYS.filter(k => changed(base, visit, [k])).map(k => [k, visit[k]]),
+  )
+  // An object, so compared by what it holds. The database stamps it; sending the
+  // same one back keeps those stamps (stamp_signoff in 0007).
+  if (!deepEqual(base.signoff ?? null, visit.signoff ?? null)) patch.signoff = visit.signoff ?? null
+  let site = visit.siteResults
+  if (!deepEqual(base.siteResults ?? {}, site ?? {})) {
+    site = await siteToSave(ctx, visit, base.siteResults, brandNew)
+    patch.siteResults = site ?? {}
+  }
+
+  let completedAt = visit.completedAt
+  if (Object.keys(patch).length) {
+    const saved = await db.updateVisit(visit.id, patch)
+    // A reopened visit finished again keeps its first date. This device may not
+    // have known it had one, if it was reopened somewhere else.
+    if (completedAt && saved?.completedAt && Date.parse(saved.completedAt) !== Date.parse(completedAt)) {
+      completedAt = saved.completedAt
+      ctx.kept.push({ visitId: visit.id, completedAt })
+    }
+  }
 
   const settledRooms = {}
   for (const [roomId, entry] of Object.entries(visit.rooms ?? {})) {
@@ -627,7 +741,21 @@ async function pushVisit(ctx, client, location, visit, visitBefore) {
     await db.recordExport(teamId, visit.id, record.revision, record.filename, userId)
   }
 
-  return { ...visit, rooms: settledRooms }
+  return { ...visit, completedAt, ...(site ? { siteResults: site } : {}), rooms: settledRooms }
+}
+
+/**
+ * The whole-site step, as a room is: if another device has changed it since this
+ * one last read it, the two are merged test by test, item by item.
+ */
+async function siteToSave(ctx, visit, siteBefore, brandNew) {
+  if (ctx.strict || brandNew) return visit.siteResults
+  const server = await ctx.api.getVisitSite(visit.id)
+  if (!server || sameSite(server, siteBefore)) return visit.siteResults
+  const merged = mergeSite(siteBefore, visit.siteResults, server)
+  if (sameSite(merged, visit.siteResults)) return visit.siteResults
+  ctx.merges.push({ visitId: visit.id, site: true, pushed: visit.siteResults, merged })
+  return merged
 }
 
 /**

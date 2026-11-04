@@ -80,8 +80,12 @@ export const noteKey = (testId, itemId) => (itemId ? `${itemId}:${testId}` : tes
 // place it would reach a report that can't be edited once sent, so a note still
 // holding it counts as unwritten.
 const TIMEFRAME = '[timeframe]'
-export const noteIsFinished = note =>
-  !isBlank(note) && !String(note).toLowerCase().includes(TIMEFRAME)
+export const holdsTimeframe = note => String(note ?? '').toLowerCase().includes(TIMEFRAME)
+export const noteIsFinished = note => !isBlank(note) && !holdsTimeframe(note)
+
+/** The suggestion with the technician's timeframe in place of [timeframe]. */
+export const fillTimeframe = (text, timeframe) =>
+  String(text).replace(/\[timeframe\]/gi, () => String(timeframe ?? '').trim())
 
 const RESULT_TEXT = { PASS: 'PASS', FAIL: 'FAIL', NA: 'N/A' }
 const YESNO_TEXT = { YES: 'Yes', NO: 'No', NA: 'N/A' }
@@ -172,6 +176,21 @@ export function siteFails(site) {
         if (isFail(test, value)) out.push({ testId: test.id, ...where, value })
       }
     }
+  }
+  return out
+}
+
+// Where an open visit's notes still say [timeframe]: each room's id, and 'site'
+// for the whole-site step. Only notes on fails that show count: a section switched
+// off keeps its notes, but nobody can see them there to finish them.
+export function notesAwaitingTimeframe(visit) {
+  const out = []
+  for (const [roomId, entry] of Object.entries(visit?.rooms ?? {})) {
+    if (roomFails(entry).some(f => holdsTimeframe(entry.troubleshooting?.[f.testId]))) out.push(roomId)
+  }
+  const site = visit?.siteResults
+  if (siteFails(site).some(f => holdsTimeframe(site.troubleshooting?.[noteKey(f.testId, f.itemId)]))) {
+    out.push('site')
   }
   return out
 }

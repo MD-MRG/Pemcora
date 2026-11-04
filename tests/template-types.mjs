@@ -213,15 +213,20 @@ log('each item keeps its own answers',
   s(4).items[0].tests.map(t => t.answer).join('|') === 'Lights, ground floor|PASS|PASS|24 ms — PASS' &&
   s(4).items[1].tests.map(t => t.answer).join('|') === '|FAIL||',
   s(4).items.map(i => i.tests.map(t => t.answer).join('|')).join(' / '))
+// RCD 2 had gone by the end of the visit, so its name says so (C2d): another item
+// put in its place could have the same name.
 log('a No and a failed item test are the visit\'s fails, with their notes',
   same(snap.site.failed, [
-    { label: 'Push-button test', item: 'RCD 2 — power', note: vic.failNotes[0] },
+    { label: 'Push-button test', item: 'RCD 2 — power (removed)', note: vic.failNotes[0] },
     { label: sec(5).tests[0].label, note: 'Hall alarm missing' },
   ]), JSON.stringify(snap.site.failed))
 log('text answers and comments come through',
   s(6).tests[0].answer === 'Replaced cracked socket-outlet in the laundry' && snap.site.comments === 'Switchboard labels faded.')
-log('the equipment list leaves out removed items',
-  snap.equipment.map(e => e.label).join() === 'RCD 1 — lights,Hall alarm' && snap.equipment[0].room === 'Garage')
+// Since C2d, only the types the list tests: the electrical check doesn't test the
+// hall's smoke alarm.
+log('the equipment list leaves out removed items, and the types the list doesn\'t test',
+  snap.equipment.map(e => e.label).join() === 'RCD 1 — lights' && snap.equipment[0].room === 'Garage',
+  snap.equipment.map(e => e.label).join())
 log('a room opened on a whole-site check reports no empty list and none of its sections',
   buildReportSnapshot({ visit: { rooms: { garage: { template: vic, sections: { [sec(0).id]: true } } } }, rooms: siteRooms })
     .rooms[0].sections.length === 0)
@@ -357,8 +362,8 @@ const homeClients = visit => [{
   locations: [{ id: 'l1', address: '1 High St', suburb: 'Town', floors: [{ id: 'f1', label: 'Ground', rooms: [{ id: 'garage', name: 'Garage' }] }], visits: [visit] }],
 }]
 const homeRow = attention(homeClients(homeVisit)).find(r => r.type === 'fails')
-log('Home flags whole-site fails with no finished note',
-  homeRow?.count === 2 && homeRow.roomName === 'Whole site' && homeRow.roomId === null, JSON.stringify(homeRow))
+log('Home flags whole-site fails with no finished note, and opens the whole-site step for them',
+  homeRow?.count === 2 && homeRow.roomName === 'Whole site' && homeRow.roomId === 'site', JSON.stringify(homeRow))
 log('Home counts them as the visit\'s fails', openWork(homeClients(homeVisit))[0].fails === 2)
 const noted = structuredClone(homeVisit)
 noted.siteResults.troubleshooting = {
@@ -422,9 +427,9 @@ log('choices, readings and text print as answered',
   siteText.includes('Each defect and what was done (repaired, replaced, retested)|Replaced cracked socket-outlet in the laundry'))
 log('each item gets its own heading and rows',
   siteText.includes('RCD 1 — lights (Garage)|') && siteText.includes('Trip time|24 ms — PASS') &&
-  at('RCD 2 — power|') > at('RCD 1 — lights (Garage)|'))
+  at('RCD 2 — power (removed)|') > at('RCD 1 — lights (Garage)|'))
 log('fails are listed with the item they belong to',
-  siteText.includes(`RCD 2 — power — Push-button test|${vic.failNotes[0]}`))
+  siteText.includes(`RCD 2 — power (removed) — Push-button test|${vic.failNotes[0]}`))
 const noRow = siteRows.find(r => textOf(r).endsWith('|No'))
 log('a No prints in the fail colour', noRow?.getCell(2).font?.color?.argb === 'FFC22E1C')
 

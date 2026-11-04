@@ -1,6 +1,7 @@
 import { reportImage } from './logo.js'
 import { answerTone } from './testTypes.js'
 import { buildReportSnapshot } from './reportSnapshot.js'
+import { assetTypePlural } from '../data/packs/shared/assetTypes.js'
 
 // Excel report for a visit.
 //
@@ -72,6 +73,8 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  * Pure — builds and returns the workbook. No DOM, so it can be exercised in
  * Node as well as the browser.
  */
+const OUTCOME_TEXT = { compliant: 'Compliant', non_compliant: 'Non-compliant' }
+
 export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [], sheetName = 'PM Report' }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
@@ -143,7 +146,13 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     merge(r)
     r.getCell(1).font = { bold: true, size: 13, color: { argb: NAVY } }
   }
-  const contact = [company.abn && `ABN ${company.abn}`, company.phone, company.email]
+  const contact = [
+    company.abn && `ABN ${company.abn}`,
+    company.licence_number && `Licence ${company.licence_number}`,
+    company.rec_number && `REC ${company.rec_number}`,
+    company.phone,
+    company.email,
+  ]
     .filter(Boolean)
     .join('  ·  ')
   if (contact) {
@@ -168,6 +177,12 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   kv('Technician', visit.technician ?? '')
   kv('Visit started', (visit.startedAt ?? '').slice(0, 10))
   kv('Visit completed', (visit.completedAt ?? '').slice(0, 10))
+  // Only a check that is signed off has these, so an AV report is as it was.
+  if (visit.outcome) kv('Outcome', OUTCOME_TEXT[visit.outcome] ?? visit.outcome)
+  if (visit.signoff) {
+    kv('Signed off by', [visit.signoff.technician, visit.signoff.licence_number && `Licence ${visit.signoff.licence_number}`]
+      .filter(Boolean).join(' · '))
+  }
   blank()
 
   const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle })
@@ -226,6 +241,37 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
       blank()
     }
     notesAndComments(snapshot.site)
+  }
+
+  // The items that stood at the site when the visit finished, and those taken out
+  // during it, after the whole-site results that test them (C2d).
+  if (snapshot.equipment.length) {
+    roomHeader('Equipment')
+    blank()
+    const day = (visit.completedAt ?? new Date().toISOString()).slice(0, 10)
+    const date = iso => (iso ?? '').slice(0, 10)
+    for (const type of [...new Set(snapshot.equipment.map(e => e.assetType))]) {
+      const plural = assetTypePlural(type)
+      sectionHeader(plural.charAt(0).toUpperCase() + plural.slice(1))
+      for (const item of snapshot.equipment.filter(e => e.assetType === type)) {
+        const gone = item.status === 'in place' ? '' : ` (${item.status})`
+        const h = ws.addRow([(item.room ? `${item.label} (${item.room})` : item.label) + gone])
+        merge(h)
+        h.getCell(1).font = { bold: true }
+        const line = (k, v) => v && ws.addRow([k, v])
+        for (const [label, text] of item.details) line(label, text)
+        line('Make and model', [item.make, item.model].filter(Boolean).join(' '))
+        line('Serial number', item.serial)
+        line('Installed', item.installedOn)
+        const expires = line('Expires', item.expiresOn && (item.expiresOn <= day && !gone ? `${item.expiresOn} (expired)` : item.expiresOn))
+        if (expires && item.expiresOn <= day && !gone) expires.getCell(2).font = { bold: true, color: { argb: 'FFC22E1C' } }
+        if (item.status === 'replaced') line('Replaced', date(item.removedAt))
+        else if (item.status === 'removed') line('Removed', date(item.removedAt))
+        if (item.replaces) line('Put in', `${date(item.createdAt)}, replacing ${item.replaces}`)
+      }
+      blank()
+    }
+    blank()
   }
 
   snapshot.rooms.forEach((room, idx) => {

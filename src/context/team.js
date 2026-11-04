@@ -1,5 +1,5 @@
 import { createContext, useContext, useSyncExternalStore } from 'react'
-import { currentEntitlements, subscribeEntitlements } from '../lib/entitlements.js'
+import { currentEntitlements, roomTypesFor, subscribeEntitlements } from '../lib/entitlements.js'
 import { useAuth } from './auth.js'
 
 // Split from TeamProvider for the reason given in auth.js — a module that
@@ -29,3 +29,6 @@ export function useCanManage() {
 
 /** The team's plan and packs, or null while they aren't known. See entitlements.js. */
 export const useEntitlements = () => useSyncExternalStore(subscribeEntitlements, currentEntitlements)
+
+/** The types this team's rooms can be given; none for a team whose packs have none. */
+export const useRoomTypes = () => roomTypesFor(useEntitlements())

@@ -10,6 +10,13 @@ export default {
       // sections as needed.
       id: 'custom',
       label: 'Custom list',
+      nav: {
+        key: 'custom-list',
+        path: '/custom-list',
+        label: 'Custom List',
+        blurb: 'Build a one-off checklist from your own test items',
+        icon: 'list',
+      },
       page: {
         title: 'Custom List',
         progressNoun: 'Custom list',

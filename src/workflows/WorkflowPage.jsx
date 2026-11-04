@@ -1,12 +1,18 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react'
 // Aliased: `location` already means the site being worked on throughout this file.
 import { useLocation as useRouterLocation, useOutletContext } from 'react-router-dom'
-import { useCanManage, useEntitlements } from '../context/team.js'
+import { useCanManage, useEntitlements, useRoomTypes } from '../context/team.js'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
-import ResultSelector from '../components/ResultSelector.jsx'
+import AnswerInput from '../components/AnswerInput.jsx'
+import FailNote from '../components/FailNote.jsx'
 import UpgradeSheet from '../components/UpgradeSheet.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
+import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
+import SiteStep from './SiteStep.jsx'
+import EquipmentPanel from './EquipmentPanel.jsx'
+import { SITE, gapLines, isSiteOnly, siteSectionsOf } from '../lib/siteStep.js'
+import { panelTypes } from '../lib/equipment.js'
 import { IconTrash } from '../components/icons.jsx'
 import {
   listClients,
@@ -16,6 +22,7 @@ import {
   retryHeldVisit,
   discardHeldVisit,
   completeVisit,
+  signOffVisit,
   roomsWithStatus,
   addRoomToLocation,
   getRoomEntry,
@@ -25,14 +32,16 @@ import {
   roomResultCount,
   deleteExport,
   reopenVisit,
+  listAssets,
 } from '../lib/clientStore.js'
 import { getTemplate } from '../lib/templateStore.js'
 import { getSettings } from '../lib/settingsStore.js'
 import { setVisitTechnician } from '../lib/clientStore.js'
 import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import SignOffDialog from '../components/SignOffDialog.jsx'
 import { downloadReport } from '../lib/report.js'
-import { isFail, MAIN } from '../lib/testTypes.js'
+import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
@@ -60,7 +69,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
   const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
@@ -77,12 +86,15 @@ function VisitCard({ visit, roomCount, doneCount, config, canManage, starting, u
         <>
           <h3 className="text-[15px] font-bold">{config.progressNoun} in progress</h3>
           <p className="text-ink-soft mt-1 text-[13px] tabular-nums">
-            Started {fmt(visit.startedAt)} · {doneCount} of {roomCount} rooms complete
+            Started {fmt(visit.startedAt)} · {progress ?? `${doneCount} of ${roomCount} rooms complete`}
           </p>
         </>
       ) : (
         <>
-          <h3 className="text-[15px] font-bold">Last visit completed {fmt(visit.completedAt)}</h3>
+          <h3 className="text-[15px] font-bold">
+            Last visit completed {fmt(visit.completedAt)}
+            {visit.outcome && <> · {visit.outcome === 'compliant' ? 'Compliant' : 'Non-compliant'}</>}
+          </h3>
           <p className="text-ink-soft mt-1 text-[13px]">
             {visit.exports?.length
               ? `${visit.exports.length} report(s) exported`
@@ -197,11 +209,12 @@ function ReportList({ visit, canManage, onDelete }) {
 }
 
 /* ── Add room — a floor is required, so the room lands in the right place ─── */
-function AddRoomForm({ floors, onAdd, onCancel }) {
+function AddRoomForm({ floors, roomTypes, onAdd, onCancel }) {
   const [floorId, setFloorId] = useState(floors[0]?.id ?? '__new')
   const [newFloorLabel, setNewFloorLabel] = useState('')
   const [name, setName] = useState('')
   const [planNumber, setPlanNumber] = useState('')
+  const [roomType, setRoomType] = useState('')
 
   const creatingFloor = floorId === '__new'
   const ready = name.trim() && (!creatingFloor || newFloorLabel.trim())
@@ -253,6 +266,9 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
           onChange={setPlanNumber}
           placeholder="Plan number"
         />
+        {roomTypes.length > 0 && (
+          <RoomTypeSelect roomTypes={roomTypes} value={roomType} onChange={setRoomType} label="Room type" />
+        )}
       </div>
 
       <div className="mt-4 flex gap-2">
@@ -260,7 +276,7 @@ function AddRoomForm({ floors, onAdd, onCancel }) {
           type="button"
           disabled={!ready}
           onClick={() =>
-            onAdd({ floorId: creatingFloor ? null : floorId, newFloorLabel, name, planNumber })
+            onAdd({ floorId: creatingFloor ? null : floorId, newFloorLabel, name, planNumber, roomType })
           }
           className="bg-navy min-h-[44px] rounded-lg px-5 text-[13.5px] font-semibold text-white enabled:hover:bg-[#24486e] disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -283,6 +299,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [adding, setAdding] = useState(false)
   const [askExport, setAskExport] = useState(false)
   const [askFinish, setAskFinish] = useState(false)
+  // Signing off a check that ends that way, then exporting if that's what was asked.
+  const [signing, setSigning] = useState(null)
+  const [unfinished, setUnfinished] = useState(null)
   const [askDeleteRoom, setAskDeleteRoom] = useState(null)
   const [askDeleteReport, setAskDeleteReport] = useState(null)
   const [askReopen, setAskReopen] = useState(false)
@@ -292,6 +311,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [askDiscard, setAskDiscard] = useState(null)
   const [sheet, setSheet] = useState(null)
   const entitlements = useEntitlements()
+  const roomTypes = useRoomTypes()
 
   // A save in the background can refuse a visit or join it to another device's,
   // and this page has to show that without anyone touching it.
@@ -309,6 +329,22 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const rooms = roomsWithStatus(client.id, location.id, current)
   const done = rooms.filter(r => r.status === 'complete').length
 
+  // The whole-site step, when the list has one: as the visit snapshotted it, or
+  // as it stands for a visit that hasn't opened it yet.
+  const list = current?.siteResults?.template && Object.keys(current.siteResults.template).length
+    ? current.siteResults.template
+    : getTemplate(config.templateKind)
+  const hasSiteStep = siteSectionsOf(list).length > 0
+  // Nothing to do room by room: Continue goes straight to the whole-site step.
+  const siteOnly = isSiteOnly(list)
+  const site = current?.siteResults
+  const siteFailCount = siteFails(site).length
+  const siteStarted = Object.values(site?.results ?? {}).some(g => Object.keys(g ?? {}).length > 0)
+  const assets = listAssets(client.id, location.id)
+  const gaps = hasSiteStep ? gapLines(list, rooms, assets) : []
+  // The item types the list tests one by one: none on an AV list.
+  const itemTypes = panelTypes(list)
+
   // Group rooms under their floor, preserving floor order.
   const grouped = useMemo(() => {
     const map = new Map()
@@ -319,26 +355,39 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     return [...map.entries()]
   }, [rooms])
 
-  const runExport = async (mode, remember = false) => {
-    if (!current) return
+  const runExport = async (mode, remember = false, visit = current) => {
+    if (!visit) return
     const revision =
-      (current.exports ?? []).length === 0
+      (visit.exports ?? []).length === 0
         ? 1
         : mode === 'replace'
-          ? nextRevision(current) - 1
-          : nextRevision(current)
+          ? nextRevision(visit) - 1
+          : nextRevision(visit)
     const filename = await downloadReport({
-      client, location, visit: current, rooms, revision, reportTitle: config.reportTitle,
+      client, location, visit, rooms, revision, reportTitle: config.reportTitle,
       sheetName: config.sheetName,
+      assets,
       settings: getSettings(),
     })
-    recordExport(client.id, location.id, current.id, { mode, filename })
-    if (remember) setExportPreference(client.id, location.id, current.id, mode)
+    recordExport(client.id, location.id, visit.id, { mode, filename })
+    if (remember) setExportPreference(client.id, location.id, visit.id, mode)
     setAskExport(false)
     onChanged()
   }
 
   const floors = (location.floors ?? []).map(f => ({ id: f.id, label: f.label }))
+
+  // A note chosen from the suggestions can still say [timeframe]. Sent like that,
+  // it would reach a report that can't be changed, so an open visit with one can't
+  // be finished, by Finish or by exporting, until it's filled in.
+  const awaitingTimeframe = () => {
+    if (!current || current.completedAt) return false
+    const where = notesAwaitingTimeframe(current).map(id =>
+      id === 'site' ? 'the whole-site step' : rooms.find(r => r.id === id)?.name || 'a room',
+    )
+    setUnfinished(where.length ? where : null)
+    return where.length > 0
+  }
 
   return (
     <>
@@ -420,6 +469,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         visit={current}
         roomCount={rooms.length}
         doneCount={done}
+        // A check done in the whole-site step has no rooms to complete.
+        progress={siteOnly ? (siteStarted ? 'whole site in progress' : 'whole site not started') : null}
         starting={starting}
         usage={usageLine(entitlements)}
         needsUpgrade={startNeedsUpgrade(entitlements, config.kind)}
@@ -458,11 +509,15 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           onChanged()
         }}
         onContinue={() => {
+          if (siteOnly) return onOpenRoom(SITE)
           const first = rooms.find(r => r.status !== 'complete') ?? rooms[0]
           if (first) onOpenRoom(first.id)
         }}
         onExport={() => {
-          if (!current) return
+          if (!current || awaitingTimeframe()) return
+          // Exporting finishes an open visit, and a check that's signed off is
+          // finished by signing. So sign first, then the report goes.
+          if (config.signoff && !current.completedAt) return setSigning({ thenExport: true })
           const already = (current.exports ?? []).length > 0
           // Only ask once a report exists, and skip the prompt if the
           // technician chose to remember an answer for this visit.
@@ -474,13 +529,25 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           setVisitTechnician(client.id, location.id, current.id, value)
           onChanged()
         }}
-        onFinish={() => setAskFinish(true)}
+        onFinish={() => {
+          if (awaitingTimeframe()) return
+          if (config.signoff) setSigning({ thenExport: false })
+          else setAskFinish(true)
+        }}
         canManage={canManage}
         onReopen={() => {
           setReopenError('')
           setAskReopen(true)
         }}
       />
+
+      {unfinished && (
+        <div className="mb-4">
+          <Notice blocked title="A note still says [timeframe]">
+            In {unfinished.join(', ')}. Fill in the timeframe, then finish the visit.
+          </Notice>
+        </div>
+      )}
 
       {reopenError && (
         <p className="border-fail/30 bg-fail/5 text-fail mb-4 rounded-lg border px-4 py-3 text-[13.5px]">
@@ -495,6 +562,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
       {adding ? (
         <AddRoomForm
           floors={floors}
+          roomTypes={roomTypes}
           onCancel={() => setAdding(false)}
           onAdd={payload => {
             addRoomToLocation(client.id, location.id, payload)
@@ -510,6 +578,40 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         >
           + Add room
         </button>
+      )}
+
+      {gaps.length > 0 && (
+        <div className="mb-4">
+          <Notice title="Coverage">
+            <ul className="m-0 list-disc pl-5">
+              {gaps.map(line => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </Notice>
+        </div>
+      )}
+
+      {hasSiteStep && (
+        <section className="border-hair mb-4 overflow-hidden rounded-xl border bg-white">
+          <button
+            type="button"
+            onClick={() => onOpenRoom(SITE)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+          >
+            <span className="min-w-0">
+              <span className="block text-[14px] font-semibold">Whole site</span>
+              <span className="text-ink-soft block truncate text-[12px]">
+                {siteSectionsOf(list).map(s => s.label).join(' · ')}
+              </span>
+            </span>
+            {/* Its fails show as a finished room's do, whatever else it says. */}
+            <StatusChip
+              status={siteFailCount ? 'complete' : siteStarted ? 'in-progress' : 'not-started'}
+              fails={siteFailCount}
+            />
+          </button>
+        </section>
       )}
 
       {rooms.length === 0 ? (
@@ -550,7 +652,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
                           </span>
                         )}
                       </span>
-                      <StatusChip status={room.status} fails={room.fails} />
+                      {/* Nothing to do in a room on a whole-site check: the rooms are
+                          there to pin its items to. */}
+                      {!siteOnly && <StatusChip status={room.status} fails={room.fails} />}
                     </button>
                     <button
                       type="button"
@@ -568,6 +672,12 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         </div>
       )}
 
+      {itemTypes.length > 0 && (
+        <div className="mt-4">
+          <EquipmentPanel client={client} location={location} rooms={rooms} types={itemTypes} onChanged={onChanged} />
+        </div>
+      )}
+
       {askFinish && current && (
         <ConfirmDialog
           title="Finish this visit?"
@@ -581,6 +691,27 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         >
           It moves into history and a new visit can be started. Results are kept.
         </ConfirmDialog>
+      )}
+
+      {signing && current && (
+        <SignOffDialog
+          title={`Sign off this ${config.progressNoun.toLowerCase()}`}
+          outcome={current.outcome}
+          signoff={current.signoff}
+          technician={current.technician || getSettings().technician}
+          licenceNumber={getSettings().licenceNumber}
+          fails={rooms.reduce((n, r) => n + (r.fails ?? 0), 0) + siteFailCount}
+          onCancel={() => setSigning(null)}
+          onSign={answer => {
+            signOffVisit(client.id, location.id, current.id, answer)
+            const { thenExport } = signing
+            setSigning(null)
+            onChanged()
+            if (!thenExport) return
+            const signed = listVisits(client.id, location.id, config.kind).find(v => v.id === current.id)
+            runExport(signed?.exportPreference ?? 'revision', false, signed)
+          }}
+        />
       )}
 
       {askDeleteRoom && (
@@ -684,11 +815,16 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
 }
 
 /* ── Level 4 · room tests ─────────────────────────────────────────────────── */
-function TestRow({ test, value, onChange, readOnly }) {
+// PASS / FAIL / N/A rows are laid out exactly as they always were. Any other
+// answer may need the room to wrap under its label on a phone.
+function TestRow({ test, value, reading, onAnswer, readOnly }) {
+  const wraps = typeOf(test) !== 'check'
   return (
-    <div className="border-hair flex items-center justify-between gap-4 border-b px-4 py-2.5 last:border-0">
+    <div
+      className={`border-hair flex items-center justify-between gap-4 border-b px-4 py-2.5 last:border-0 ${wraps ? 'flex-wrap gap-y-2' : ''}`}
+    >
       <span className="min-w-0 text-[14px] font-medium">{test.label}</span>
-      <ResultSelector value={value ?? null} onChange={onChange} label={test.label} disabled={readOnly} />
+      <AnswerInput test={test} value={value} reading={reading} onAnswer={onAnswer} readOnly={readOnly} />
     </div>
   )
 }
@@ -713,11 +849,16 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
   const snapshot = stored?.template ?? template
 
   const [results, setResults] = useState(() => stored?.results ?? { main: {} })
+  const [readings, setReadings] = useState(() => stored?.readings ?? {})
+  // A room opened for the first time starts as the last one did, plus whatever
+  // its type switches on: the bathroom section in a bathroom.
   const [sections, setSections] = useState(
     () =>
-      stored?.sections ??
-      (visit ? lastSectionToggles(client.id, location.id, visit.id) : null) ??
-      Object.fromEntries(snapshot.sections.map(s => [s.id, false])),
+      stored?.sections ?? {
+        ...((visit ? lastSectionToggles(client.id, location.id, visit.id) : null) ??
+          Object.fromEntries(snapshot.sections.map(s => [s.id, false]))),
+        ...sectionsForRoomType(snapshot, room?.roomType),
+      },
   )
   const [troubleshooting, setTroubleshooting] = useState(() => stored?.troubleshooting ?? {})
   const [comments, setComments] = useState(() => stored?.comments ?? '')
@@ -739,6 +880,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
         const fresh = getRoomEntry(client.id, location.id, visit.id, roomId)
         if (!fresh) return
         setResults(fresh.results ?? { main: {} })
+        setReadings(fresh.readings ?? {})
         if (fresh.sections) setSections(fresh.sections)
         setTroubleshooting(fresh.troubleshooting ?? {})
         setComplete(fresh.status === 'complete')
@@ -763,6 +905,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
       if (readOnly || !visit) return
       saveRoomEntry(client.id, location.id, visit.id, roomId, {
         results,
+        readings,
         sections,
         troubleshooting,
         comments,
@@ -772,32 +915,41 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
       })
       onChanged()
     },
-    [client.id, location.id, visit, roomId, results, sections, troubleshooting, comments, snapshot, complete, onChanged, readOnly],
+    [client.id, location.id, visit, roomId, results, readings, sections, troubleshooting, comments, snapshot, complete, onChanged, readOnly],
   )
 
-  const applyResult = (groupId, testId, value) => {
+  // A reading goes under readings, beside the verdict its limits give, if any.
+  const applyResult = (groupId, testId, value, reading) => {
     const was = results[groupId]?.[testId]
     const nextResults = { ...results, [groupId]: { ...(results[groupId] ?? {}), [testId]: value } }
+    let nextReadings = readings
+    if (typeOf(testFor(testId)) === 'measure') {
+      const group = { ...(readings[groupId] ?? {}) }
+      if (reading) group[testId] = reading
+      else delete group[testId]
+      nextReadings = { ...readings, [groupId]: group }
+    }
     let nextNotes = troubleshooting
     if (leavesFail(testId, was, value) && testId in troubleshooting) {
       nextNotes = { ...troubleshooting }
       delete nextNotes[testId]
     }
     setResults(nextResults)
+    setReadings(nextReadings)
     setTroubleshooting(nextNotes)
-    persist({ results: nextResults, troubleshooting: nextNotes })
+    persist({ results: nextResults, readings: nextReadings, troubleshooting: nextNotes })
   }
 
-  const setResult = (groupId, testId, value) => {
+  const setResult = (groupId, testId, value, reading) => {
     if (readOnly) return
     const was = results[groupId]?.[testId]
     const note = troubleshooting[testId]
     // Leaving FAIL discards the note it generated — confirm first (v1 §8.2).
     if (leavesFail(testId, was, value) && note && note.trim()) {
-      setPending({ groupId, testId, value, label: labelFor(testId) })
+      setPending({ groupId, testId, value, reading, label: labelFor(testId) })
       return
     }
-    applyResult(groupId, testId, value)
+    applyResult(groupId, testId, value, reading)
   }
 
   const toggleSection = (sectionId, on) => {
@@ -861,7 +1013,8 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
               key={t.id}
               test={t}
               value={results.main?.[t.id]}
-              onChange={v => setResult('main', t.id, v)}
+              reading={readings.main?.[t.id]}
+              onAnswer={(v, reading) => setResult('main', t.id, v, reading)}
               readOnly={readOnly}
             />
           ))}
@@ -885,7 +1038,8 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
                   key={t.id}
                   test={t}
                   value={results[section.id]?.[t.id]}
-                  onChange={v => setResult(section.id, t.id, v)}
+                  reading={readings[section.id]?.[t.id]}
+                  onAnswer={(v, reading) => setResult(section.id, t.id, v, reading)}
                   readOnly={readOnly}
                 />
               ))}
@@ -899,19 +1053,15 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
           ) : (
             <div className="flex flex-col gap-3">
               {failed.map(t => (
-                <label key={t.id} className="block">
-                  <span className="text-ink-soft mb-1.5 block text-[12.5px] font-semibold">
-                    {t.label}
-                  </span>
-                  <textarea
-                    rows={2}
-                    value={troubleshooting[t.id] ?? ''}
-                    onChange={e => setNote(t.id, e.target.value)}
-                    readOnly={readOnly}
-                    placeholder="Describe the issue / action taken"
-                    className="border-hair text-ink focus:border-navy w-full resize-y rounded-lg border px-3 py-2 text-[14px] outline-none"
-                  />
-                </label>
+                <FailNote
+                  key={t.id}
+                  label={t.label}
+                  note={troubleshooting[t.id]}
+                  onChange={text => setNote(t.id, text)}
+                  suggestions={snapshot.failNotes}
+                  readOnly={readOnly}
+                  placeholder={config.notePrompt ?? 'Describe the issue / action taken'}
+                />
               ))}
             </div>
           )}
@@ -968,7 +1118,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
           cancelLabel="Keep the note"
           onCancel={() => setPending(null)}
           onConfirm={() => {
-            applyResult(pending.groupId, pending.testId, pending.value)
+            applyResult(pending.groupId, pending.testId, pending.value, pending.reading)
             setPending(null)
           }}
         >
@@ -1041,6 +1191,32 @@ export default function WorkflowPage({ config }) {
             refresh()
           }}
           onOpen={setLocationId}
+        />
+      </div>
+    )
+  }
+
+  if (roomId === SITE) {
+    const visit = currentVisit(listVisits(client.id, location.id, config.kind))
+    return (
+      <div className="flex h-full flex-col p-4 sm:p-6">
+        <SiteStep
+          client={client}
+          location={location}
+          visit={visit}
+          rooms={roomsWithStatus(client.id, location.id, visit)}
+          readOnly={!visit || !!visit.completedAt}
+          config={config}
+          canManage={canManage}
+          onReopen={() => {
+            if (visit) reopenVisit(client.id, location.id, visit.id)
+            refresh()
+          }}
+          onBack={() => {
+            setRoomId(null)
+            refresh()
+          }}
+          onChanged={refresh}
         />
       </div>
     )

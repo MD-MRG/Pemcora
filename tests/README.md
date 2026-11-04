@@ -37,7 +37,8 @@ the current one. Run them from a directory you don't mind PNG files landing in.
 registry (`src/data/packs/`) and `templateStore.js` straight into Node and holds
 them to the catalogue in `supabase/migrations/` — every pack and workflow there
 has an entry, the AV lists are the ones Pemcora shipped with, and every seed
-becomes a template with only the fields step B2 defines (36 checks).
+becomes a template with only the fields step B2 defines, and each workflow's interval is the
+catalogue's (38 checks).
 
 ```
 node tests/packs.mjs
@@ -62,8 +63,8 @@ visit continued the next day, two devices on the same visit, a refused offline s
 
 | Suite | Runs against | Checks |
 |---|---|---|
-| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 171 |
-| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 101 |
+| `save-queue.mjs` | Node: the real cache and adapter, with a stand-in database that can lose connections on demand. Also classifies failures as the real Supabase client reports them | 241 |
+| `offline.mjs` | A real browser and real device storage, through the real screens, with browser contexts as devices sharing the stand-in. Checks `api.js` against PostgREST's real answers. Every request off the machine is refused | 130 |
 | `offline-e2e.mjs` | The live project. Not in `npm test` | |
 
 `offline-open.mjs` is step B3b, opening with no signal. Only a production build has a
@@ -71,7 +72,9 @@ service worker, so it builds one under `node_modules/.cache` (not `dist/`) and s
 itself, with a backend address that doesn't exist, so nothing can reach the live project.
 It covers an expired login, working a whole visit and exporting its report with no
 connection, a network that goes nowhere, signing out offline, a deploy getting through, and
-how the app reads what a team has, and a new person going through the real gate (57 checks). The suite runs in `npm test`, or on its own with no dev server:
+how the app reads what a team has, a new person going through the real gate, and a device whose
+login was ended from another device, opening or already open: the sign-in screen saying so, and
+only work that exists nowhere else kept (71 checks). The suite runs in `npm test`, or on its own with no dev server:
 
 ```
 node tests/offline-open.mjs
@@ -122,6 +125,123 @@ including a team made with its answer lost.
 
 ```
 node tests/signup.mjs
+```
+
+## The workflow page (Phase C)
+
+`workflow-pages.mjs` is step C1c. In Node: every workflow's page, name and route come from
+the pack registry, Home names a visit by its own workflow, a pack still marked proposed is
+never assumed, and room types go only to a team whose packs have them. Then in a browser in
+test mode, with a team's plan put on the page as DataBoot would: an AV team's screens are as
+they were, a team holding the Queensland pack sees its pages, Resume lands on them, and a
+room's type is saved from the floor plan editor and from Add room and switches on the sections
+it names (35 checks).
+
+```
+node tests/workflow-pages.mjs
+```
+
+`answers.mjs` is step C1d. A Custom List built with one test of each type and suggested
+wording, worked through in a browser: what each type records, a reading kept with its unit and
+judged against its limits, a No or a low reading opening the note box, the suggestions and the
+one that asks for a timeframe, finishing and exporting refused while a note still says
+[timeframe], and the suggestions reworded in Settings, where an AV list shows none (37 checks).
+
+```
+node tests/answers.mjs
+```
+
+`site-step.mjs` is step C1e. The rules for coverage and items in Node, then a Queensland smoke
+alarm inspection walked in a browser: the whole-site step from the room list, alarms added as
+they're tested and pinned to their rooms, a bedroom left without one named, a failed alarm
+asked why and told it has to be replaced, its fails on the room list and Home, the report, and
+an AV visit unchanged (36 checks).
+
+```
+node tests/site-step.mjs
+```
+
+`signoff.mjs` is step C1f. A Queensland smoke alarm inspection finished by signing off, in a
+browser: what the sign-off needs, what's kept with the visit, the report it exports (read back
+with ExcelJS), a correction signed again, exporting an open check, and an AV visit finished and
+exported as it always was (22 checks).
+
+```
+node tests/signoff.mjs
+```
+
+`equipment.mjs` is steps C2, C2b and C2d. The rules for item types and expiry dates, and the report's
+equipment as the snapshot and the Excel export lay it out, in Node; then a Queensland
+smoke alarm site in a browser: the equipment panel before any visit, alarms added and edited with
+their own fields, a manufacture date filling in the expiry, expired and soon-to-expire alarms
+flagged, a removed one kept under Removed, the whole-site step testing the alarms the panel
+added, an alarm replaced from the panel and from a failed alarm's note, one removed, and no
+panel on an AV page (69 checks).
+
+```
+node tests/equipment.mjs
+```
+
+`label-photo.mjs` is step C2c. A photo of a smoke alarm's label, in a browser that answers every
+request off the machine itself, as the database and the photo bucket would: the photo made small
+before it goes, its record first in the team's own folder and then the file, a failed upload
+taking its record with it, the plan's refusal getting the upgrade sheet, no signal sending
+nothing, and the Pro tag once the limits are on (26 checks). The photo checks need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/label-photo.mjs
+```
+
+`client-settings.mjs` is steps C3, C3b and C3c. The interval rules in Node, then a browser with
+the team's packs put in place as the app reads them, answering every request off the machine
+itself: an AV team's Settings with no licence numbers, a team doing electrical checks recording
+the business's licence and REC numbers and the technician's own, the sign-off filling it in, the
+report printing the business's, the team's reminders switch, a client's contact and reminders
+switch on Edit Client, and how often checks are due for the team and for one client, refused,
+offline, and never for one the law fixes (36 checks).
+
+```
+node tests/client-settings.mjs
+```
+
+`due.mjs` is steps C4 and C4b. The Due page's rules in Node, then the page in a browser
+answering every request off the machine itself, as `due_list()` and `due_opt_outs()` would: the
+list in its order, named and dated in words, filtered by client, each check's reminders switch
+and a refusal, "no longer needed" from the opt-out list, the page before 0009 is applied, the
+last list kept on the device without the contacts' emails and shown dated with no signal, and a
+landlord's `/due` left as it was (33 checks).
+`offline-open.mjs` checks that signing out removes the kept list.
+
+```
+node tests/due.mjs
+```
+
+`devices.mjs` is step C5b. Naming a device from its browser details and finding this device
+in its own token, in Node; then the signed-in devices list put on the page by itself (it only
+renders with a real login): this device first, signing one out and all the others after
+asking, a refusal, the list before 0010 is applied and with no signal; and `api.js`'s calls
+against the answers the database gives (27 checks). `devices-e2e.mjs` does it for real.
+
+```
+node tests/devices.mjs
+```
+
+`renewal.mjs` is step C5c, in Node with no dev server: telling a login ended elsewhere from a
+renewal that just failed, by the Auth server's error code, never its message (10 checks).
+
+```
+node tests/renewal.mjs
+```
+
+`devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
+only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
+the logins, ends one from another and the rest at once, checks the ended ones can't renew
+and the other can, then has the app in a browser find it was signed out. It makes no team,
+changes no data, and ends every login it made.
+
+```
+node tests/devices-e2e.mjs <email> <password>
 ```
 
 ## `supabase-e2e.mjs` — the only suite that runs on the real backend

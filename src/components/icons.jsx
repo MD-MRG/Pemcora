@@ -25,6 +25,23 @@ export const IconHome = p => (
   </Svg>
 )
 
+// An electrical safety check: a lightning bolt.
+export const IconElectrical = p => (
+  <Svg {...p}>
+    <path d="M13.2 3 5.5 13.4h5.8L10.4 21l8.1-10.6h-5.9L13.2 3Z" />
+  </Svg>
+)
+
+// A smoke alarm: a ceiling-mounted disc, sounding.
+export const IconAlarm = p => (
+  <Svg {...p}>
+    <path d="M4 5h16" />
+    <path d="M6.5 5v1.6a5.5 5.5 0 0 0 11 0V5" />
+    <circle cx="12" cy="7.4" r="1.2" />
+    <path d="M8.4 15.6a5.2 5.2 0 0 0 7.2 0M6.2 18.6a8.4 8.4 0 0 0 11.6 0" />
+  </Svg>
+)
+
 export const IconClientNew = p => (
   <Svg {...p}>
     <circle cx="9.5" cy="8" r="3.4" />

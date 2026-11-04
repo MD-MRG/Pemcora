@@ -31,7 +31,14 @@ const byPosition = (a, b) => (a.position ?? 0) - (b.position ?? 0)
 // A friendlier message that keeps its code, which is what saveErrors.js goes by.
 const coded = (message, code) => Object.assign(new Error(message), { code })
 
-const PARENT = { clients: 'client', locations: 'site', floors: 'floor', rooms: 'room', visits: 'visit' }
+const PARENT = {
+  clients: 'client',
+  locations: 'site',
+  floors: 'floor',
+  rooms: 'room',
+  visits: 'visit',
+  assets: 'item',
+}
 
 /**
  * The security rules check that a new row hangs off a parent in the same team, and
@@ -59,6 +66,9 @@ const roomFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
   planNumber: r.plan_number ?? '',
+  // A key from the pack, such as 'bedroom': it switches sections on and is what
+  // coverage rules count by. Blank on a room nobody has typed.
+  roomType: r.room_type ?? '',
   position: r.position ?? 0,
 })
 
@@ -68,6 +78,7 @@ const roomToRow = (r, floorId, teamId, position) => ({
   team_id: teamId,
   name: r.name ?? '',
   plan_number: r.planNumber ?? '',
+  room_type: r.roomType ?? '',
   position: position ?? r.position ?? 0,
 })
 
@@ -108,6 +119,12 @@ const locationToRow = l => ({
 const clientFromRow = r => ({
   id: r.id,
   name: r.name ?? '',
+  // Who reports and re-check reminders go to, and whether this client gets
+  // reminders at all (0007).
+  contactName: r.contact_name ?? '',
+  contactEmail: r.contact_email ?? '',
+  contactPhone: r.contact_phone ?? '',
+  remindersEnabled: r.reminders_enabled ?? true,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   locations: (r.locations ?? []).map(locationFromRow),
@@ -129,6 +146,7 @@ const visitRoomFromRow = r => ({
   floorLabel: r.floor_label ?? '',
   position: r.position ?? 0,
   results: r.results ?? {},
+  readings: r.readings ?? {},
   troubleshooting: r.troubleshooting ?? {},
   // `sections` in the app, `sections_enabled` in the database — the column name
   // says what the value means, the app name is what the components already use.
@@ -146,6 +164,7 @@ const visitRoomToRow = e => ({
   floor_label: e.floorLabel ?? '',
   position: e.position ?? 0,
   results: e.results ?? {},
+  readings: e.readings ?? {},
   troubleshooting: e.troubleshooting ?? {},
   sections_enabled: e.sections ?? {},
   comments: e.comments ?? '',
@@ -166,6 +185,13 @@ const visitFromRow = r => ({
   firstCompletedAt: r.first_completed_at ?? null,
   createdBy: r.created_by,
   exportPreference: r.export_preference ?? null,
+  // The whole-site step: sections done once per visit, and those repeated for
+  // each item at the site. Shaped like a room (testTypes.js).
+  siteResults: r.site_results ?? {},
+  // The technician's declaration and signature at sign-off (C1), as the database
+  // stamped it: who was signed in and when it was saved are added there.
+  outcome: r.outcome ?? null,
+  signoff: r.signoff ?? null,
   rooms: Object.fromEntries(
     (r.visit_rooms ?? [])
       .filter(vr => vr.room_id)
@@ -183,6 +209,7 @@ const visitFromRow = r => ({
 
 const settingsFromRow = r => ({
   company: r.company ?? {},
+  remindersEnabled: r.reminders_enabled ?? true,
   logoFull: r.logo_full ?? null,
   logoCollapsed: r.logo_collapsed ?? null,
   plate: r.plate ?? 'brass',
@@ -194,6 +221,7 @@ const settingsToRow = s => {
   if ('logoFull' in s) row.logo_full = s.logoFull ?? null
   if ('logoCollapsed' in s) row.logo_collapsed = s.logoCollapsed ?? null
   if ('plate' in s) row.plate = s.plate ?? 'brass'
+  if ('remindersEnabled' in s) row.reminders_enabled = s.remindersEnabled !== false
   return row
 }
 
@@ -293,16 +321,18 @@ export async function getMemberPrefs(teamId, userId) {
     .eq('user_id', userId)
     .maybeSingle()
   if (error) throw error
-  return { defaultTechnician: data?.default_technician ?? '' }
+  // The licence number is the member's own (0007): set in Settings, filled in
+  // at sign-off.
+  return { defaultTechnician: data?.default_technician ?? '', licenceNumber: data?.licence_number ?? '' }
 }
 
+// Only the fields in `patch` are written, so saving the licence number never
+// blanks the technician's name, or the other way round.
 export async function saveMemberPrefs(teamId, userId, patch) {
-  const { error } = await supabase
-    .from('member_prefs')
-    .upsert(
-      { team_id: teamId, user_id: userId, default_technician: patch.defaultTechnician ?? '' },
-      { onConflict: 'team_id,user_id' },
-    )
+  const row = { team_id: teamId, user_id: userId }
+  if ('defaultTechnician' in patch) row.default_technician = patch.defaultTechnician ?? ''
+  if ('licenceNumber' in patch) row.licence_number = patch.licenceNumber ?? ''
+  const { error } = await supabase.from('member_prefs').upsert(row, { onConflict: 'team_id,user_id' })
   if (error) throw error
 }
 
@@ -663,6 +693,33 @@ export async function renameClient(clientId, name) {
   if (error) throw error
 }
 
+// A client's contact and reminders switch, each with what a blank is stored as.
+// The name has renameClient, which names a duplicate.
+export const CLIENT_DETAILS = {
+  contactName: ['contact_name', ''],
+  contactEmail: ['contact_email', ''],
+  contactPhone: ['contact_phone', ''],
+  remindersEnabled: ['reminders_enabled', true],
+}
+
+/**
+ * Sends only the details in `patch`, trimmed, so two devices changing different
+ * ones both keep theirs. A client deleted on another device has nothing left to
+ * save, as with renameClient: it is gone from the next load.
+ */
+export async function updateClientDetails(clientId, patch) {
+  const row = Object.fromEntries(
+    Object.entries(CLIENT_DETAILS)
+      .filter(([key]) => key in patch)
+      .map(([key, [column, blank]]) => {
+        const value = patch[key] ?? blank
+        return [column, typeof value === 'string' ? value.trim() : value]
+      }),
+  )
+  const { error } = await supabase.from('clients').update(row).eq('id', clientId)
+  if (error) throw error
+}
+
 export async function deleteClient(clientId) {
   const { error } = await supabase.from('clients').delete().eq('id', clientId)
   if (error) throw error
@@ -750,6 +807,7 @@ export async function updateRoom(roomId, patch) {
   const row = {}
   if ('name' in patch) row.name = patch.name ?? ''
   if ('planNumber' in patch) row.plan_number = patch.planNumber ?? ''
+  if ('roomType' in patch) row.room_type = patch.roomType ?? ''
   if ('position' in patch) row.position = patch.position ?? 0
   const { error } = await supabase.from('rooms').update(row).eq('id', roomId)
   if (error) throw error
@@ -805,6 +863,286 @@ export async function saveFloorPlan(teamId, locationId, floors) {
       else await addRoom(teamId, floorId, room, j)
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Equipment
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The items at a site, such as smoke alarms and RCDs, each optionally pinned to a
+// room. Removed, never deleted, so a past report still names the alarm it tested.
+
+const assetFromRow = r => ({
+  id: r.id,
+  locationId: r.location_id,
+  roomId: r.room_id ?? null,
+  assetType: r.asset_type,
+  label: r.label ?? '',
+  make: r.make ?? '',
+  model: r.model ?? '',
+  serial: r.serial ?? '',
+  // The pack's own fields for this type, such as a smoke alarm's power source.
+  attributes: r.attributes ?? {},
+  installedOn: r.installed_on ?? null,
+  expiresOn: r.expires_on ?? null,
+  removedAt: r.removed_at ?? null,
+  createdAt: r.created_at,
+})
+
+// What an edit can change, each with what a blank is stored as. Which site an
+// item is at, and when it was added, never change.
+const ASSET_COLUMNS = {
+  roomId: ['room_id', null],
+  assetType: ['asset_type', ''],
+  label: ['label', ''],
+  make: ['make', ''],
+  model: ['model', ''],
+  serial: ['serial', ''],
+  attributes: ['attributes', {}],
+  installedOn: ['installed_on', null],
+  expiresOn: ['expires_on', null],
+  removedAt: ['removed_at', null],
+}
+
+const assetToRow = patch =>
+  Object.fromEntries(
+    Object.entries(ASSET_COLUMNS)
+      .filter(([key]) => key in patch)
+      .map(([key, [column, blank]]) => [column, patch[key] ?? blank]),
+  )
+
+// Every item in the team, removed ones included, in one round trip.
+export async function listAssets(teamId) {
+  const { data, error } = await supabase
+    .from('assets')
+    .select('*')
+    .eq('team_id', teamId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return data.map(assetFromRow)
+}
+
+/**
+ * Adds an item under its own id. Its added date is the device's, so an item added
+ * offline during a visit still stood at the site when that visit finished.
+ */
+export async function addAsset(teamId, locationId, asset) {
+  const { data, error } = await supabase
+    .from('assets')
+    .insert({
+      id: asset.id,
+      team_id: teamId,
+      location_id: locationId,
+      ...(asset.createdAt ? { created_at: asset.createdAt } : {}),
+      ...assetToRow(asset),
+    })
+    .select()
+    .single()
+  // Sent again after its answer was lost: it's already in.
+  if (isDuplicate(error)) return asset
+  if (error) throw await whenParentGone(error, [['locations', locationId], ['rooms', asset.roomId]])
+  return assetFromRow(data)
+}
+
+export async function updateAsset(assetId, patch) {
+  const { data, error } = await supabase
+    .from('assets')
+    .update(assetToRow(patch))
+    .eq('id', assetId)
+    .select('id')
+  if (error) throw await whenParentGone(error, [['assets', assetId], ['rooms', patch.roomId]])
+  // Gone with its site, deleted on another device.
+  if (!data?.length) throw coded('This item has been deleted on another device.', '23503')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signed-in devices (C5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Your own logins (0010): id, browser details, when each signed in and was last
+ * used. Null before 0010 is applied: the Account card then offers only "Sign out
+ * all other devices", which needs nothing new.
+ */
+export async function listMyDevices() {
+  const { data, error } = await supabase.rpc('my_devices')
+  if (error?.code === 'PGRST202') return null
+  if (error) throw error
+  return (data ?? []).map(r => ({
+    id: r.id,
+    userAgent: r.user_agent ?? '',
+    signedInAt: r.signed_in_at ?? null,
+    lastUsedAt: r.last_used_at ?? null,
+  }))
+}
+
+/** Ends one of your own logins, so that device can't renew it (0010). */
+export async function endDevice(sessionId) {
+  const { error } = await supabase.rpc('end_device', { p_session_id: sessionId })
+  if (error) throw error
+}
+
+/** Ends every login of yours but this one. Built into Supabase: nothing new. */
+export async function signOutOtherDevices() {
+  const { error } = await supabase.auth.signOut({ scope: 'others' })
+  if (error) throw error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What's due (C4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const dueFromRow = r => ({
+  kind: r.kind, // 'overdue' | 'due' | 'not_done_yet' | 'expiring'
+  dueOn: r.due_on ?? null,
+  itemId: r.item_id ?? null,
+  assetId: r.asset_id ?? null,
+  // A workflow's id, or for an expiring item its type.
+  obligation: r.obligation,
+  label: r.label ?? '',
+  lastDoneOn: r.last_done_on ?? null,
+  remindersEnabled: r.reminders_enabled ?? null,
+  clientId: r.client_id,
+  clientName: r.client_name ?? '',
+  locationId: r.location_id,
+  address: r.address ?? '',
+  suburb: r.suburb ?? '',
+})
+
+/**
+ * The team's checks overdue or due within `withinDays`, the sites on a regular
+ * interval not done yet, and items expiring within `expiryMonths`, worked out by
+ * the database from its own records (0007).
+ */
+export async function getDueList(teamId, withinDays = 60, expiryMonths = 3) {
+  const { data, error } = await supabase.rpc('due_list', {
+    p_team_id: teamId,
+    p_within_days: withinDays,
+    p_expiry_months: expiryMonths,
+  })
+  if (error) throw error
+  return (data ?? []).map(dueFromRow)
+}
+
+/**
+ * The team's checks a client said are no longer needed, from the opt-out list
+ * itself (0009), not the check's own switch, which a team can make read "on"
+ * again. Null before 0009 is applied: the page then shows none.
+ */
+export async function getDueOptOuts(teamId) {
+  const { data, error } = await supabase.rpc('due_opt_outs', { p_team_id: teamId })
+  if (error?.code === 'PGRST202') return null
+  if (error) throw error
+  return (data ?? []).map(r => ({
+    itemId: r.item_id,
+    locationId: r.location_id,
+    obligation: r.obligation,
+    optedOutAt: r.opted_out_at,
+  }))
+}
+
+/**
+ * One check's reminders, on or off. The database refuses turning back on a check
+ * the client turned off from the email (hint 'opted_out').
+ */
+export async function setCheckReminders(itemId, enabled) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .update({ reminders_enabled: !!enabled })
+    .eq('id', itemId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw coded('This check has been removed on another device.', '23503')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// How often checks are due (C3)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Straight to the database, like photos: setting one recalculates the due dates
+// of every site it covers, which only the database can do. Owner or admin.
+
+/** The team's chosen intervals: its defaults (clientId null) and each client's own. */
+export async function listWorkflowIntervals(teamId) {
+  const { data, error } = await supabase
+    .from('workflow_intervals')
+    .select('workflow_id, client_id, interval_months')
+    .eq('team_id', teamId)
+  if (error) throw error
+  return data.map(r => ({ workflowId: r.workflow_id, clientId: r.client_id ?? null, months: r.interval_months }))
+}
+
+/**
+ * Sets how often a check is due: the team default (clientId null) or one
+ * client's own. Null months removes it: for a client, "use the team default".
+ */
+export async function setWorkflowInterval(teamId, workflowId, clientId, months) {
+  const { error } = await supabase.rpc('set_workflow_interval', {
+    p_team_id: teamId,
+    p_workflow_id: workflowId,
+    p_client_id: clientId ?? null,
+    p_months: months ?? null,
+  })
+  if (error) throw error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Photos (Pro)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A photo is a record in attachments and a file in the private 'evidence'
+// bucket, under the team's own folder. Unlike everything above, photos go
+// straight to the database: they need a connection (build plan C2), and the
+// device keeps no copy of them.
+
+const EVIDENCE = 'evidence'
+
+const photoFromRow = r => ({ id: r.id, assetId: r.asset_id, path: r.storage_path, takenAt: r.taken_at })
+
+/** An item's photos, newest first. */
+export async function listAssetPhotos(teamId, assetId) {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, asset_id, storage_path, taken_at')
+    .eq('team_id', teamId)
+    .eq('asset_id', assetId)
+    .order('taken_at', { ascending: false })
+  if (error) throw error
+  return data.map(photoFromRow)
+}
+
+/**
+ * Adds a photo of an item, already made small enough (photo.js). The item has
+ * to be in the database first.
+ *
+ * The record goes first, because that is where the plan says no, with the code
+ * the upgrade sheet looks for. The bucket's own refusal is a bare 403 that
+ * can't be told from any other. A file that then fails to upload takes its
+ * record with it, so no record names a file that isn't there.
+ */
+export async function addAssetPhoto(teamId, assetId, blob) {
+  const path = `${teamId}/assets/${assetId}/${crypto.randomUUID()}.jpg`
+  const { data, error } = await supabase
+    .from('attachments')
+    .insert({ team_id: teamId, asset_id: assetId, storage_path: path, caption: 'Label' })
+    .select('id, asset_id, storage_path, taken_at')
+    .single()
+  if (error) throw error
+  const { error: failed } = await supabase.storage
+    .from(EVIDENCE)
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: false })
+  if (failed) {
+    await supabase.from('attachments').delete().eq('id', data.id)
+    throw failed
+  }
+  return photoFromRow(data)
+}
+
+/** A link to look at a photo, good for five minutes: the bucket is private. */
+export async function photoUrl(path) {
+  const { data, error } = await supabase.storage.from(EVIDENCE).createSignedUrl(path, 300)
+  if (error) throw error
+  return data.signedUrl
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -928,11 +1266,32 @@ export async function updateVisit(visitId, patch) {
   if ('technician' in patch) row.technician = patch.technician ?? ''
   if ('completedAt' in patch) row.completed_at = patch.completedAt
   if ('exportPreference' in patch) row.export_preference = patch.exportPreference ?? null
-  const { data, error } = await supabase.from('visits').update(row).eq('id', visitId).select('id')
+  if ('siteResults' in patch) row.site_results = patch.siteResults ?? {}
+  if ('outcome' in patch) row.outcome = patch.outcome ?? null
+  if ('signoff' in patch) row.signoff = patch.signoff ?? null
+  const { data, error } = await supabase
+    .from('visits')
+    .update(row)
+    .eq('id', visitId)
+    .select('id, completed_at')
   if (error) throw error
   // Every member can write a visit, so no row back means it isn't there any more:
   // deleted on another device, while this one held changes to it.
   if (!data?.length) throw coded('This visit has been deleted on another device.', 'VISIT_GONE')
+  // A reopened visit finished again keeps the date it was first finished (0006),
+  // whatever this device sent.
+  return { completedAt: data[0].completed_at }
+}
+
+/** A visit's whole-site step as the database holds it now, or null if the visit has gone. */
+export async function getVisitSite(visitId) {
+  const { data, error } = await supabase
+    .from('visits')
+    .select('site_results')
+    .eq('id', visitId)
+    .maybeSingle()
+  if (error) throw error
+  return data ? (data.site_results ?? {}) : null
 }
 
 export const completeVisit = visitId =>
@@ -965,7 +1324,7 @@ export async function saveVisitRoom(teamId, visitId, roomId, entry) {
 }
 
 // Without its test list, which only matters if there is something to merge.
-const ROOM_ANSWERS = 'results, troubleshooting, sections_enabled, comments, status, fails, updated_at'
+const ROOM_ANSWERS = 'results, readings, troubleshooting, sections_enabled, comments, status, fails, updated_at'
 
 /** One room as the database holds it now, or null if it holds no such row. */
 export async function getVisitRoom(visitId, roomId, { withTemplate = false } = {}) {

@@ -19,6 +19,31 @@ create table auth.users (
   created_at         timestamptz not null default now()
 );
 
+-- Each login, and its renewal tokens, with the live project's column types
+-- (refreshed_at has no time zone and is UTC) and its cascade, checked 4 November.
+-- No client role gets anything on them, as on Supabase.
+create table auth.sessions (
+  id           uuid primary key,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  created_at   timestamptz,
+  updated_at   timestamptz,
+  not_after    timestamptz,
+  refreshed_at timestamp,
+  user_agent   text,
+  ip           inet,
+  tag          text
+);
+create table auth.refresh_tokens (
+  id         bigserial primary key,
+  token      varchar,
+  user_id    varchar,
+  revoked    boolean,
+  created_at timestamptz,
+  updated_at timestamptz,
+  parent     varchar,
+  session_id uuid references auth.sessions(id) on delete cascade
+);
+
 create function auth.uid() returns uuid language sql stable as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
 $$;

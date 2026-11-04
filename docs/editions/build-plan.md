@@ -1142,6 +1142,90 @@ step:
   pad; saved to `visits.signoff`.
 - After completing a reopened visit, show the completion date the database kept (its first
   one), not the device's.
+- Decided with M.D. before building it (3 November):
+  - Six commits: C1 readings, whole-site results, room types and the kept completion date
+    through the cache and the Supabase adapter; C1b equipment items through the same; C1c
+    room types in the editors, and routes, navigation and Home's labels from the pack
+    registry; C1d typed answers and fail notes; C1e the whole-site step; C1f sign-off.
+  - Nothing in the app read or wrote `assets` before C1, and "Add item" and the coverage
+    warnings need it, so C1b adds reading items, adding them and pinning them to a room.
+    C2 builds the equipment panel on top.
+  - A failed test with `onFail: 'replace'` says the alarm has to be replaced. The Replace
+    button arrives with C2's replace flow.
+  - Only the electrical and smoke alarm workflows ask for an outcome and a sign-off. AV and
+    Custom List finish exactly as today.
+  - The room type field shows only for a team holding a pack that defines room types, so an
+    AV team's editors are unchanged.
+  - The licence number fills in from the technician's own `member_prefs.licence_number`,
+    which C3 lets them set. Until then it starts blank and is typed at sign-off.
+- How C1 (the data) came out:
+  - The whole-site step is saved on the visit only when it changed, and merged first if
+    another device changed it, as a room is: item by item, then test by test.
+  - Finishing a reopened visit shows its first completion date straight away, offline too.
+    The database's answer has the last word, for a device that didn't know the visit had
+    one.
+  - Found while testing: when two devices' lists named a section differently underneath, a
+    test only the other device's list had was kept but never shown. It now joins the list.
+- How C1b (equipment items) came out:
+  - Each site in the app's data holds its items, removed ones included, read for the whole
+    team in one request when the app loads.
+  - An edit sends only the fields that changed, so two devices editing different things
+    about the same alarm both keep theirs. On the same field, the last save wins.
+  - An item's added date is the device's, so one added offline during a visit still stood
+    at the site when that visit finished.
+  - A room deleted on this device or another leaves its items at the site, unpinned, as the
+    database's foreign key does. An edit to an item deleted with its site is dropped, so it
+    can't jam saving.
+- How C1c (room types, pages from the registry) came out:
+  - Each workflow's page, its name and its place in the navigation come from its pack file
+    (`nav`), and Home names and links every visit from there. The AV pages keep their
+    routes, names and order. Every other workflow uses one `src/pages/Workflow.jsx`.
+  - A pack still marked `proposed` is never assumed, even while the app doesn't know what
+    the team holds: its pages and room types show only to a team known to hold it. On the
+    live site that is a team M.D. gives it to, so nobody else sees the unchecked lists.
+  - The packs that check rooms by type share one list of a home's rooms
+    (`shared/roomTypes.js`): bedroom, hallway, living area, kitchen, bathroom or ensuite,
+    laundry, garage, stairway, other. The electrician's check of the lists covers it too.
+  - A room opened for the first time switches on the room sections its type names, on top
+    of the last room's choice. No list uses that yet.
+- How C1d (answers and fail notes) came out:
+  - One answer input for every type (`AnswerInput.jsx`), shared by rooms and the whole-site
+    step. A PASS / FAIL / N/A row is laid out exactly as before. A reading is typed as text,
+    so "> 999" can be recorded, and only a number is judged against the test's limits.
+  - The note box (`FailNote.jsx`) offers the list's suggestions while the note is empty,
+    and again on request. Choosing one keeps anything already typed, under it.
+  - An open visit with a note still saying [timeframe] can't be finished, by Finish or by
+    exporting, and says which room. A note in a section switched off doesn't count, since
+    nobody can see it there to finish it.
+  - Settings shows a tab for every list the team uses, and the suggestions under a list that
+    has them. Each typed test shows what it asks for, such as "Reading (Ω)". The editor
+    renames, reorders and removes tests; their types are the pack's.
+- How C1e (the whole-site step) came out:
+  - The visit's room list starts with a "Whole site" row whenever the list has whole-site or
+    per-item sections, with its fails on it. A check with nothing to do room by room opens
+    straight onto it from Continue, and Home's flag for its unnoted fails goes there too.
+  - Each section repeated per item lists the site's items of its type, and any removed
+    since that this visit answered for. "Add smoke alarm" (or RCD) adds one there and then,
+    named and pinned to a room or not. C2's equipment panel edits and replaces them.
+  - The rooms a coverage rule names, with too few items pinned to them, are listed on the
+    room list and in the whole-site step: "Bedroom 2 has no smoke alarm".
+  - On the smoke alarm checks every fail's note asks "Why did it fail?" (`notePrompt`), and
+    a test with `onFail: 'replace'` says the alarm has to be replaced. The report already
+    printed that (B2c).
+  - The report gets the site's items, removed ones included, so it names each alarm.
+- How C1f (sign-off) came out:
+  - The electrical and smoke alarm workflows are finished by signing off (`signoff` in their
+    pack page). Finish visit, and Export report on an open visit, open the sign-off: the
+    outcome (compliant or non-compliant), the name, the licence or registration number and a
+    signature. All four are needed. AV and Custom List finish exactly as before.
+  - The outcome is the technician's declaration, not a count of fails; the dialog says how
+    many failed and that a fault fixed on the spot still leaves the property compliant.
+  - The signature is one SVG path in a 600 × 180 box, a few kilobytes, so it fits the
+    database's 50 KB limit on every plan.
+  - A correction is signed again, starting from what was signed before.
+  - The Excel report gains "Outcome" and "Signed off by" rows when a visit has them.
+  - The licence number fills in from the technician's own `member_prefs.licence_number`.
+    Nothing can set it until C3, so for now it is typed at sign-off.
 
 #### C2. Equipment panel per site
 
@@ -1151,6 +1235,63 @@ step:
 - Give the report snapshot and the Excel export all the site's assets, removed ones
   included, with `createdAt` and `removedAt`, so they can work out what stood there at the
   visit.
+- Decided with M.D. before building it (3 November):
+  - Four commits: C2 each item type's own fields and the equipment panel; C2b replacing an
+    item, in the panel and from a failed alarm's note; C2c the label photo; C2d every item in
+    the report and the Excel export.
+  - The panel is on the site's page of each workflow whose list tests items one by one. AV
+    pages and Edit Client are unchanged.
+  - A label photo needs a connection for now. Everything else about an item saves offline as
+    usual (section 6).
+  - No AV item types yet: smoke alarms and RCDs are the only ones, so AV is unchanged.
+- How C2 (fields and the panel) came out:
+  - Each type's own fields are in `shared/assetTypes.js`, kept in `assets.attributes` under
+    their id. A smoke alarm records its sensor, power, whether it's interconnected, whether
+    it's marked AS 3786-2014, and its manufacture date; an RCD the circuits it protects, its
+    rated trip current and whether it's an RCBO. They're proposals, like the lists, and go to
+    the electrician with them.
+  - Entering a smoke alarm's manufacture date fills in its expiry ten years on. A typed expiry
+    is left alone.
+  - The panel lists the site's items of each type the list tests, with their room and expiry.
+    One expired, or expiring within three months, is flagged as the Due page will flag it.
+    Removed ones stay on record under "Removed".
+  - A field set back to "Not recorded" is cleared, and an attribute the form doesn't know about,
+    such as one a later version adds, survives an edit.
+- How C2b (replacing) came out:
+  - Replace, in the panel's edit form or on a failed alarm's note, asks for the new item's
+    details, starting from the old one's name and room. The old one is removed and the new one
+    added at the same moment, so a report always has exactly one of them standing. The new one
+    remembers what it replaced (`attributes.replaces`).
+  - In the whole-site step the old alarm keeps its fail and its note, named "(replaced)", and
+    the new one is there to test. Its note then says what replaced it.
+  - The panel can also remove an item with nothing in its place, after asking, for one taken
+    away or added by mistake. It stays on record as removed, never deleted.
+- How C2c (the label photo) came out:
+  - The first file the app uploads. Editing an item that's already saved offers "Add label
+    photo". The photo is made small on the device first (1600 px on its long edge, JPEG at
+    about 70%, as D1 embeds them), then its `attachments` record goes in, then the file, to
+    `evidence/<team>/assets/<item>/…`. A file that fails to upload takes its record with it.
+  - The record goes first because that's where the plan refuses, with the code the upgrade
+    sheet looks for (2.11); the bucket's own refusal is a bare 403. The sheet says the item
+    itself is saved.
+  - A "Pro" tag shows beside it only once the limits are on (E6) and the team isn't Pro.
+  - The page shows the newest photo through a link that lasts five minutes.
+  - With no signal it says it needs a connection and sends nothing. An item not yet saved is
+    sent first; a photo can't point at an item the database doesn't have.
+- How C2d (the report's equipment) came out:
+  - The page has handed the report every item at the site, removed ones included, since C1e.
+    The snapshot's `equipment` now lists those standing when the visit finished and those taken
+    out during it. Each says when it went in and came out (`createdAt`, `removedAt`), whether
+    it's in place, replaced or removed, what it replaced or was replaced by, and its own fields
+    in words (`details`).
+  - Only the item types the visit's list tests are listed, so an electrical check doesn't list
+    the smoke alarms, and an AV report has none.
+  - The Excel export has an Equipment part after the whole-site results: each item under its
+    name and room, with what was recorded about it. An alarm expired by the day of the visit
+    is marked in the fail colour, and a replaced one says when.
+  - An item gone by the end of the visit is named "(replaced)" or "(removed)" in the whole-site
+    results too, so it isn't confused with the one put in its place under the same name.
+  - Photos aren't in the Excel export; D1's PDF embeds them.
 
 #### C3. Settings and client pages
 
@@ -1160,6 +1301,43 @@ step:
 - AV settings: "Regular PM visit: every N months" (the team default).
 - Client page: "PM visits every N months" or "Use team default", the client's reminders
   switch, and the contact name, email and phone that reports and reminders go to.
+- Decided with M.D. before building it (4 November):
+  - Three commits: C3 the licence numbers and the team's reminders switch in Settings; C3b
+    each client's contact and reminders switch; C3c how often recurring checks are due, as a
+    team default and per client.
+  - "Every N months" is offered for every check whose interval the law doesn't fix and that
+    recurs: PM, QLD electrical safety, and the baseline electrical and smoke alarm checks,
+    each only to a team using it. Commissioning and Custom List never recur.
+  - A client's contact, reminders and intervals are set on Edit Client, once the client is
+    picked. New Client is unchanged.
+- How C3 (Settings) came out:
+  - A team with a check that's signed off records the business's licence and REC numbers
+    with its company details (`team_settings.company.licence_number`, `rec_number`). They
+    print beside its contact details on every report. An AV team isn't asked for them.
+  - Each technician's own licence number is set under Technician (`member_prefs`), and fills
+    in the sign-off. Saving it never blanks their technician name, or the other way round.
+  - "Send re-check reminders" switches reminders off for the whole team
+    (`team_settings.reminders_enabled`), admins only, as the company details are. It says
+    the emails start in a later update, since F sends them.
+- How C3b (a client's contact) came out:
+  - Picking a client on Edit Client shows a Contact card above its sites: the contact's
+    name, email and phone, and "Send this client re-check reminders". They save as they're
+    typed, offline too, through the cache like the rest of the client.
+  - Only what changed is sent, trimmed, so two devices changing different details both keep
+    theirs. A new client's contact follows it in.
+  - An address that doesn't look like an email says so, but is kept: it's the technician's
+    to fix. With the team's reminders off, the card says none go out.
+- How C3c (how often checks are due) came out:
+  - Each recurring workflow's pack file now gives its interval as the catalogue has it
+    (`interval: { months, fixed }`), and `tests/packs.mjs` holds the two to each other. PM
+    recurs with no default; Commissioning and Custom List have none.
+  - Settings has "How often checks are due": every N months for each recurring check the team
+    uses, left blank for the pack's default. A check the law fixes says so, with its interval,
+    and can't be changed. Edit Client's card has the same for that client, left blank for the
+    team's default.
+  - Saving calls `set_workflow_interval()`, which moves the due dates of every site it covers.
+    So it needs a connection and an owner or admin, like Teams, and says so; a client added
+    offline is sent first. Nothing is saved on the device.
 
 #### C4. Due page
 
@@ -1170,6 +1348,37 @@ step:
   "no longer needed". It takes that from `reminder_opted_out()`, not from the check's own
   switch, which a team can make read "on" again by re-creating the check while the
   contact's email is blank.
+- Decided with M.D. before building it (4 November):
+  - `reminder_opted_out()` and the opt-out list are closed to signed-in users, and
+    `due_list()` doesn't say who opted out, so the page can't follow the bullet above as the
+    database stands. A new migration, 0009, adds a read-only function for team members that
+    asks `reminder_opted_out()`. M.D. applies it; until then the page works without
+    opt-outs.
+  - Two commits: C4 the page; C4b each check's reminders switch and "no longer needed", with
+    0009.
+  - With no signal the page shows the last list this device was given, saying when, with the
+    switches off until the connection is back.
+- How C4 (the page) came out:
+  - "Due" sits under Home for a team that inspects, at `#/checks-due`: a landlord's Due page
+    keeps `#/due`. It lists, in this order, checks overdue, those due in the next 60 days,
+    sites on a regular interval not done yet, and alarms expiring in the next 3 months, each
+    with its client and site, and dates in words ("32 days overdue").
+  - Filtered by client when more than one has anything on the list.
+  - The device keeps the last list for when there's no signal, without the contacts' emails
+    `due_list()` carries for the reminder job. Signing out removes it.
+- How C4b (reminders and "no longer needed") came out:
+  - `supabase/migrations/0009_due_opt_outs.sql` adds `due_opt_outs(team)`: for the team's own
+    members, which of its checks a client opted out of and since when, asked of
+    `reminder_opted_out()`. Nothing about who opted out. The opt-out list and the function
+    stay closed to signed-in users. M.D. applies it after 0008.
+  - Each check on the page has its own reminders switch. It moves at once and goes back if
+    the database refuses it, saying why. A site with no check yet, and an alarm, have none.
+  - A check whose client said "no longer needed" says so, with the date, and has no switch.
+    That holds for a check made again at the same site, which reads "on" by itself: the
+    case the bullet above warns about, tested in the SQL suite.
+  - Before 0009 is applied the page works as C4 left it and marks nothing "no longer needed".
+  - With no signal the switches are off. With the team's reminders off, the page says none go
+    out.
 
 #### C5. Signed-in devices (M.D.'s note)
 
@@ -1210,6 +1419,49 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - an app suite covers the list, both sign-outs, and a device finding it was signed out
   - a live run with two logins ends one from the other: the ended one can't renew and the
     other still can
+- Decided with M.D. before building it (4 November):
+  - Three commits: C5 migration 0010 with `my_devices()` and `end_device()`, and the SQL
+    suite; C5b the list on the Account card and both sign-outs; C5c a device finding its
+    login was ended elsewhere, and a live suite for M.D. to run with two logins.
+  - D12: a device that finds its login was ended elsewhere wipes everything the team already
+    has, and keeps only work that exists nowhere else, sent the next time someone signs in
+    there, as Sign out's "Keep it" does.
+  - Before M.D. applies 0010, the card offers only "Sign out all other devices", which needs
+    no migration, and says the list comes with an update.
+- How C5 (the migration) came out:
+  - `supabase/migrations/0010_signed_in_devices.sql`. `my_devices()` returns the caller's own
+    logins that haven't run out: id, browser details, when it signed in and when it was last
+    renewed. `refreshed_at` is a timestamp in UTC on the live project (checked 4 November),
+    so it's read as UTC. `end_device()` deletes one of the caller's own; someone else's, or
+    one already ended, is refused the same way, so it says nothing about whether it exists.
+  - Both are `SECURITY DEFINER`, run as `postgres`, which can read and delete
+    `auth.sessions` on the live project (checked 4 November), while signed-in users can't.
+  - The SQL suite's stand-in for Supabase gains `auth.sessions` and `auth.refresh_tokens`
+    with the live column types and cascade.
+- How C5b (the list) came out:
+  - The Account card in Settings ends with "Signed-in devices": each login named from its
+    browser details ("Safari on iPhone"), when it signed in and was last used, this device
+    first and marked "This device" from the `session_id` in its own token. Only the
+    database decides whose login is whose; the token is read just to mark the row.
+  - Every other row has "Sign out", which asks first, naming the device and when it was
+    last used. "Sign out all other devices" asks too. Both say what they can't do: the
+    device keeps working until its current login runs out, up to an hour, and one that never
+    connects again keeps what it holds.
+  - Before 0010 is applied, the list says it comes with an update and only "Sign out all
+    other devices" is offered. With no signal, nothing is offered.
+- How C5c (a device finding it was signed out) came out:
+  - `src/lib/renewal.js` wraps the Supabase client's fetch and notes the Auth server's
+    `error_code` when it refuses a renewal, never its message. `refresh_token_not_found`
+    and `session_not_found` mean the login no longer exists. A renewal with no answer notes
+    nothing, so B3b's case is unchanged.
+  - The login library signs out by itself after such a refusal, whether the app has just
+    opened or has been open a while. When it does, and this device didn't ask to sign out,
+    the app goes to the sign-in screen saying "This device was signed out from another
+    device", forgets who was signed in, and wipes the device's copies of the team's data,
+    keeping only work that exists nowhere else (D12). Any other refusal is a plain sign-out
+    that wipes nothing, as before.
+  - `tests/devices-e2e.mjs` is the live run with two logins: M.D. runs it once 0010 is
+    applied.
 
 ### Phase D — Reports and landlords
 
@@ -1417,10 +1669,16 @@ Northern Territory, and for Queensland's electrical check:
   finished visit or delete a whole visit, with its records, by calling the database directly.
   The screens don't offer either to a member. Reopening keeps the first completion date, and
   a deleted visit's inspection isn't given back.
-- Until step C5, a lost device can't be signed out from another one: Sign out ends only the
-  device it's pressed on. M.D. can end every login of one account in the SQL editor with
-  `delete from auth.sessions where user_id = (select id from auth.users where email = '…');`.
-  That device's current token still works for up to an hour.
+- A device signed out from another one keeps working until its current login token runs out,
+  up to an hour (the project's token lifetime). A shorter lifetime narrows that window; making
+  it immediate would mean checking the login on every request. The Account card says so.
+- A lost device that never connects again keeps what it held: B3b opens the app with no
+  signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
+  says so too.
+- Until 0010 is applied, the Account card can only sign out all other devices at once.
+- A label photo needs a connection when it's taken: the device keeps no copy to send later
+  (M.D.'s choice for C2). Everything else about the item saves offline. A photo replaced by a
+  newer one stays in the bucket, and the screens show only the newest.
 
 ## 7. Sources for the pack lists
 

@@ -173,7 +173,8 @@ export function ClientsTable({ clients, onOpen }) {
   )
 }
 
-export function LocationsTable({ client, onBack, onOpen, subtitle }) {
+// `above` goes between the back bar and the sites: Edit Client's client card.
+export function LocationsTable({ client, onBack, onOpen, subtitle, above }) {
   return (
     <>
       <BackBar
@@ -181,6 +182,7 @@ export function LocationsTable({ client, onBack, onOpen, subtitle }) {
         subtitle={subtitle ?? `${client.locations.length} location(s)`}
         onBack={onBack}
       />
+      {above}
       <div className="border-hair overflow-x-auto rounded-xl border bg-white">
         <table className="w-full border-collapse text-left text-[14px]">
           <thead>

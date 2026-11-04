@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { getTemplate, saveTemplate, resetTemplate } from '../lib/templateStore.js'
+import { typeOf } from '../lib/testTypes.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Editor for one test template.
@@ -18,8 +19,56 @@ const move = (list, from, to) => {
   return reindex(next)
 }
 
+// What a test that isn't PASS / FAIL / N/A asks for, beside its name. Its type
+// is the pack's: this editor renames, reorders and removes tests.
+const TYPE_TAG = { yesno: 'Yes / No', choice: 'Choice', text: 'Text' }
+const typeTag = test => (typeOf(test) === 'measure' ? `Reading${test.unit ? ` (${test.unit})` : ''}` : TYPE_TAG[typeOf(test)])
+
 const iconBtn =
   'shrink-0 rounded-md px-2 py-2 text-[15px] leading-none text-ink-soft hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent'
+
+// The suggested wording a failed test's note box offers (M.D.'s note in B2). Only
+// a list that came with some has this, so the AV lists look as they always have.
+function FailNotes({ notes, onChange }) {
+  const set = (i, text) => onChange(notes.map((n, j) => (j === i ? text : n)))
+  return (
+    <div className="border-hair mt-3 rounded-xl border p-4">
+      <h4 className="text-[14px] font-bold">Suggested notes for a failed test</h4>
+      <p className="text-ink-soft mt-0.5 max-w-[62ch] text-[13px]">
+        Offered in the note box when a test fails. The technician picks one and can still change
+        it. Write [timeframe] where they fill in how long.
+      </p>
+      <div className="mt-3 flex flex-col gap-2">
+        {notes.map((text, i) => (
+          <div key={i} className="flex items-start gap-1">
+            <textarea
+              rows={2}
+              value={text}
+              onChange={e => set(i, e.target.value)}
+              aria-label={`Suggested note ${i + 1}`}
+              className="border-hair text-ink focus:border-navy min-w-0 flex-1 resize-y rounded-lg border px-3 py-2 text-[13.5px] outline-none"
+            />
+            <button
+              type="button"
+              className="text-fail shrink-0 rounded-md px-2 py-2 text-[15px] leading-none hover:bg-red-50"
+              aria-label={`Remove suggested note ${i + 1}`}
+              onClick={() => onChange(notes.filter((_, j) => j !== i))}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange([...notes, ''])}
+        className="text-navy mt-2 text-[13px] font-semibold hover:underline"
+      >
+        + Add suggestion
+      </button>
+    </div>
+  )
+}
 
 function TestRows({ tests, groupLabel, onChange }) {
   return (
@@ -33,6 +82,11 @@ function TestRows({ tests, groupLabel, onChange }) {
             aria-label={`${groupLabel} test ${i + 1}`}
             className="border-hair text-ink focus:border-navy min-w-0 flex-1 rounded-lg border px-3 py-2 text-[14px] outline-none"
           />
+          {typeTag(test) && (
+            <span className="text-ink-soft shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold">
+              {typeTag(test)}
+            </span>
+          )}
           <button
             type="button"
             className={iconBtn}
@@ -182,6 +236,10 @@ export default function TemplateEditor({ kind, title, note }) {
           </div>
         </div>
       ))}
+
+      {Array.isArray(template.failNotes) && (
+        <FailNotes notes={template.failNotes} onChange={failNotes => apply({ ...template, failNotes })} />
+      )}
 
       <button
         type="button"

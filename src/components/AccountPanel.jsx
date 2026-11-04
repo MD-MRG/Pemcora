@@ -1,9 +1,13 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { useAuth } from '../context/auth.js'
 import { useTeam } from '../context/team.js'
-import { closeSession, flush, hasUnsavedWork } from '../lib/cache.js'
+import { closeSession, flush, hasUnsavedWork, saveStatus, subscribe } from '../lib/cache.js'
 import { clearCopies, unsavedCopies } from '../lib/offlineStore.js'
+import { endDevice, listMyDevices, signOutOtherDevices } from '../lib/api.js'
+import { classifySaveError } from '../lib/saveErrors.js'
+import { sessionIdOf } from '../lib/devices.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
+import SignedInDevices from './SignedInDevices.jsx'
 
 // Signing out had no route into it. `signOut` existed on the auth context from
 // the beginning, but the only button wired to it sat on a gate screen shown
@@ -19,7 +23,8 @@ const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 //
 // `onCheck` answers whether this device still holds work the team doesn't have.
 // `onSignOut` takes whether to keep that work on this device.
-export function AccountCard({ email, teamName, role, onCheck, onSignOut }) {
+// `children` go at the foot of the card: the signed-in devices.
+export function AccountCard({ email, teamName, role, onCheck, onSignOut, children }) {
   const [asking, setAsking] = useState(null) // null | 'saved' | 'unsaved'
   const [checking, setChecking] = useState(false)
 
@@ -90,7 +95,67 @@ export function AccountCard({ email, teamName, role, onCheck, onSignOut }) {
           is gone for good. Your other devices stay signed in.
         </ConfirmDialog>
       )}
+
+      {children}
     </section>
+  )
+}
+
+// Your logins, from the database (0010), and signing them out.
+function Devices({ session }) {
+  const offline = useSyncExternalStore(subscribe, saveStatus) === 'offline' || !!session.offline
+  const [devices, setDevices] = useState(undefined)
+  const [loadError, setLoadError] = useState('')
+  const load = useCallback(() => {
+    listMyDevices()
+      .then(list => {
+        setDevices(list)
+        setLoadError('')
+      })
+      .catch(e =>
+        setLoadError(
+          classifySaveError(e) === 'network'
+            ? 'This needs a connection. It will show once you have signal.'
+            : 'The list of devices couldn\'t be loaded.',
+        ),
+      )
+  }, [])
+  useEffect(() => {
+    if (!offline) load()
+  }, [offline, load])
+
+  const said = e =>
+    new Error(
+      classifySaveError(e) === 'network'
+        ? 'This needs a connection. Try again once you have signal.'
+        : (e?.message ?? 'It didn\'t work. Try again.'),
+    )
+
+  return (
+    <SignedInDevices
+      devices={devices}
+      currentId={sessionIdOf(session.access_token)}
+      offline={offline}
+      loadError={loadError}
+      onEnd={async device => {
+        try {
+          await endDevice(device.id)
+        } catch (e) {
+          throw said(e)
+        } finally {
+          load()
+        }
+      }}
+      onEndOthers={async () => {
+        try {
+          await signOutOtherDevices()
+        } catch (e) {
+          throw said(e)
+        } finally {
+          load()
+        }
+      }}
+    />
   )
 }
 
@@ -118,6 +183,8 @@ export default function AccountPanel() {
         await clearCopies(user.id, { keepUnsaved: keep })
         await signOut()
       }}
-    />
+    >
+      <Devices session={session} />
+    </AccountCard>
   )
 }

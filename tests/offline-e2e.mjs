@@ -399,6 +399,131 @@ try {
   await a.page.getByRole('button', { name: 'Try again' }).click()
   log(await until(async () => !/Not saved:/.test(await mainText(a.page))), 'with the correction finished, the new visit saves')
 
+  // ── Readings, the whole-site step and room types (C1) ────────────────────
+  // Through each device's own store and save queue, on the real database.
+  await b.page.reload({ waitUntil: 'networkidle' })
+  await goToSite(b.page)
+  await until(async () => !!(await openRow()))
+  const where = { clientId: ids.client, locationId: ids.location, visitId: (await openRow()).id, roomId: ids.r1 }
+  const SITE_LIST = {
+    mainLabel: 'Main test list',
+    tests: [],
+    sections: [
+      { id: 'ss', label: 'Whole property', scope: 'site', tests: [{ id: 'w1', label: 'Alarm on each level' }] },
+      { id: 'si', label: 'Each smoke alarm', scope: 'item', assetType: 'smoke_alarm', tests: [{ id: 'k1', label: 'Works' }] },
+    ],
+  }
+  const saveSite = (page, results) =>
+    page.evaluate(
+      async ({ where, results, template }) => {
+        const store = await import('/src/lib/clientStore.js')
+        const cache = await import('/src/lib/cache.js')
+        const site = store.getSiteEntry(where.clientId, where.locationId, where.visitId)
+        store.saveSiteEntry(where.clientId, where.locationId, where.visitId, {
+          template,
+          results: { ...(site?.results ?? {}), ...results },
+        })
+        return cache.flush()
+      },
+      { where, results, template: SITE_LIST },
+    )
+  const siteNow = async () => (await openRow())?.site_results ?? {}
+
+  await saveSite(a.page, { ss: { w1: 'PASS' } })
+  log((await siteNow()).results?.ss?.w1 === 'PASS', 'a whole-site answer reaches the real database')
+  // The second device read the visit before that answer, and adds one of its own.
+  await saveSite(b.page, { si: { alarm1: { k1: 'FAIL' } } })
+  const both = await siteNow()
+  log(both.results?.ss?.w1 === 'PASS' && both.results?.si?.alarm1?.k1 === 'FAIL',
+    'one from each device ends up in one whole-site step', JSON.stringify(both.results))
+  log(await until(() => b.page.evaluate(async w => {
+    const store = await import('/src/lib/clientStore.js')
+    return store.getSiteEntry(w.clientId, w.locationId, w.visitId)?.results?.ss?.w1 === 'PASS'
+  }, where)), 'and the second device holds the first one\'s answer')
+
+  await a.page.evaluate(async w => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    store.saveRoomEntry(w.clientId, w.locationId, w.visitId, w.roomId, {
+      results: { main: {} },
+      readings: { main: { insulation: { value: '0.4', unit: 'MΩ' } } },
+    })
+    return cache.flush()
+  }, where)
+  const reading = (await openRow())?.visit_rooms?.find(x => x.room_id === ids.r1)?.readings?.main?.insulation
+  log(reading?.value === '0.4' && reading?.unit === 'MΩ', 'a room\'s reading reaches the real database', JSON.stringify(reading))
+
+  const typed = await a.page.evaluate(async id => {
+    const api = await import('/src/lib/api.js')
+    try {
+      await api.updateRoom(id, { roomType: 'bedroom' })
+      return null
+    } catch (e) {
+      return e.message
+    }
+  }, ids.r1)
+  const typeRow = (await sb.from('rooms').select('room_type').eq('id', ids.r1).single()).data
+  log(!typed && typeRow?.room_type === 'bedroom', 'a room\'s type is saved', typed ?? typeRow?.room_type)
+
+  // Equipment (C1b): added on one device, through its store, onto the real table.
+  const alarmId = await a.page.evaluate(async w => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    const added = store.addAsset(w.clientId, w.locationId, { assetType: 'smoke_alarm', roomId: w.roomId, label: 'Room r1 alarm' })
+    await cache.flush()
+    return added.id
+  }, where)
+  const assetRow = async () => (await sb.from('assets').select('*').eq('id', alarmId).maybeSingle()).data
+  const alarmRow = await assetRow()
+  log(alarmRow?.room_id === ids.r1 && alarmRow.asset_type === 'smoke_alarm' && alarmRow.location_id === ids.location,
+    'an item reaches the real database, pinned to its room', JSON.stringify(alarmRow))
+  await a.page.evaluate(async ({ w, id }) => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    store.updateAsset(w.clientId, w.locationId, id, { removedAt: new Date().toISOString() })
+    return cache.flush()
+  }, { w: where, id: alarmId })
+  log(!!(await assetRow())?.removed_at, 'removing it marks it removed')
+  await b.page.reload({ waitUntil: 'networkidle' })
+  await goToSite(b.page)
+  log(await b.page.evaluate(async ({ w, id }) => {
+    const store = await import('/src/lib/clientStore.js')
+    return !!store.listAssets(w.clientId, w.locationId).find(x => x.id === id)?.removedAt
+  }, { w: where, id: alarmId }), 'and the other device reads it, removed, on its next load')
+
+  // Finished, reopened for a correction, finished again: the first date stands.
+  // Signed off (C1f): the database stamps who signed and when it was saved.
+  const finishOn = page => page.evaluate(async w => {
+    const store = await import('/src/lib/clientStore.js')
+    const cache = await import('/src/lib/cache.js')
+    store.signOffVisit(w.clientId, w.locationId, w.visitId, {
+      outcome: 'compliant',
+      signoff: { technician: 'E2E', licence_number: 'T-1', signed_at: new Date().toISOString(), signature: 'M1 1L20 20' },
+    })
+    return cache.flush()
+  }, where)
+  await finishOn(a.page)
+  const signedRow = (await visitRows()).find(v => v.id === where.visitId)
+  const firstDate = signedRow?.completed_at
+  log(!!firstDate, 'signing it off finishes it on the database')
+  log(signedRow?.outcome === 'compliant' && signedRow.signoff?.licence_number === 'T-1',
+    'with the outcome and sign-off', JSON.stringify(signedRow?.signoff))
+  log(signedRow?.signoff?.signed_by === signedIn.data.user.id && !!signedRow.signoff.recorded_at,
+    'stamped by the database with who signed and when it was saved')
+  await sleep(1500)
+  await sb.from('visits').update({ completed_at: null }).eq('id', where.visitId) // reopened elsewhere
+  const answered = await a.page.evaluate(async id => {
+    const api = await import('/src/lib/api.js')
+    return api.updateVisit(id, { completedAt: new Date().toISOString() })
+  }, where.visitId)
+  log(Date.parse(answered?.completedAt) === Date.parse(firstDate),
+    'finished again, the real database hands back the date it kept', answered?.completedAt + ' vs ' + firstDate)
+  await a.page.reload({ waitUntil: 'networkidle' })
+  await goToSite(a.page)
+  const shown = await a.page.evaluate(d => new Date(d).toLocaleDateString(), firstDate)
+  log(await until(async () => (await mainText(a.page)).includes('Last visit completed ' + shown)),
+    'and the site page shows that date')
+
   // ── Signing out ───────────────────────────────────────────────────────────
   await a.page.locator('nav a').filter({ hasText: 'Settings' }).click()
   await a.page.getByRole('button', { name: 'Sign out' }).click()

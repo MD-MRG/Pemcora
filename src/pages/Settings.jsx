@@ -8,10 +8,12 @@ import TemplateEditor from '../components/TemplateEditor.jsx'
 import ImportLocalData from '../components/ImportLocalData.jsx'
 import AccountPanel from '../components/AccountPanel.jsx'
 import StarterPackCard from '../components/StarterPackCard.jsx'
+import IntervalSettings from '../components/IntervalSettings.jsx'
 import { getSettings, saveSettings, saveCompany, storageUsage } from '../lib/settingsStore.js'
 import { useEntitlements } from '../context/team.js'
-import { holdsPack, isProvider } from '../lib/entitlements.js'
-import { workflow } from '../data/packs/index.js'
+import { isProvider, usesPack } from '../lib/entitlements.js'
+import { recurringWorkflows } from '../lib/intervals.js'
+import { WORKFLOWS, workflow } from '../data/packs/index.js'
 
 const TEMPLATES = [
   {
@@ -32,6 +34,13 @@ const TEMPLATES = [
     title: 'Custom List tests',
     note: 'Starts empty. Build the list and name the sections however the job needs.',
   },
+  // Every other workflow's list, named as its page is.
+  ...WORKFLOWS.filter(w => !['maintenance', 'commissioning', 'custom'].includes(w.id)).map(w => ({
+    kind: w.id,
+    tab: w.nav.label,
+    title: `${w.page.title} tests`,
+    note: 'A proposed list, built from the official forms and rules. A licensed electrician checks it before it ships.',
+  })),
 ]
 
 function PlateSwatch({ plate, selected, onSelect, logo }) {
@@ -83,8 +92,10 @@ export default function Settings() {
   // nothing, so it has no lists and no technician to record.
   const entitlements = useEntitlements()
   const inspects = isProvider(entitlements)
-  const lists = TEMPLATES.filter(t => holdsPack(entitlements, workflow(t.kind).packId))
+  const lists = TEMPLATES.filter(t => usesPack(entitlements, workflow(t.kind).packId))
   const shownKind = lists.some(t => t.kind === templateKind) ? templateKind : lists[0]?.kind
+  // A team whose checks end in a sign-off: licence numbers belong on its reports.
+  const signsOff = WORKFLOWS.some(w => w.page?.signoff && usesPack(entitlements, w.packId))
 
   const update = patch => {
     const { ok, settings: next } = saveSettings(patch)
@@ -141,6 +152,22 @@ export default function Settings() {
             placeholder="e.g. service@northpoint.com.au"
             className="sm:col-span-2"
           />
+          {signsOff && (
+            <>
+              <Field
+                label="Licence number"
+                value={settings.company.licence_number}
+                onChange={v => updateCompany({ licence_number: v })}
+                placeholder="The business's electrical licence"
+              />
+              <Field
+                label="REC number"
+                value={settings.company.rec_number}
+                onChange={v => updateCompany({ rec_number: v })}
+                placeholder="Registered electrical contractor"
+              />
+            </>
+          )}
         </div>
       </section>
 
@@ -203,6 +230,53 @@ export default function Settings() {
               onChange={v => update({ technician: v })}
               placeholder="e.g. Michal Dolezal"
             />
+          </div>
+          {signsOff && (
+            <div className="mt-4 max-w-sm">
+              <Field
+                label="Your licence or registration number"
+                value={settings.licenceNumber}
+                onChange={v => update({ licenceNumber: v })}
+                placeholder="e.g. A12345"
+              />
+              <p className="text-ink-soft mt-1.5 text-[12.5px]">
+                Yours alone, not the team's. Filled in for you when you sign off a check.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {inspects && (
+        <section className="border-hair rounded-xl border bg-white p-6">
+          <h2 className="text-[19px] font-bold tracking-[-.01em]">Reminders</h2>
+          <label className="mt-4 flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={settings.remindersEnabled !== false}
+              onChange={e => update({ remindersEnabled: e.target.checked })}
+              aria-describedby="team-reminders-note"
+              className="text-navy h-5 w-5 rounded"
+            />
+            <span className="text-[14px] font-semibold">Send re-check reminders</span>
+          </label>
+          <p id="team-reminders-note" className="text-ink-soft mt-1 max-w-[62ch] pl-8 text-[13.5px]">
+            Emails each client's contact as a check at their site comes due, on Pro. Switching this
+            off stops them for every client; each client can also be switched off on its own.
+            Reminder emails start in a later update.
+          </p>
+        </section>
+      )}
+
+      {inspects && recurringWorkflows(entitlements).length > 0 && (
+        <section className="border-hair rounded-xl border bg-white p-6">
+          <h2 className="text-[19px] font-bold tracking-[-.01em]">How often checks are due</h2>
+          <p className="text-ink-soft mt-1 max-w-[62ch] text-[14px]">
+            The team's default for every client. A client can have its own on Edit Client. Changing
+            one moves the due dates of the sites it covers, from each site's last visit.
+          </p>
+          <div className="mt-4">
+            <IntervalSettings />
           </div>
         </section>
       )}

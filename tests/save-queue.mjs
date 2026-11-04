@@ -27,7 +27,7 @@ const cache = await import('../src/lib/cache.js')
 const store = await import('../src/lib/clientStore.js')
 const { supabaseAdapter } = await import('../src/lib/adapters/supabase.js')
 const { classifySaveError } = await import('../src/lib/saveErrors.js')
-const { deepEqual, mergeRoom, mergeVisit } = await import('../src/lib/visitMerge.js')
+const { deepEqual, mergeRoom, mergeSite, mergeVisit } = await import('../src/lib/visitMerge.js')
 
 const { flush, hydrate, resetCache, saveStatus, heldVisits, readClients, writeClients } = cache
 
@@ -788,6 +788,331 @@ for (const step of ['createClient', 'addLocation', 'addFloor', 'addRoom', 'start
   log('a visit with no list of records doesn\'t delete them all', missing.visits.get('v1').exports.length === 1)
 }
 
+// ── Readings, the whole-site step and room types (C1) ───────────────────────
+// A site list: one test for the whole site and two repeated for each alarm.
+const SITE_LIST = {
+  mainLabel: 'Main test list',
+  tests: [],
+  sections: [
+    { id: 'ss', label: 'Whole property', scope: 'site', tests: [{ id: 'w1', label: 'Alarm on each level' }] },
+    {
+      id: 'si', label: 'Each smoke alarm', scope: 'item', assetType: 'smoke_alarm',
+      tests: [{ id: 'k1', label: 'Works when tested' }, { id: 'k2', label: 'Cleaned' }],
+    },
+  ],
+}
+const siteAnswers = (results, extra = {}) => ({ template: SITE_LIST, results, sections: {}, troubleshooting: {}, comments: '', ...extra })
+const saveSite = (visitId, patch) => store.saveSiteEntry('c1', 'l1', visitId, patch)
+{
+  const server = setup()
+  server.seedVisit({ id: 'v1' })
+  const device = await boot(server)
+  const updates = server.countCalls('updateVisit')
+  saveRoom('v1', 'r1', answers({ t1: 'PASS' }, { readings: { main: { t1: { value: '0.4', unit: 'Ω' } } } }))
+  await flush()
+  log('a room\'s readings reach the database', server.visits.get('v1').rooms.r1.readings?.main?.t1?.value === '0.4')
+  log('saving only a room doesn\'t write the visit', server.countCalls('updateVisit') === updates)
+
+  saveSite('v1', siteAnswers({ ss: { w1: 'PASS' }, si: { a1: { k1: 'FAIL' } } }, { readings: { si: { a1: { k2: { value: '3', unit: 's' } } } } }))
+  await flush()
+  const site = server.visits.get('v1').siteResults
+  log('the whole-site step reaches the database',
+    site.results?.ss?.w1 === 'PASS' && site.results?.si?.a1?.k1 === 'FAIL' && site.readings?.si?.a1?.k2?.value === '3', JSON.stringify(site.results))
+  log('with its test list', site.template?.sections?.length === 2)
+  const writes = server.countCalls('updateVisit')
+  await flush()
+  log('and settles: nothing more to send', server.countCalls('updateVisit') === writes && !cache.hasUnsavedWork())
+
+  await boot(server, device)
+  log('both come back after a reload',
+    localVisit('v1').rooms.r1.readings?.main?.t1?.unit === 'Ω' && store.getSiteEntry('c1', 'l1', 'v1')?.results?.si?.a1?.k1 === 'FAIL')
+
+  server.down = true
+  saveSite('v1', siteAnswers({ ss: { w1: 'NA' }, si: { a1: { k1: 'FAIL' } } }))
+  await flush()
+  await boot(server, device)
+  log('a whole-site answer made offline survives a reload', store.getSiteEntry('c1', 'l1', 'v1')?.results?.ss?.w1 === 'NA')
+  server.down = false
+  await flush()
+  log('and goes when the connection returns', server.visits.get('v1').siteResults.results.ss.w1 === 'NA')
+}
+{
+  // Another device changed the whole-site step since this one last read it.
+  const server = setup()
+  server.seedVisit({ id: 'v1', siteResults: siteAnswers({ si: { a1: { k1: 'PASS' } } }, { touchedAt: new Date(Date.now() - 60000).toISOString() }) })
+  await boot(server)
+  const seen = cache.outsideChanges()
+  server.visits.get('v1').siteResults = siteAnswers(
+    { si: { a1: { k1: 'PASS', k2: 'FAIL' }, a2: { k1: 'PASS' } } },
+    { troubleshooting: { 'a1:k2': 'Dusty' }, comments: 'Theirs', touchedAt: new Date(Date.now() - 30000).toISOString() },
+  )
+  saveSite('v1', siteAnswers({ ss: { w1: 'PASS' }, si: { a1: { k1: 'PASS' }, a3: { k1: 'FAIL' } } }, { comments: 'Mine' }))
+  await flush()
+  const site = server.visits.get('v1').siteResults
+  log('a whole-site save merges with another device\'s, item by item',
+    site.results.ss?.w1 === 'PASS' && site.results.si.a1.k2 === 'FAIL' && site.results.si.a2?.k1 === 'PASS' && site.results.si.a3?.k1 === 'FAIL',
+    JSON.stringify(site.results))
+  log('notes and comments come too', site.troubleshooting['a1:k2'] === 'Dusty' && site.comments === 'Mine\n\nTheirs', JSON.stringify(site.comments))
+  log('the merged step has no status or fail count of its own', !('fails' in site) && !('status' in site))
+  log('this device sees it merged', store.getSiteEntry('c1', 'l1', 'v1').results.si.a2?.k1 === 'PASS')
+  log('and an open page is told to read it again', cache.outsideChanges() === seen + 1)
+  const writes = server.countCalls('updateVisit')
+  await flush()
+  log('it settles', server.countCalls('updateVisit') === writes && !cache.hasUnsavedWork())
+
+  // The same alarm's same test on both: the newest wins.
+  server.visits.get('v1').siteResults = {
+    ...site,
+    results: { ...site.results, si: { ...site.results.si, a3: { k1: 'PASS' } } },
+    touchedAt: new Date(Date.now() - 1000).toISOString(),
+  }
+  await new Promise(r => setTimeout(r, 5))
+  saveSite('v1', { results: { ...site.results, si: { ...site.results.si, a3: { k1: 'NA' } } } })
+  await flush()
+  log('on the same item and test, the newest edit wins', server.visits.get('v1').siteResults.results.si.a3.k1 === 'NA')
+}
+{
+  // Joining a visit another device started brings both whole-site steps together.
+  const server = setup()
+  await boot(server)
+  server.down = true
+  const { visit } = await start()
+  saveSite(visit.id, siteAnswers({ si: { a1: { k1: 'FAIL' } } }))
+  server.down = false
+  server.seedVisit({ id: 'theirs', siteResults: siteAnswers({ ss: { w1: 'PASS' } }, { touchedAt: new Date(Date.now() - 60000).toISOString() }) })
+  await flush()
+  const site = server.visits.get('theirs').siteResults
+  log('joining an open visit keeps both devices\' whole-site answers',
+    site.results.ss?.w1 === 'PASS' && site.results.si?.a1?.k1 === 'FAIL', JSON.stringify(site.results))
+}
+{
+  // A room's type is saved with it.
+  const server = setup()
+  const device = await boot(server)
+  const clients = readClients()
+  clients[0].locations[0].floors[0].rooms.push({ id: 'r3', name: 'Bedroom 1', planNumber: '', roomType: 'bedroom' })
+  clients[0].locations[0].floors[0].rooms[0].roomType = 'hallway'
+  writeClients(clients)
+  await flush()
+  const rooms = server.clients[0].locations[0].floors[0].rooms
+  log('a new room goes in with its type', rooms.find(r => r.id === 'r3')?.roomType === 'bedroom')
+  log('a changed type is saved', rooms.find(r => r.id === 'r1')?.roomType === 'hallway')
+  await boot(server, device)
+  log('and both come back', readClients()[0].locations[0].floors[0].rooms.find(r => r.id === 'r3')?.roomType === 'bedroom')
+}
+{
+  // A correction finished again keeps the date it was first finished.
+  const server = setup()
+  const first = new Date(Date.now() - 86400000 * 300).toISOString()
+  server.seedVisit({ id: 'old', completedAt: null, firstCompletedAt: first })
+  await boot(server)
+  store.completeVisit('c1', 'l1', 'old')
+  log('finishing a correction shows its first date straight away', localVisit('old').completedAt === first, localVisit('old').completedAt)
+  await flush()
+  log('which is the date the database kept', server.visits.get('old').completedAt === first && localVisit('old').completedAt === first)
+
+  // A device that didn't know it had one finds out from the database.
+  server.visits.get('old').completedAt = null // reopened elsewhere
+  const device = await boot(server)
+  const clients = readClients()
+  delete clients[0].locations[0].visits.find(v => v.id === 'old').firstCompletedAt
+  writeClients(clients)
+  store.completeVisit('c1', 'l1', 'old')
+  log('without it, this device would show today', localVisit('old').completedAt !== first)
+  await flush()
+  log('after saving it shows the date the database kept', localVisit('old').completedAt === first, localVisit('old').completedAt)
+  log('in its record of the database too', cache.readSaved()[0].locations[0].visits.find(v => v.id === 'old').completedAt === first)
+  const writes = server.countCalls('updateVisit')
+  await flush()
+  log('and nothing more to send', server.countCalls('updateVisit') === writes && !cache.hasUnsavedWork())
+  await boot(server, device)
+  log('through a reload', localVisit('old').completedAt === first)
+
+  // A first finish is today, as it always was.
+  const fresh = setup()
+  fresh.seedVisit({ id: 'new' })
+  await boot(fresh)
+  store.completeVisit('c1', 'l1', 'new')
+  await flush()
+  const done = Date.parse(localVisit('new').completedAt)
+  log('a visit finished for the first time takes today\'s date',
+    Date.now() - done < 60000 && fresh.visits.get('new').completedAt === localVisit('new').completedAt)
+  store.reopenVisit('c1', 'l1', 'new')
+  await new Promise(r => setTimeout(r, 5))
+  store.recordExport('c1', 'l1', 'new', { mode: 'revision', filename: 'Rev 1.xlsx' })
+  log('reopened and finished by exporting, it keeps that date', Date.parse(localVisit('new').completedAt) === done)
+}
+
+// ── Equipment (C1b) ─────────────────────────────────────────────────────────
+const items = () => store.listAssets('c1', 'l1')
+{
+  const server = setup()
+  const device = await boot(server)
+  const alarm = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r1', label: 'Bedroom 1 alarm' })
+  log('an item is added at the site, pinned to a room', items().length === 1 && items()[0].roomId === 'r1' && !!alarm.createdAt)
+  await flush()
+  const row = server.assets.get(alarm.id)
+  log('it reaches the database under its own id', row?.locationId === 'l1' && row.roomId === 'r1' && row.assetType === 'smoke_alarm')
+  log('with the date it was added on the device', row?.createdAt === alarm.createdAt)
+  log('and nothing more to send', !cache.hasUnsavedWork() && saveStatus() === 'saved')
+
+  await boot(server, device)
+  log('it comes back after a reload', items()[0]?.label === 'Bedroom 1 alarm' && items()[0].roomId === 'r1')
+
+  // Two devices edit different things about the same alarm.
+  server.assets.get(alarm.id).serial = 'SN-THEIRS'
+  store.updateAsset('c1', 'l1', alarm.id, { label: 'Main bedroom alarm', attributes: { power: 'hardwired' } })
+  await flush()
+  const both = server.assets.get(alarm.id)
+  log('an edit sends only what changed, so another device\'s edit stays',
+    both.label === 'Main bedroom alarm' && both.attributes.power === 'hardwired' && both.serial === 'SN-THEIRS', JSON.stringify(both))
+  log('an item\'s id and added date can\'t be edited',
+    store.updateAsset('c1', 'l1', alarm.id, { id: 'x', createdAt: 'then' }).id === alarm.id && items()[0].createdAt === alarm.createdAt)
+
+  store.updateAsset('c1', 'l1', alarm.id, { removedAt: new Date().toISOString() })
+  await flush()
+  log('removing it marks it removed, never deletes it', !!server.assets.get(alarm.id)?.removedAt && items().length === 1)
+
+  // Offline, then a reload, then back.
+  server.down = true
+  const rcd = store.addAsset('c1', 'l1', { assetType: 'rcd', label: 'RCD 1' })
+  await flush()
+  await boot(server, device)
+  log('an item added offline survives a reload', items().some(a => a.id === rcd.id))
+  server.down = false
+  await flush()
+  log('and goes when the connection returns', server.assets.has(rcd.id) && !cache.hasUnsavedWork())
+
+  // Its answer lost on the way back: sent again, no second item.
+  const lost = store.addAsset('c1', 'l1', { assetType: 'rcd', label: 'RCD 2' })
+  server.loseAnswer('addAsset')
+  const first = await flush()
+  const second = await flush()
+  log('an item whose answer was lost is sent again without a duplicate',
+    first === false && second === true && [...server.assets.values()].filter(a => a.label === 'RCD 2').length === 1 && server.assets.has(lost.id))
+}
+{
+  // A room deleted: its items stay at the site, unpinned.
+  const server = setup()
+  await boot(server)
+  const alarm = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r2' })
+  await flush()
+  store.deleteRoom('c1', 'l1', 'r2')
+  log('deleting a room here unpins its items', items()[0].roomId === null)
+  await flush()
+  log('and the database agrees', server.assets.get(alarm.id)?.roomId === null && !cache.hasUnsavedWork())
+
+  // Pinned on this device to a room another device deleted meanwhile.
+  const late = store.addAsset('c1', 'l1', { assetType: 'smoke_alarm', roomId: 'r1' })
+  const moved = items()[0]
+  store.updateAsset('c1', 'l1', moved.id, { roomId: 'r1' })
+  server.removeRoom('r1')
+  await flush()
+  log('an item added under a room deleted elsewhere is kept at the site, unpinned',
+    server.assets.get(late.id)?.roomId === null, JSON.stringify(server.assets.get(late.id)))
+  log('so is one moved into it', server.assets.get(moved.id)?.roomId === null)
+  log('and saving carries on', saveStatus() === 'saved' && !cache.hasUnsavedWork(), saveStatus())
+
+  // Its site deleted elsewhere: nothing left to save, and nothing stuck.
+  const ghost = setup()
+  ghost.seedClient({ id: 'c2', name: 'Other', locationId: 'l2', rooms: ['r9'] })
+  await boot(ghost)
+  const kept = store.addAsset('c2', 'l2', { assetType: 'rcd' })
+  await flush()
+  ghost.assets.delete(kept.id)
+  store.updateAsset('c2', 'l2', kept.id, { label: 'Renamed' })
+  await flush()
+  log('an edit to an item deleted with its site elsewhere doesn\'t jam saving', saveStatus() === 'saved', saveStatus())
+}
+
+// ── Signing off (C1f) ───────────────────────────────────────────────────────
+{
+  const server = setup()
+  server.seedVisit({ id: 'v1' })
+  server.prefs.licenceNumber = 'A123'
+  const device = await boot(server)
+  log('the technician\'s licence number is read with their settings', cache.readSettings()?.licenceNumber === 'A123')
+  const signoff = { technician: 'Sam', licence_number: 'A123', signed_at: new Date().toISOString(), signature: 'M1 1L2 2' }
+  store.signOffVisit('c1', 'l1', 'v1', { outcome: 'compliant', signoff })
+  log('signing off finishes the visit', !!localVisit('v1').completedAt)
+  await flush()
+  const row = server.visits.get('v1')
+  log('the outcome and sign-off reach the database', row.outcome === 'compliant' && row.signoff?.licence_number === 'A123' && !!row.completedAt)
+  const writes = server.countCalls('updateVisit')
+  await flush()
+  log('a sign-off already sent isn\'t sent again', server.countCalls('updateVisit') === writes)
+  await boot(server, device)
+  log('it comes back with the database\'s stamps', localVisit('v1').signoff?.signed_by === 'user' && localVisit('v1').outcome === 'compliant')
+  store.setVisitTechnician('c1', 'l1', 'v1', 'Samantha')
+  await flush()
+  log('and another change to the visit leaves it alone',
+    server.countCalls('updateVisit') === writes + 1 && server.visits.get('v1').signoff.recorded_at === row.signoff.recorded_at)
+
+  const merged = mergeVisit({ id: 'mine', rooms: {}, outcome: 'compliant', signoff }, { id: 'theirs', rooms: {} })
+  log('a joined visit keeps this device\'s sign-off', merged.outcome === 'compliant' && merged.signoff?.signature === 'M1 1L2 2')
+}
+
+// ── Licence numbers and the team's reminders switch (C3) ────────────────────
+{
+  const server = setup()
+  server.prefs = { defaultTechnician: 'Sam', licenceNumber: '' }
+  await boot(server)
+  log('reminders are on until the team switches them off', cache.readSettings()?.remindersEnabled === true)
+  const prefsWrites = server.countCalls('saveMemberPrefs')
+  cache.writeSettings({ ...cache.readSettings(), licenceNumber: 'QLD-77' })
+  await flush()
+  log('a technician\'s licence number reaches their own row, with only what changed',
+    server.prefs.licenceNumber === 'QLD-77' && server.prefs.defaultTechnician === 'Sam' &&
+      server.countCalls('saveMemberPrefs') === prefsWrites + 1 && server.countCalls('updateTeamSettings') === 0)
+  cache.writeSettings({ ...cache.readSettings(), remindersEnabled: false, company: { name: 'Sparks', licence_number: 'L1', rec_number: 'R1' } })
+  await flush()
+  log('the reminders switch and the company\'s numbers reach the team\'s settings',
+    server.settings.remindersEnabled === false && server.settings.company.rec_number === 'R1' && server.countCalls('saveMemberPrefs') === prefsWrites + 1)
+  server.admin = false
+  cache.writeSettings({ ...cache.readSettings(), remindersEnabled: true })
+  await flush()
+  log('a member can\'t switch them back on for everybody', server.settings.remindersEnabled === false)
+}
+
+// ── A client's contact and reminders switch (C3b) ───────────────────────────
+{
+  const server = setup()
+  const device = await boot(server)
+  // The stand-in's client has no switch at all, which the app reads as on.
+  log('a client gets reminders until it is switched off', readClients()[0].remindersEnabled !== false && !readClients()[0].contactEmail)
+  store.updateClientDetails('c1', { contactName: 'Jane Citizen', contactEmail: ' jane@example.com ' })
+  await flush()
+  const sent = server.lastClientDetails?.[1]
+  log('only what changed is sent', JSON.stringify(Object.keys(sent ?? {}).sort()) === '["contactEmail","contactName"]', JSON.stringify(sent))
+  log('and it reaches the client', server.clients[0].contactName === 'Jane Citizen' && server.clients[0].contactEmail === ' jane@example.com ')
+  const writes = server.countCalls('updateClientDetails')
+  await flush()
+  log('nothing is sent again', server.countCalls('updateClientDetails') === writes)
+  store.updateClientDetails('c1', { remindersEnabled: false })
+  await flush()
+  log('switching its reminders off is saved', server.clients[0].remindersEnabled === false && server.countCalls('updateClientDetails') === writes + 1)
+
+  // Two devices, two different details.
+  const other = await boot(server)
+  store.updateClientDetails('c1', { contactPhone: '0400 111 222' })
+  await flush()
+  await boot(server, device)
+  store.updateClientDetails('c1', { contactName: 'Jane Smith' })
+  await flush()
+  log('two devices changing different details both keep theirs',
+    server.clients[0].contactPhone === '0400 111 222' && server.clients[0].contactName === 'Jane Smith', JSON.stringify(server.clients[0]))
+  await boot(server, other)
+  log('and each device reads both', readClients()[0].contactPhone === '0400 111 222' && readClients()[0].contactName === 'Jane Smith')
+
+  // A new client with a contact from the start.
+  writeClients([...readClients(), { id: 'c9', name: 'New Co', locations: [], contactEmail: 'ops@new.co', remindersEnabled: true }])
+  await flush()
+  const fresh = server.lastClientDetails
+  log('a new client\'s contact follows it in, without the switch it left on',
+    fresh?.[0] === 'c9' && JSON.stringify(fresh[1]) === '{"contactEmail":"ops@new.co"}' && server.clients.find(c => c.id === 'c9')?.contactEmail === 'ops@new.co',
+    JSON.stringify(fresh))
+}
+
 // ── The import still gets all or nothing ────────────────────────────────────
 {
   const server = new FakeServer()
@@ -865,6 +1190,28 @@ for (const step of ['createClient', 'addLocation', 'addFloor', 'addRoom', 'start
   log('a joined visit carries on under the server\'s id, with both sets of rooms',
     merged.id === 'theirs' && merged.startedAt === 'then' && same(Object.keys(merged.rooms).sort(), ['r1', 'r2']) && merged.exports.length === 2)
   log('a blank technician takes this device\'s', merged.technician === 'Sam')
+
+  // The whole-site step, and sections repeated per item.
+  const item = { mainLabel: 'x', tests: [], sections: [{ id: 'si', label: 'Each alarm', scope: 'item', assetType: 'smoke_alarm', tests: [{ id: 'k1', label: 'Works' }] }] }
+  const itemB = { mainLabel: 'x', tests: [], sections: [{ id: 'sb', label: 'Each alarm', scope: 'item', assetType: 'smoke_alarm', tests: [{ id: 'kb', label: 'Works' }, { id: 'kc', label: 'Only here' }] }] }
+  const site = mergeSite(
+    undefined,
+    { template: itemB, results: { sb: { a1: { kb: 'FAIL' }, a2: { kc: 'PASS' } } }, troubleshooting: { 'a1:kb': 'Mine' }, ...newer },
+    { template: item, results: { si: { a1: { k1: 'PASS' }, a3: { k1: 'PASS' } } }, troubleshooting: {}, ...older },
+  )
+  log('a per-item test with another id lines up under the kept list, item by item',
+    site.results.si.a1.k1 === 'FAIL' && site.results.si.a3.k1 === 'PASS' && site.troubleshooting['a1:k1'] === 'Mine', JSON.stringify(site))
+  log('a test only the other list has, answered for just one item, joins the list',
+    site.template.sections[0].tests.some(t => t.id === 'kc') && site.results.si.a2.kc === 'PASS', JSON.stringify(site.template.sections[0].tests))
+  log('a whole-site step has no fail count or status', !('fails' in site) && !('status' in site))
+  log('nothing on one side, the other is kept as it is',
+    mergeSite(undefined, undefined, { results: { x: 1 } }).results.x === 1 && mergeSite(undefined, { results: { y: 1 } }, {}).results.y === 1)
+  const joinedSite = mergeVisit(
+    { id: 'mine', rooms: {}, siteResults: { template: item, results: { si: { a1: { k1: 'PASS' } } } } },
+    { id: 'theirs', rooms: {}, siteResults: {} },
+  )
+  log('a joined visit keeps this device\'s whole-site answers', joinedSite.siteResults.results.si.a1.k1 === 'PASS')
+  log('and has one even when neither side did', same(mergeVisit({ id: 'a', rooms: {} }, { id: 'b', rooms: {} }).siteResults, {}))
 }
 
 // ── Failures, as the real Supabase client reports them ──────────────────────

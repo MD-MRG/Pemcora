@@ -110,10 +110,11 @@ const CLIENTS = [
   },
 ]
 
-// A device that has been here before: an expired login, the last team, a device copy.
-async function hasBeenHere(page, { copy = true } = {}) {
+// A device that has been here before: an expired login, the last team, a device copy,
+// and with `unsaved`, a second tab's copy holding work the team doesn't have yet.
+async function hasBeenHere(page, { copy = true, unsaved = false } = {}) {
   await page.evaluate(
-    async ({ AUTH_KEY, USER, TEAM, CLIENTS, copy }) => {
+    async ({ AUTH_KEY, USER, TEAM, CLIENTS, copy, unsaved }) => {
       localStorage.setItem(
         AUTH_KEY,
         JSON.stringify({
@@ -147,13 +148,39 @@ async function hasBeenHere(page, { copy = true } = {}) {
           unsaved: false,
           savedAt: new Date().toISOString(),
         })
+        if (unsaved) {
+          const mine = { ...data, clients: [{ ...CLIENTS[0], name: 'Equinix (renamed here)' }] }
+          tx.objectStore('copies').put({
+            id: `${USER.id}:${TEAM.id}:unsaved-tab`,
+            userId: USER.id,
+            teamId: TEAM.id,
+            data: mine,
+            snapshot: data,
+            held: {},
+            unsaved: true,
+            savedAt: new Date().toISOString(),
+          })
+        }
         tx.oncomplete = resolve
       })
       db.close()
     },
-    { AUTH_KEY, USER, TEAM, CLIENTS, copy },
+    { AUTH_KEY, USER, TEAM, CLIENTS, copy, unsaved },
   )
 }
+
+// The device copies left, by id.
+const copiesLeft = page =>
+  page.evaluate(
+    () =>
+      new Promise(resolve => {
+        const open = indexedDB.open('pemcora-offline')
+        open.onsuccess = () => {
+          const all = open.result.transaction('copies').objectStore('copies').getAllKeys()
+          all.onsuccess = () => resolve(all.result.map(String).sort())
+        }
+      }),
+  )
 
 const pageErrors = []
 async function newDevice() {
@@ -291,6 +318,86 @@ try {
     await ctx.close()
   }
 
+  // ── Signed out from another device (step C5c) ─────────────────────────────
+  // The Auth server refuses to renew the login. With the code that says the login
+  // no longer exists, the device was signed out elsewhere: what the team has goes,
+  // what only this device has stays (D12). Any other refusal is just a sign-out.
+  // `midway`: the app is already open when its renewal is refused, rather than
+  // opening with a login that has been ended.
+  for (const [code, ended, midway] of [
+    ['refresh_token_not_found', true, false],
+    ['refresh_token_already_used', false, false],
+    ['session_not_found', true, true],
+  ]) {
+    const { ctx, page } = await newDevice()
+    await hasBeenHere(page, { unsaved: true })
+    const expiresAt = when =>
+      page.evaluate(
+        ([key, at]) => {
+          const stored = JSON.parse(localStorage.getItem(key))
+          localStorage.setItem(key, JSON.stringify({ ...stored, expires_at: at }))
+        },
+        [AUTH_KEY, when],
+      )
+    if (midway) await expiresAt(Math.floor(Date.now() / 1000) + 3600)
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
+    await ctx.route(`${BACKEND}/**`, route => {
+      const url = route.request().url()
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+      if (/\/auth\/v1\/token\?grant_type=refresh_token/.test(url)) {
+        // The same message either way: only the code tells them apart.
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          headers: cors,
+          body: JSON.stringify({ code: 400, error_code: code, msg: 'Invalid Refresh Token: Refresh Token Not Found' }),
+        })
+      }
+      return route.abort()
+    })
+    await page.reload({ waitUntil: 'load' })
+    if (midway) {
+      log('a device with a login still good opens as usual', await until(async () => (await page.locator('nav a').count()) >= 7, 20000))
+      // Its token runs out, and coming back online it asks to renew it.
+      await expiresAt(Math.floor(Date.now() / 1000) - 60)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    }
+    const signIn = await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1, 20000)
+    const said = /signed out from another device/.test(await page.textContent('body'))
+    await until(async () => (await copiesLeft(page)).length < 2, ended ? 5000 : 1000)
+    const left = await copiesLeft(page)
+    const session = await page.evaluate(() => ({ user: localStorage.getItem('fc.session.user'), teams: localStorage.getItem('fc.session.teams') }))
+    if (ended && midway) {
+      log('one already open, finding its login was ended, goes to the sign-in screen too', signIn)
+      log('saying so', said)
+      // Open, it gathered the other tab's unsent work into its own copy.
+      const kept = await page.evaluate(
+        () =>
+          new Promise(resolve => {
+            const open = indexedDB.open('pemcora-offline')
+            open.onsuccess = () => {
+              const all = open.result.transaction('copies').objectStore('copies').getAll()
+              all.onsuccess = () => resolve(all.result.map(c => ({ unsaved: c.unsaved || Object.keys(c.held ?? {}).length > 0, name: c.data?.clients?.[0]?.name })))
+            }
+          }),
+      )
+      log('keeping only what exists nowhere else',
+        !left.some(id => id.endsWith(':old-tab')) && kept.length > 0 && kept.every(c => c.unsaved) && kept.some(c => c.name === 'Equinix (renamed here)'),
+        JSON.stringify(kept))
+    } else if (ended) {
+      log('a device whose login was ended elsewhere goes to the sign-in screen', signIn)
+      log('which says it was signed out from another device', said)
+      log('what the team already had is wiped from it', !left.some(id => id.endsWith(':old-tab')), left.join(', '))
+      log('but work that exists nowhere else stays, for the next sign-in here', left.some(id => id.endsWith(':unsaved-tab')))
+      log('and who was signed in here goes', !session.user && !session.teams)
+      await page.screenshot({ path: join(OUT, '..', 'ended-elsewhere.png') }).catch(() => {})
+    } else {
+      log('another refusal, with the same message, is a plain sign-out', signIn && !said)
+      log('which wipes nothing', left.length === 2, left.join(', '))
+    }
+    await ctx.close()
+  }
+
   // ── What the team has (step B4) ───────────────────────────────────────────
   {
     // A login that is still good, so the app asks the database as it would online.
@@ -368,14 +475,17 @@ try {
       await ctx.unroute(`${BACKEND}/**`)
       await ctx.setOffline(true)
 
+      // A Due list kept on the device goes too (C4).
+      await page.evaluate(() => localStorage.setItem('fc.session.due', JSON.stringify({ teamId: 't', at: 'x', rows: [] })))
       await page.locator('nav a').filter({ hasText: 'Settings' }).click()
       await page.getByRole('button', { name: 'Sign out' }).click()
       await until(async () => (await page.getByRole('dialog').count()) === 1)
       const leave = page.getByRole('dialog').getByRole('button', { name: /sign out/i }).last()
       await leave.click()
       await until(async () => (await page.getByRole('heading', { name: /sign in/i }).count()) === 1)
-      log('signing out leaves none of it behind',
-        (await page.evaluate(() => localStorage.getItem('fc.session.entitlements'))) === null)
+      log('signing out leaves none of it behind, nor the Due list',
+        (await page.evaluate(() => localStorage.getItem('fc.session.entitlements'))) === null &&
+          (await page.evaluate(() => localStorage.getItem('fc.session.due'))) === null)
       await ctx.close()
     }
     {

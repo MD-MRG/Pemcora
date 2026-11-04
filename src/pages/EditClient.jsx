@@ -4,6 +4,7 @@ import { useLocation as useRouterLocation } from 'react-router-dom'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import FloorsEditor from '../components/FloorsEditor.jsx'
+import ClientCard from '../components/ClientCard.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import {
   listClients,
@@ -279,6 +280,7 @@ export default function EditClient() {
     <div className="p-4 sm:p-6">
       <LocationsTable
         client={client}
+        above={<ClientCard key={client.id} client={client} />}
         onBack={() => {
           setClientId(null)
           refresh()

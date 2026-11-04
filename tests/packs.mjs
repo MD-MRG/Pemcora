@@ -66,10 +66,10 @@ for (const block of blocks('packs'))
 
 const catalogWorkflows = new Map()
 for (const block of blocks('workflows'))
-  for (const [, id, packId, label] of block.matchAll(
-    /\(\s*'([a-z_]+)',\s*'([a-z_]+)',\s*'([^']*)',\s*(?:null|\d+),\s*(?:true|false)\s*\)/g,
+  for (const [, id, packId, label, months, fixed] of block.matchAll(
+    /\(\s*'([a-z_]+)',\s*'([a-z_]+)',\s*'([^']*)',\s*(null|\d+),\s*(true|false)\s*\)/g,
   ))
-    catalogWorkflows.set(id, { packId, label })
+    catalogWorkflows.set(id, { packId, label, months: months === 'null' ? null : Number(months), fixed: fixed === 'true' })
 
 log('the catalogue parses: 5 packs, 9 workflows', catalogPacks.size === 5 && catalogWorkflows.size === 9,
   `${catalogPacks.size} packs, ${catalogWorkflows.size} workflows`)
@@ -89,6 +89,17 @@ log('every catalogue workflow has an entry, in its pack, with its label', mismat
   mismatched.map(([id]) => id).join(', '))
 log('the code adds no workflow the catalogue lacks', WORKFLOWS.every(w => catalogWorkflows.has(w.id)))
 log('no workflow is defined twice', new Set(WORKFLOWS.map(w => w.id)).size === WORKFLOWS.length)
+
+// How often each recurs (C3): the pack file says what the catalogue says, and a
+// workflow with no interval there neither recurs nor is fixed.
+const intervalsOff = [...catalogWorkflows].filter(([id, w]) => {
+  const found = WORKFLOWS.find(x => x.id === id)?.interval
+  return found ? found.months !== w.months || found.fixed !== w.fixed : w.months !== null || w.fixed
+})
+log('every workflow\'s interval matches the catalogue', intervalsOff.length === 0, intervalsOff.map(([id]) => id).join(', '))
+log('PM recurs with no default; commissioning and Custom List don\'t recur',
+  same(WORKFLOWS.find(w => w.id === 'maintenance').interval, { months: null, fixed: false }) &&
+    !WORKFLOWS.find(w => w.id === 'commissioning').interval && !WORKFLOWS.find(w => w.id === 'custom').interval)
 
 // ── Page wording ─────────────────────────────────────────────────────────────
 const PAGE_FIELDS = ['title', 'progressNoun', 'startLabel', 'newLabel', 'emptyLine', 'reportTitle']

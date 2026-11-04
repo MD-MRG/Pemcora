@@ -66,6 +66,21 @@ export function listClients() {
   return read()
 }
 
+const CLIENT_DETAIL_KEYS = ['contactName', 'contactEmail', 'contactPhone', 'remindersEnabled']
+
+/**
+ * A client's contact, who reports and re-check reminders go to, and whether it
+ * gets reminders at all. Saved as typed; the database copy is trimmed.
+ */
+export function updateClientDetails(clientId, patch) {
+  const clients = read()
+  const client = clients.find(c => c.id === clientId)
+  if (!client) return null
+  for (const key of CLIENT_DETAIL_KEYS) if (key in patch) client[key] = patch[key]
+  write(clients)
+  return client
+}
+
 export function findClientByName(name) {
   const n = normalise(name)
   return read().find(c => normalise(c.name) === n) ?? null
@@ -139,6 +154,7 @@ export function saveFloors(clientId, locationId, floors) {
   const location = client?.locations.find(l => l.id === locationId)
   if (!location) return false
   location.floors = pruneFloors(floors)
+  unpinFromGoneRooms(location)
   write(clients)
   return true
 }
@@ -384,11 +400,36 @@ export function setVisitTechnician(clientId, locationId, visitId, technician) {
   return true
 }
 
+// Finishing a visit. A reopened one was a correction, and keeps the date it was
+// first finished, so its report and due dates stay as they were (2.2). The
+// database keeps it regardless; this is so the screen says so straight away,
+// offline too.
+function finish(visit) {
+  visit.completedAt = visit.firstCompletedAt ?? new Date().toISOString()
+  visit.firstCompletedAt = visit.completedAt
+}
+
+/**
+ * Signs a visit off (C1): the outcome the technician declares, and their name,
+ * licence number and signature. Signing is what finishes an electrical or smoke
+ * alarm check, so it finishes the visit too.
+ */
+export function signOffVisit(clientId, locationId, visitId, { outcome, signoff }) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return false
+  visit.outcome = outcome
+  visit.signoff = signoff
+  if (!visit.completedAt) finish(visit)
+  write(clients)
+  return true
+}
+
 export function completeVisit(clientId, locationId, visitId) {
   const clients = read()
   const visit = findVisit(clients, clientId, locationId, visitId)
   if (!visit) return false
-  visit.completedAt = new Date().toISOString()
+  finish(visit)
   write(clients)
   return true
 }
@@ -414,7 +455,7 @@ export function roomsWithStatus(clientId, locationId, visit) {
  * and shows up in Edit Client too. A floor is required — either an existing
  * one or a new label — so the room lands in the right part of the list.
  */
-export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel, name, planNumber }) {
+export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel, name, planNumber, roomType = '' }) {
   const clients = read()
   const location = findLoc(clients, clientId, locationId)
   if (!location) return { outcome: 'missing' }
@@ -432,7 +473,12 @@ export function addRoomToLocation(clientId, locationId, { floorId, newFloorLabel
     }
   }
 
-  const room = { id: uid(), name: String(name ?? '').trim(), planNumber: String(planNumber ?? '').trim() }
+  const room = {
+    id: uid(),
+    name: String(name ?? '').trim(),
+    planNumber: String(planNumber ?? '').trim(),
+    ...(roomType ? { roomType } : {}),
+  }
   floor.rooms.push(room)
   write(clients)
   return { outcome: 'added', floorId: floor.id, roomId: room.id }
@@ -456,6 +502,7 @@ export function deleteRoom(clientId, locationId, roomId) {
     const i = floor.rooms.findIndex(r => r.id === roomId)
     if (i >= 0) {
       floor.rooms.splice(i, 1)
+      unpinFromGoneRooms(location)
       write(clients)
       return true
     }
@@ -470,6 +517,99 @@ export function deleteRoom(clientId, locationId, roomId) {
 export function roomResultCount(clientId, locationId, roomId) {
   const location = findLoc(read(), clientId, locationId)
   return (location?.visits ?? []).filter(v => v.rooms?.[roomId]).length
+}
+
+// ── Equipment ───────────────────────────────────────────────────────────────
+//
+// The items at a site: smoke alarms, RCDs, displays. They belong to the site, so
+// they carry over from visit to visit, and each may be pinned to a room. A replaced
+// item is marked removed, never deleted, so the reports that tested it still name
+// it. The equipment panel (C2) lists and edits them; the whole-site step adds
+// items as it goes.
+
+/** The site's items, removed ones included. */
+export function listAssets(clientId, locationId) {
+  return findLoc(read(), clientId, locationId)?.assets ?? []
+}
+
+const newAsset = ({ assetType, roomId = null, label = '', ...details }, now) => ({
+  id: uid(),
+  assetType,
+  roomId,
+  label: String(label ?? '').trim(),
+  make: '',
+  model: '',
+  serial: '',
+  attributes: {},
+  installedOn: null,
+  expiresOn: null,
+  removedAt: null,
+  ...details,
+  // When it was added decides which reports it appears in, so it is the
+  // device's own clock, not whenever the database first hears of it.
+  createdAt: now,
+})
+
+export function addAsset(clientId, locationId, details) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  if (!location || !details?.assetType) return null
+  const asset = newAsset(details, new Date().toISOString())
+  location.assets = [...(location.assets ?? []), asset]
+  write(clients)
+  return asset
+}
+
+export function updateAsset(clientId, locationId, assetId, patch) {
+  const clients = read()
+  const asset = findLoc(clients, clientId, locationId)?.assets?.find(a => a.id === assetId)
+  if (!asset) return null
+  const { id: _id, createdAt: _createdAt, ...allowed } = patch
+  Object.assign(asset, allowed)
+  write(clients)
+  return asset
+}
+
+/** Taken out of service, not deleted: the reports that tested it still name it. */
+export const removeAsset = (clientId, locationId, assetId) =>
+  updateAsset(clientId, locationId, assetId, { removedAt: new Date().toISOString() })
+
+/**
+ * Replacing an item: the old one is removed and the new one added in its place,
+ * at the same moment, so every report has exactly one of them standing. The new
+ * one takes the old one's type, and its room and name unless `details` say
+ * otherwise. It remembers what it replaced (attributes.replaces), which the
+ * panel and the report name.
+ */
+export function replaceAsset(clientId, locationId, assetId, details = {}) {
+  const clients = read()
+  const location = findLoc(clients, clientId, locationId)
+  const old = location?.assets?.find(a => a.id === assetId)
+  if (!old || old.removedAt) return null
+  const now = new Date().toISOString()
+  old.removedAt = now
+  const asset = newAsset(
+    {
+      label: old.label,
+      roomId: old.roomId,
+      ...details,
+      assetType: old.assetType,
+      attributes: { ...(details.attributes ?? {}), replaces: old.id },
+    },
+    now,
+  )
+  location.assets = [...location.assets, asset]
+  write(clients)
+  return asset
+}
+
+// A room deleted from the floor plan leaves its items at the site, unpinned, as
+// the database does.
+function unpinFromGoneRooms(location) {
+  const rooms = new Set((location.floors ?? []).flatMap(f => (f.rooms ?? []).map(r => r.id)))
+  for (const asset of location.assets ?? []) {
+    if (asset.roomId && !rooms.has(asset.roomId)) asset.roomId = null
+  }
 }
 
 // ── Room entries within a visit ─────────────────────────────────────────────
@@ -525,6 +665,26 @@ export function saveRoomEntry(clientId, locationId, visitId, roomId, patch) {
   return entry
 }
 
+// ── The whole-site step ─────────────────────────────────────────────────────
+//
+// Sections done once per visit, and those repeated for each item at the site,
+// kept on the visit as one entry shaped like a room's (testTypes.js). It has no
+// status or fail count of its own: a visit's fails are counted from the answers.
+
+export function getSiteEntry(clientId, locationId, visitId) {
+  const site = findVisit(read(), clientId, locationId, visitId)?.siteResults
+  return site && Object.keys(site).length ? site : null
+}
+
+export function saveSiteEntry(clientId, locationId, visitId, patch) {
+  const clients = read()
+  const visit = findVisit(clients, clientId, locationId, visitId)
+  if (!visit) return null
+  visit.siteResults = { ...(visit.siteResults ?? {}), ...patch, touchedAt: new Date().toISOString() }
+  write(clients)
+  return visit.siteResults
+}
+
 // ── Report exports ──────────────────────────────────────────────────────────
 //
 // Only the revision record is kept, never the file. The visit holds everything
@@ -556,7 +716,7 @@ export function recordExport(clientId, locationId, visitId, { mode, filename }) 
   if (existing >= 0) visit.exports[existing] = record
   else visit.exports.push(record)
 
-  if (!visit.completedAt) visit.completedAt = new Date().toISOString()
+  if (!visit.completedAt) finish(visit)
 
   write(clients)
   return record
