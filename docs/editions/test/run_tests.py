@@ -1,14 +1,14 @@
 """
-Proves 0006, 0007, 0008 and 0009 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0010 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 + 0007 + 0008 + 0009 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0010 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006, 0007, 0008 and 0009 are read from instead (a copy with a fix being tried, say).
+0006 to 0010 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -26,7 +26,8 @@ import psycopg
 
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
-EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql")
+EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
+            "0010_signed_in_devices.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -124,7 +125,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 + 0007 + 0008 + 0009, twice ───────────────────────────────────────
+# ── 0006 to 0010, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -1824,6 +1825,52 @@ check("C4: …but the Due page is still told the client opted out",
 run_file(NEW / "0009_due_opt_outs.sql")   # re-run last, after every other file's re-runs
 check("C4: 0009 re-runs after the rest and still answers",
       len(act(S3U, "select * from public.due_opt_outs(%s)", [S3T])) == 1)
+
+# ── Step C5: the devices signed in to your account (0010) ───────────────────
+print("\n— Step C5: your own logins, listed and ended by you alone")
+C5_A = user("c5-a@devices.test")
+C5_B = user("c5-b@devices.test")
+C5_A1, C5_A2, C5_OLD, C5_B1 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+for sid, uid, agent, refreshed, not_after in (
+    (C5_A1, C5_A, "Mozilla/5.0 (iPhone) Safari", "2026-11-04 01:00:00", None),
+    (C5_A2, C5_A, "Mozilla/5.0 (Windows NT 10.0) Edg/130", "2026-11-03 22:00:00", None),
+    (C5_OLD, C5_A, "Old phone", "2026-01-01 00:00:00", "2026-02-01 00:00:00+00"),
+    (C5_B1, C5_B, "Someone else's", "2026-11-04 02:00:00", None),
+):
+    su("""insert into auth.sessions (id, user_id, created_at, updated_at, not_after, refreshed_at, user_agent, ip)
+          values (%s, %s, now() - interval '2 days', now() - interval '2 days', %s, %s, %s, '203.0.113.7')""",
+       [sid, uid, not_after, refreshed, agent])
+    su("insert into auth.refresh_tokens (token, user_id, revoked, session_id) values (%s, %s, false, %s)",
+       [f"tok-{sid}", str(uid), sid])
+
+C5_MINE = act(C5_A, "select * from public.my_devices()")
+check("C5: a person sees their own logins, newest use first, and not one that has run out",
+      [r[0] for r in C5_MINE] == [C5_A1, C5_A2], str([(r[0], r[1]) for r in C5_MINE]))
+check("C5: …each with its browser details and times, and nothing else: no token, no IP address",
+      len(C5_MINE[0]) == 4 and C5_MINE[0][1] == "Mozilla/5.0 (iPhone) Safari" and "203.0.113.7" not in str(C5_MINE))
+check("C5: …last used as the Auth server recorded it, in UTC",
+      C5_MINE[0][3] == datetime(2026, 11, 4, 1, 0, tzinfo=timezone.utc), str(C5_MINE[0][3]))
+check("C5: …and nobody else's", not any(r[0] == C5_B1 for r in C5_MINE)
+      and [r[0] for r in act(C5_B, "select * from public.my_devices()")] == [C5_B1])
+
+refused("C5: someone else's login can't be ended", C5_B, "select public.end_device(%s)", [C5_A1],
+        contains="isn't one of yours", sqlstate="P0002")
+check("C5: …and is still there", su("select count(*) from auth.sessions where id = %s", [C5_A1])[0][0] == 1)
+act(C5_A, "select public.end_device(%s)", [C5_A2])
+check("C5: ending one of your own deletes it, and its refresh tokens with it, so it can't renew",
+      su("select count(*) from auth.sessions where id = %s", [C5_A2])[0][0] == 0
+      and su("select count(*) from auth.refresh_tokens where session_id = %s", [C5_A2])[0][0] == 0)
+check("C5: …while your other login keeps its own",
+      su("select count(*) from auth.refresh_tokens where session_id = %s", [C5_A1])[0][0] == 1)
+refused("C5: one already ended reads the same as someone else's", C5_A, "select public.end_device(%s)", [C5_A2],
+        sqlstate="P0002")
+refused("C5: signed out, nobody can list logins", None, "select * from public.my_devices()", sqlstate="42501")
+refused("C5: …or end one", None, "select public.end_device(%s)", [C5_A1], sqlstate="42501")
+refused("C5: the logins themselves stay closed to signed-in users", C5_A, "select * from auth.sessions", sqlstate="42501")
+
+run_file(NEW / "0010_signed_in_devices.sql")   # re-run last, after every other file's re-runs
+check("C5: 0010 re-runs after the rest and still answers",
+      [r[0] for r in act(C5_A, "select * from public.my_devices()")] == [C5_A1])
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

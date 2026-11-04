@@ -1419,6 +1419,25 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - an app suite covers the list, both sign-outs, and a device finding it was signed out
   - a live run with two logins ends one from the other: the ended one can't renew and the
     other still can
+- Decided with M.D. before building it (4 November):
+  - Three commits: C5 migration 0010 with `my_devices()` and `end_device()`, and the SQL
+    suite; C5b the list on the Account card and both sign-outs; C5c a device finding its
+    login was ended elsewhere, and a live suite for M.D. to run with two logins.
+  - D12: a device that finds its login was ended elsewhere wipes everything the team already
+    has, and keeps only work that exists nowhere else, sent the next time someone signs in
+    there, as Sign out's "Keep it" does.
+  - Before M.D. applies 0010, the card offers only "Sign out all other devices", which needs
+    no migration, and says the list comes with an update.
+- How C5 (the migration) came out:
+  - `supabase/migrations/0010_signed_in_devices.sql`. `my_devices()` returns the caller's own
+    logins that haven't run out: id, browser details, when it signed in and when it was last
+    renewed. `refreshed_at` is a timestamp in UTC on the live project (checked 4 November),
+    so it's read as UTC. `end_device()` deletes one of the caller's own; someone else's, or
+    one already ended, is refused the same way, so it says nothing about whether it exists.
+  - Both are `SECURITY DEFINER`, run as `postgres`, which can read and delete
+    `auth.sessions` on the live project (checked 4 November), while signed-in users can't.
+  - The SQL suite's stand-in for Supabase gains `auth.sessions` and `auth.refresh_tokens`
+    with the live column types and cascade.
 
 ### Phase D — Reports and landlords
 
