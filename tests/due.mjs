@@ -24,7 +24,7 @@ const BASE = process.env.PEMCORA_BASE ?? 'http://localhost:5173/'
 const log = (k, v, extra = '') => console.log(`${v ? 'PASS' : 'FAIL'}  ${k}${extra ? ' — ' + extra : ''}`)
 
 // ── The rules ───────────────────────────────────────────────────────────────
-const { clientsIn, dueTitle, groupDue, whenText } = await import('../src/lib/due.js')
+const { clientsIn, dueTitle, groupDue, hasSwitch, whenText, withOptOuts } = await import('../src/lib/due.js')
 
 const row = (kind, extra = {}) => ({
   kind, dueOn: null, itemId: null, assetId: null, obligation: 'qld_smoke_alarm', label: '', lastDoneOn: null,
@@ -50,6 +50,17 @@ log('a site not done yet says so', whenText(ROWS[1], today) === 'No visit yet')
 log('an alarm says when it expires, or that it has',
   /^Expires .* · in 27 days$/.test(whenText(ROWS[0], today)) && /^Expired /.test(whenText(row('expiring', { dueOn: '2026-11-01' }), today)))
 
+// Each check's switch, and opt-outs (C4b).
+log('a check has a switch; an alarm, and a site with no check yet, have none',
+  hasSwitch(ROWS[3]) && hasSwitch(ROWS[2]) && !hasSwitch(ROWS[0]) && !hasSwitch(ROWS[1]))
+const marked = withOptOuts(ROWS, [{ itemId: 'i2', locationId: 'l1', obligation: 'qld_smoke_alarm', optedOutAt: 'then' }])
+log('an opt-out marks its own check', marked.find(r => r.itemId === 'i2').optedOutAt === 'then' && marked.find(r => r.itemId === 'i1').optedOutAt === null)
+log('and the check made again at that site, under a new id',
+  withOptOuts([row('due', { itemId: 'i9' })], [{ itemId: 'i2', locationId: 'l1', obligation: 'qld_smoke_alarm', optedOutAt: 'then' }])[0].optedOutAt === 'then')
+log('never an alarm, and none at all before 0009',
+  withOptOuts([row('expiring', { obligation: 'qld_smoke_alarm' })], [{ itemId: null, locationId: 'l1', obligation: 'qld_smoke_alarm', optedOutAt: 'then' }])[0].optedOutAt === null &&
+    withOptOuts(ROWS, null).every(r => r.optedOutAt === null))
+
 // ── The page ────────────────────────────────────────────────────────────────
 async function launch() {
   for (const channel of ['chrome', 'msedge']) {
@@ -62,7 +73,13 @@ async function launch() {
 
 const localhost = new URL(BASE).hostname
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
-const db = { calls: [], down: false }
+// optOuts: due_opt_outs()'s answer, or null for a database without 0009.
+// optedOut: the checks the database won't turn back on.
+const db = {
+  calls: [], down: false, patches: [],
+  optOuts: [{ item_id: 'i2', location_id: 'l1', obligation: 'qld_smoke_alarm', opted_out_at: '2026-10-20T00:00:00+00:00' }],
+  optedOut: new Set(),
+}
 // due_list() as the database answers it, with the contacts it carries for the
 // reminder email.
 const answer = [
@@ -82,6 +99,21 @@ async function backend(route) {
   if (url.pathname === '/rest/v1/rpc/due_list') {
     db.calls.push(JSON.parse(req.postData()))
     return route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(answer) })
+  }
+  const json = (status, body) => route.fulfill({ status, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+  if (url.pathname === '/rest/v1/rpc/due_opt_outs') {
+    return db.optOuts
+      ? json(200, db.optOuts)
+      : json(404, { code: 'PGRST202', message: 'Could not find the function public.due_opt_outs(p_team_id) in the schema cache', hint: null, details: null })
+  }
+  if (url.pathname === '/rest/v1/compliance_items' && req.method() === 'PATCH') {
+    const id = url.searchParams.get('id')?.replace('eq.', '')
+    const body = JSON.parse(req.postData())
+    db.patches.push({ id, body })
+    if (body.reminders_enabled && db.optedOut.has(id)) {
+      return json(400, { code: '23514', message: 'The client turned these reminders off from the email, so they cannot be turned back on here', hint: 'opted_out', details: null })
+    }
+    return json(200, [{ id }])
   }
   return route.abort()
 }
@@ -138,6 +170,46 @@ try {
   const kept = await page.evaluate(() => localStorage.getItem('fc.session.due'))
   log('the device keeps the list, without the contacts\' emails', /Hall alarm/.test(kept ?? '') && !/@/.test(kept ?? ''), kept?.slice(0, 120))
 
+  // ── Each check's reminders, and "no longer needed" (C4b) ───────────────────
+  const reminders = what => page.getByRole('checkbox', { name: `Reminders for ${what} at 10 Smith St` })
+  log('a check has its own reminders switch, on', (await reminders('QLD electrical safety').isChecked()))
+  log('a site with no check yet, and an alarm, have none',
+    (await page.getByRole('region', { name: 'Not done yet' }).getByRole('checkbox').count()) === 0 &&
+      (await page.getByRole('region', { name: 'Alarms expiring in the next 3 months' }).getByRole('checkbox').count()) === 0)
+  const dueText = await page.getByRole('region', { name: 'Due in the next 60 days' }).textContent()
+  log('a check the client said is no longer needed says so, from the opt-out list, with no switch',
+    /No longer needed[\s\S]*from a reminder email/.test(dueText) && (await reminders('QLD smoke alarms').count()) === 0, dueText)
+  await reminders('QLD electrical safety').uncheck()
+  await page.waitForFunction(() => /"remindersEnabled":false/.test(localStorage.getItem('fc.session.due') ?? ''))
+  log('switching one off saves it on that check',
+    JSON.stringify(db.patches.at(-1)) === '{"id":"i1","body":{"reminders_enabled":false}}' && !(await reminders('QLD electrical safety').isChecked()),
+    JSON.stringify(db.patches.at(-1)))
+  db.optedOut.add('i1')
+  // A plain click: the box moves, then goes back when the database says no.
+  await reminders('QLD electrical safety').click()
+  log('one the database won\'t turn back on says why',
+    await page.getByRole('alert').filter({ hasText: 'turned these off from the email' }).waitFor().then(() => true, () => false) &&
+      !(await reminders('QLD electrical safety').isChecked()))
+  db.optedOut.clear()
+  await page.screenshot({ path: `${DIR}/due-switches.png`, fullPage: true })
+
+  // Before 0009 is applied.
+  db.optOuts = null
+  await open()
+  await holds(ENTITLEMENTS)
+  await page.getByRole('region', { name: 'Overdue' }).waitFor()
+  log('without 0009 the page still works, and marks nothing no longer needed',
+    !/No longer needed/.test(await main()) && (await reminders('QLD smoke alarms').count()) === 1)
+  db.optOuts = [{ item_id: 'i2', location_id: 'l1', obligation: 'qld_smoke_alarm', opted_out_at: '2026-10-20T00:00:00+00:00' }]
+
+  // With the team's reminders off.
+  await page.evaluate(() => localStorage.setItem('fc.settings', JSON.stringify({ remindersEnabled: false })))
+  await open()
+  await holds(ENTITLEMENTS)
+  await page.getByRole('region', { name: 'Overdue' }).waitFor()
+  log('with the team\'s reminders off, the page says none go out', /switched off for the whole team in Settings/.test(await main()))
+  await page.evaluate(() => localStorage.removeItem('fc.settings'))
+
   // No signal: the last list, dated.
   await ctx.setOffline(true)
   db.down = true
@@ -148,6 +220,8 @@ try {
   await page.getByRole('link', { name: 'Due', exact: true }).click()
   await page.getByRole('region', { name: 'Overdue' }).waitFor()
   log('with no signal it shows the last list, saying when it was', /No connection\. This is the list as it was /.test(await main()), (await main()).slice(0, 200))
+  log('with the switches off until it\'s back', await reminders('QLD electrical safety').isDisabled())
+  log('and still says which the client said are no longer needed', /No longer needed/.test(await main()))
   await ctx.setOffline(false)
   db.down = false
 

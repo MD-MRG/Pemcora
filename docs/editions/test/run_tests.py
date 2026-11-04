@@ -1,14 +1,14 @@
 """
-Proves 0006, 0007 and 0008 on a throwaway local Postgres with a Supabase stub.
+Proves 0006, 0007, 0008 and 0009 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 + 0007 + 0008 twice (re-run safety) and drives every
+the app did, then applies 0006 + 0007 + 0008 + 0009 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006, 0007 and 0008 are read from instead (a copy with a fix being tried, say).
+0006, 0007, 0008 and 0009 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -26,7 +26,7 @@ import psycopg
 
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
-EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql")
+EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -124,7 +124,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 + 0007 + 0008, twice ──────────────────────────────────────────────
+# ── 0006 + 0007 + 0008 + 0009, twice ───────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -1795,6 +1795,35 @@ check("B5: a member still can't delete a report record, though 0007 put its poli
 run_file(NEW / "0008_signup.sql")   # leave the database as all three files make it
 check("B5: re-running 0008 afterwards puts back what 0006 replaced",
       "starter_pack" in one(O, "select public.team_entitlements(%s)", [T0]))
+
+# ── Step C4: which checks a team's clients said are no longer needed (0009) ──
+print("\n— Step C4: the Due page's opt-outs, from the opt-out list, for the team's own members")
+C4_OPTED = act(S3U, "select location_id, obligation, opted_out_at is not null from public.due_opt_outs(%s)", [S3T])
+check("C4: a member sees which of the team's checks a client opted out of",
+      C4_OPTED == [(S3_L2, "vic_smoke_alarm", True)], str(C4_OPTED))
+check("C4: …a team with none has none",
+      act(PO, "select * from public.due_opt_outs(%s)", [TPM]) == [])
+check("C4: …and nobody outside the team learns anything",
+      act(X, "select * from public.due_opt_outs(%s)", [S3T]) == []
+      and act(PO, "select * from public.due_opt_outs(%s)", [S3T]) == [])
+refused("C4: anonymous callers cannot ask", None, "select * from public.due_opt_outs(%s)", [S3T], sqlstate="42501")
+refused("C4: the rule it answers with stays closed to members", S3U,
+        "select public.reminder_opted_out(%s, %s, 'vic_smoke_alarm')", [S3T, S3_L2], sqlstate="42501")
+
+# The case the plan warns about: the check made again while the contact's email
+# was blank comes back "on", and the opt-out list still says no.
+act(S3U, "update public.clients set contact_email = '' where id = %s", [S3_C])
+act(S3U, "delete from public.compliance_items where location_id = %s", [S3_L2])
+start_visit(S3U, S3T, S3_L2, "vic_smoke_alarm", completed=True)
+act(S3U, "update public.clients set contact_email = 'sky@s3-landlord.test' where id = %s", [S3_C])
+C4_ON = su("select reminders_enabled from public.compliance_items where location_id = %s", [S3_L2])
+check("C4: a check made again with the email blank reads \"on\" itself…", C4_ON == [(True,)], str(C4_ON))
+check("C4: …but the Due page is still told the client opted out",
+      [r[1] for r in act(S3U, "select location_id, obligation from public.due_opt_outs(%s)", [S3T])] == ["vic_smoke_alarm"])
+
+run_file(NEW / "0009_due_opt_outs.sql")   # re-run last, after every other file's re-runs
+check("C4: 0009 re-runs after the rest and still answers",
+      len(act(S3U, "select * from public.due_opt_outs(%s)", [S3T])) == 1)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

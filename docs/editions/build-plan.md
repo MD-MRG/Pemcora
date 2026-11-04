@@ -1366,6 +1366,19 @@ step:
   - Filtered by client when more than one has anything on the list.
   - The device keeps the last list for when there's no signal, without the contacts' emails
     `due_list()` carries for the reminder job. Signing out removes it.
+- How C4b (reminders and "no longer needed") came out:
+  - `supabase/migrations/0009_due_opt_outs.sql` adds `due_opt_outs(team)`: for the team's own
+    members, which of its checks a client opted out of and since when, asked of
+    `reminder_opted_out()`. Nothing about who opted out. The opt-out list and the function
+    stay closed to signed-in users. M.D. applies it after 0008.
+  - Each check on the page has its own reminders switch. It moves at once and goes back if
+    the database refuses it, saying why. A site with no check yet, and an alarm, have none.
+  - A check whose client said "no longer needed" says so, with the date, and has no switch.
+    That holds for a check made again at the same site, which reads "on" by itself: the
+    case the bullet above warns about, tested in the SQL suite.
+  - Before 0009 is applied the page works as C4 left it and marks nothing "no longer needed".
+  - With no signal the switches are off. With the team's reminders off, the page says none go
+    out.
 
 #### C5. Signed-in devices (M.D.'s note)
 

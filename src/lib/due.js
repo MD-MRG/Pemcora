@@ -55,5 +55,24 @@ export function whenText(row, today = localDate()) {
   return `Due ${showDate(row.dueOn)} · ${inDays(n)}`
 }
 
+/**
+ * Each row with when its client said it's no longer needed, from the opt-out
+ * list (0009): matched by the check, or by its site and obligation for a site
+ * whose check was made again. Null opt-outs (0009 not applied yet) mark none.
+ */
+export const withOptOuts = (rows, optOuts) =>
+  rows.map(r => ({
+    ...r,
+    optedOutAt:
+      r.kind === 'expiring'
+        ? null
+        : ((optOuts ?? []).find(
+            o => (r.itemId && o.itemId === r.itemId) || (o.locationId === r.locationId && o.obligation === r.obligation),
+          )?.optedOutAt ?? null),
+  }))
+
+/** Whether a row has its own reminders switch: a check, not an alarm or a site with none yet. */
+export const hasSwitch = row => row.kind !== 'expiring' && !!row.itemId
+
 /** "Last done 3/11/2025", for a check that has been. */
 export const lastDoneText = row => (row.lastDoneOn ? `Last done ${showDate(row.lastDoneOn)}` : '')

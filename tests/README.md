@@ -203,10 +203,12 @@ offline, and never for one the law fixes (36 checks).
 node tests/client-settings.mjs
 ```
 
-`due.mjs` is step C4. The Due page's rules in Node, then the page in a browser answering
-every request off the machine itself, as `due_list()` would: the list in its order, named and
-dated in words, filtered by client, the last list kept on the device without the contacts'
-emails and shown dated with no signal, and a landlord's `/due` left as it was (20 checks).
+`due.mjs` is steps C4 and C4b. The Due page's rules in Node, then the page in a browser
+answering every request off the machine itself, as `due_list()` and `due_opt_outs()` would: the
+list in its order, named and dated in words, filtered by client, each check's reminders switch
+and a refusal, "no longer needed" from the opt-out list, the page before 0009 is applied, the
+last list kept on the device without the contacts' emails and shown dated with no signal, and a
+landlord's `/due` left as it was (33 checks).
 `offline-open.mjs` checks that signing out removes the kept list.
 
 ```

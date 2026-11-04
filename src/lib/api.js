@@ -991,6 +991,37 @@ export async function getDueList(teamId, withinDays = 60, expiryMonths = 3) {
   return (data ?? []).map(dueFromRow)
 }
 
+/**
+ * The team's checks a client said are no longer needed, from the opt-out list
+ * itself (0009), not the check's own switch, which a team can make read "on"
+ * again. Null before 0009 is applied: the page then shows none.
+ */
+export async function getDueOptOuts(teamId) {
+  const { data, error } = await supabase.rpc('due_opt_outs', { p_team_id: teamId })
+  if (error?.code === 'PGRST202') return null
+  if (error) throw error
+  return (data ?? []).map(r => ({
+    itemId: r.item_id,
+    locationId: r.location_id,
+    obligation: r.obligation,
+    optedOutAt: r.opted_out_at,
+  }))
+}
+
+/**
+ * One check's reminders, on or off. The database refuses turning back on a check
+ * the client turned off from the email (hint 'opted_out').
+ */
+export async function setCheckReminders(itemId, enabled) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .update({ reminders_enabled: !!enabled })
+    .eq('id', itemId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw coded('This check has been removed on another device.', '23503')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // How often checks are due (C3)
 // ─────────────────────────────────────────────────────────────────────────────
