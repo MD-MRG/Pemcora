@@ -128,6 +128,7 @@ so a reader knows which shape it is.
 | `report_deliveries` | a sent report: frozen snapshot (with the sign-off), file, recipient email, link token and its 90-day expiry, where it was filed |
 | `site_links` | "provider's site X is landlord's property Y", so later reports file themselves |
 | `reminder_opt_outs` | each client's emailed opt-out, kept by team, recipient email, site address and check, so it outlives the check's row and the site's | `reminder_opt_out()` only; no client access at all |
+| `report_sends` | every report a team has sent or sent again, and when (0011), for the daily cap. Withdrawing a report doesn't remove its send | `send_report()` and `resend_report()` only; no client access at all |
 
 Storage: two private buckets, one folder per team — `evidence/<team_id>/…` and
 `reports/<team_id>/…`. Delivered report files cannot be overwritten or deleted.
@@ -174,11 +175,13 @@ Also on from the start, from the pre-A4 security review and its re-check:
 | Inspections a month | 1 (`subscriptions.monthly_visit_limit`) | unlimited | trigger on `visits` insert |
 | Packs | one starter (swappable until there's work under it) | starter + paid add-ons | trigger on `visits` insert |
 | Photo evidence | — | ✓ | trigger on `attachments` + storage policy |
-| Send reports to landlords | ✓ | ✓ | — this is the growth loop, so it stays free |
+| Send reports to landlords | 10 in any 24 hours | 50 in any 24 hours | `send_report()` and `resend_report()` (0011); on from the day it's applied, not tied to `enforce_limits`: it guards Pemcora's email, not the plans |
 | Branding on reports | soft (UI only) | ✓ | hard only once PDFs are generated server-side |
 
 Limit errors come back as **HTTP 402** (SQLSTATE `PT402`) with hint `upgrade`, so
-the app can show an upgrade prompt instead of a generic error.
+the app can show an upgrade prompt instead of a generic error. The send cap comes
+back as **HTTP 429** (SQLSTATE `PT429`) with hint `send_cap`, and a report with a
+note still saying `[timeframe]` is refused with hint `unfinished`.
 
 **Existing teams are grandfathered**: Pro, unlimited, AV pack, `comped = true`.
 Re-running 0006 can never comp a team created after the first run.
@@ -194,9 +197,9 @@ publishable key in the bundle. Anything React hides, the REST API still answers.
 | `choose_starter_pack(team, pack)` | owner/admin | pick or swap the starter |
 | `team_entitlements(team)` | members | plan, limits, usage, packs, `enforced`, and which pack is the starter and whether it has been used — for upgrade prompts and nav |
 | `open_import_window(team)` | owner | opens the one-time, 15-minute window for importing older work |
-| `send_report(visit, email, snapshot, file_path)` | provider members | records a delivery; address, provider name and sign-off come from the DB, not the client |
+| `send_report(visit, email, snapshot, file_path)` | provider members | records a delivery; address, provider name and sign-off come from the DB, not the client. Refuses a snapshot with a fail marked `unfinished`, and counts against the daily cap (0011) |
 | `report_preview(token)` | anyone with the link | `status` ok · expired · saved; content only while ok, else just the provider's name |
-| `resend_report(delivery)` | provider members | "Send again": a new token and 90 days; the old link stops working |
+| `resend_report(delivery)` | provider members | "Send again": a new token and 90 days; the old link stops working. Counts against the daily cap, since it emails (0011) |
 | `claim_report(token, team)` | the addressee only | saves into their landlord/agency team; auto-files when the address matches; works after the link expires |
 | `file_report(delivery, location)` | recipient members | files an unfiled report under a property |
 | `revoke_report(delivery)` | provider members | withdraws a report until it's claimed |

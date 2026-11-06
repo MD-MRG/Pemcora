@@ -1540,6 +1540,25 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Before the function emails anything, cap how many reports a team can send a day:
   `send_report()` has no limit yet, so any Free account could send unlimited email from
   Pemcora's domain to any address. (From the Phase A security review.)
+- **M.D.'s note (6 November):** three commits: D2 migration 0011 with the cap and the
+  `[timeframe]` rule, and its SQL checks; D2b the `deliver-report` Edge Function; D2c the
+  app's "Send report", "Send again" and "Withdraw". The cap is 10 reports in any 24 hours on
+  Free and 50 on Pro. The email comes from Pemcora's own address (`INVITE_FROM`), named
+  "<business> via Pemcora", with replies going to the business's email.
+- How D2 (migration 0011) came out:
+  - `report_sends` logs every send and every "Send again". Only `send_report()` and
+    `resend_report()` read or write it. Withdrawing a report doesn't take its send back, or
+    sending and withdrawing would get round the cap.
+  - Over the cap, both refuse with SQLSTATE `PT429` and hint `send_cap` before anything is
+    recorded. The team's row is locked while a send is counted, so two sends at once can't
+    both slip under.
+  - The cap holds from the day 0011 is applied, whatever `enforce_limits` says: it guards
+    Pemcora's email, not the plans.
+  - A snapshot with a fail marked `unfinished`, in the whole-site part or any room, is
+    refused with hint `unfinished`. The app checks first; this is the rule behind it.
+  - 0011 replaces `send_report()` and `resend_report()` with 0007's bodies plus these
+    checks. Re-running 0007 by itself puts back the versions without them, so 0011 is
+    re-run after it.
 
 #### D3. Report link page `#/r/<token>`
 

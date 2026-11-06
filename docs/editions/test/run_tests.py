@@ -1,14 +1,14 @@
 """
-Proves 0006 to 0010 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0011 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 to 0010 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0011 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006 to 0010 are read from instead (a copy with a fix being tried, say).
+0006 to 0011 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -27,7 +27,7 @@ import psycopg
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
 EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
-            "0010_signed_in_devices.sql")
+            "0010_signed_in_devices.sql", "0011_report_sending.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -125,7 +125,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 to 0010, twice ────────────────────────────────────────────────────
+# ── 0006 to 0011, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -1871,6 +1871,80 @@ refused("C5: the logins themselves stay closed to signed-in users", C5_A, "selec
 run_file(NEW / "0010_signed_in_devices.sql")   # re-run last, after every other file's re-runs
 check("C5: 0010 re-runs after the rest and still answers",
       [r[0] for r in act(C5_A, "select * from public.my_devices()")] == [C5_A1])
+
+# ── Step D2: sending reports, capped, and nothing unfinished (0011) ────────────
+print("\n— Step D2: a daily cap on sending reports, and no [timeframe] left in one")
+# 0007 was re-run by itself above (R6, R7, B5), which puts back its send_report()
+# without the cap: re-running 0011 after it is how it's applied, and what's tested.
+run_file(NEW / "0011_report_sending.sql")
+D2U = user("d2-owner@sending.test")
+D2T = one(D2U, "select id from public.create_organisation('D2 Sparks', 'provider', 'vic_rental')")
+_, D2_L = add_site(D2U, D2T, "D2 Rental")
+D2_V = start_visit(D2U, D2T, D2_L, "vic_smoke_alarm", completed=True)
+D2_SENT = lambda team: su("select count(*) from public.report_deliveries where provider_team_id = %s", [team])[0][0]
+
+
+def d2_try(uid, sql, params):
+    """A send that, refused, fails its check instead of stopping the suite."""
+    try:
+        return one(uid, sql, params)
+    except psycopg.Error as e:
+        print(f"      refused: {e.sqlstate}: {str(e).splitlines()[0]}")
+        return None
+
+
+waiting = json.dumps({"site": {"failed": [{"label": "Works", "note": "Replace within [timeframe]", "unfinished": True}]}, "rooms": []})
+in_room = json.dumps({"site": None, "rooms": [{"name": "Bedroom", "failed": [{"label": "x", "note": "[timeframe]", "unfinished": True}]}]})
+refused("D2: a report with a note still saying [timeframe] isn't sent", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, waiting], sqlstate="23514", contains="[timeframe]")
+refused("D2: …nor one with it in a room", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, in_room], sqlstate="23514")
+check("D2: …and nothing was sent or counted", D2_SENT(D2T) == 0
+      and su("select count(*) from public.report_sends where team_id = %s", [D2T])[0][0] == 0)
+done_note = json.dumps({"site": {"failed": [{"label": "Works", "note": "Replace within 7 days"}]}, "rooms": []})
+D2_FIRST = d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, done_note])
+check("D2: one whose notes are finished goes", D2_FIRST is not None)
+
+for _ in range(9):
+    d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V])
+check("D2: a Free team sends 10 in a day", D2_SENT(D2T) == 10, str(D2_SENT(D2T)))
+refused("D2: …and the 11th is refused with the cap's code", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429", contains="10 reports")
+check("D2: …which sends nothing", D2_SENT(D2T) == 10)
+refused("D2: \"Send again\" counts too, since it emails", D2U, "select public.resend_report(%s)", [D2_FIRST], sqlstate="PT429")
+
+D2U2 = user("d2-other@sending.test")
+D2T2 = one(D2U2, "select id from public.create_organisation('D2 Other', 'provider', 'vic_rental')")
+_, D2_L2 = add_site(D2U2, D2T2, "D2 Other Rental")
+D2_V2 = start_visit(D2U2, D2T2, D2_L2, "vic_smoke_alarm", completed=True)
+check("D2: another team's sends are its own", d2_try(D2U2, "select id from public.send_report(%s, 'a@b.test')", [D2_V2]) is not None)
+
+su("update public.report_sends set sent_at = now() - interval '25 hours' where team_id = %s", [D2T])
+check("D2: a send more than 24 hours ago no longer counts",
+      d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V]) is not None)
+check("D2: …and \"Send again\" goes, with a new token",
+      d2_try(D2U, "select token from public.resend_report(%s)", [D2_FIRST]) is not None
+      and su("select count(*) from public.report_sends where team_id = %s and sent_at > now() - interval '1 hour'", [D2T])[0][0] == 2)
+
+su("update public.subscriptions set plan = 'pro', status = 'active' where team_id = %s", [D2T])
+for _ in range(48):
+    if d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V]) is None:
+        break
+check("D2: a Pro team sends 50 in a day", su("select count(*) from public.report_sends where team_id = %s and sent_at > now() - interval '24 hours'", [D2T])[0][0] == 50)
+refused("D2: …and the 51st is refused", D2U, "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429", contains="50 reports")
+
+refused("D2: the send log is closed to members", D2U, "select * from public.report_sends", sqlstate="42501")
+refused("D2: …and so is counting a send by hand", D2U, "select public._count_report_send(%s, null)", [D2T], sqlstate="42501")
+refused("D2: …or reading a team's cap", D2U, "select public.report_send_cap(%s)", [D2T], sqlstate="42501")
+D2_LOGGED = lambda: su("select count(*) from public.report_sends where team_id = %s", [D2T])[0][0]
+before = D2_LOGGED()
+d2_try(D2U, "select public.revoke_report(%s)", [D2_FIRST])
+check("D2: withdrawing a report doesn't take its send back",
+      su("select count(*) from public.report_deliveries where id = %s", [D2_FIRST])[0][0] == 0
+      and D2_LOGGED() == before == 60, f"{before} -> {D2_LOGGED()}")
+
+run_file(NEW / "0011_report_sending.sql")   # re-run last, after every other file's re-runs
+refused("D2: 0011 re-runs and the cap still holds", D2U, "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429")
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)
