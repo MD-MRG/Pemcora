@@ -1499,6 +1499,22 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - "Export PDF" goes the way "Export report" does: a check that ends in a sign-off is signed
     first, and a second export asks whether it's a revision. Both count as revisions of the
     one report.
+- How D1b (the Victorian layout) came out:
+  - The Victorian electrical check's page asks for it (`pdfLayout: 'esv'`); every other
+    workflow keeps the standard layout.
+  - Section A gives the address, the client, the date of this check and of the previous one
+    at the site, from its own visits ("None on record" if there is none). Sections B to F
+    follow, as the list has them.
+  - Section E ends with when the site's smoke alarms are next due: its last smoke alarm check,
+    plus that check's interval ("No smoke alarm check on record" if there is none).
+  - Section F prints what the electrician wrote, then each defect with its note, which on the
+    form is where defects go. So there's no separate Troubleshooting part.
+  - Certification names the electrician, the business, its REC number, the electrician's
+    licence or registration number, the inspection date and the next check due, then the
+    declared outcome, a declaration and the signature.
+  - The declaration is a proposal, like the lists: "I certify that this electrical safety
+    check was carried out in accordance with section 4 of AS/NZS 3019, and that the results
+    are as recorded in this report." The electrician checks it with them.
 
 #### D2. Sending
 

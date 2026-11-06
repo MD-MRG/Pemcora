@@ -12,8 +12,8 @@ const bytesOf = async url => new Uint8Array(await (await fetch(url)).arrayBuffer
 const loadFonts = async () => (fonts ??= { regular: await bytesOf(regularUrl), bold: await bytesOf(boldUrl) })
 
 /** Builds the PDF report and downloads it. Returns its filename. */
-export async function downloadPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo }) {
-  const bytes = await buildPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, fonts: await loadFonts() })
+export async function downloadPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout }) {
+  const bytes = await buildPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, fonts: await loadFonts() })
   const filename = buildFilename(client, visit, revision, reportTitle).replace(/\.xlsx$/, '.pdf')
   triggerDownload(new Blob([bytes], { type: 'application/pdf' }), filename)
   return filename

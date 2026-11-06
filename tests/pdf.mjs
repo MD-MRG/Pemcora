@@ -109,6 +109,7 @@ const visual = sec('C.'), earth = sec('D2.'), rcd = sec('D3.')
 const SIGNATURE = 'M30 120 L60 80 L90 130 L120 70 L150 140 L200 90 L260 120 L320 60 L400 130 L480 90'
 const longComment = Array.from({ length: 60 }, (_, i) => `Note ${i + 1}: switchboard labels faded and need replacing before the next check.`).join(' ')
 const elecVisit = {
+  kind: 'vic_electrical_safety',
   technician: 'Sam',
   startedAt: '2026-11-06T00:00:00Z',
   completedAt: '2026-11-06T03:00:00Z',
@@ -165,6 +166,37 @@ log('and nothing runs off the page', overflow.length === 0, overflow.slice(0, 3)
 // The footer sits 24 points up; nothing else goes that low.
 const sunk = elec.pages.flatMap(p => p.items.filter(it => it.transform[5] < 40 && !/^Page \d|^Electrical Safety Check ·/.test(it.str)).map(it => it.str))
 log('or over the footer', sunk.length === 0, sunk.slice(0, 3).join(' | '))
+
+// ── The Victorian check, laid out as ESV's form (D1b) ───────────────────────
+const siteVisits = [
+  { id: 'old', kind: 'vic_electrical_safety', completedAt: '2024-10-01T01:00:00Z' },
+  { id: 'smoke', kind: 'vic_smoke_alarm', completedAt: '2026-03-01T01:00:00Z' },
+  { id: 'later', kind: 'vic_electrical_safety', completedAt: '2027-01-01T01:00:00Z' }, // after this one: not "previous"
+]
+const esvArgs = { ...elecArgs, layout: 'esv', location: { ...elecArgs.location, visits: siteVisits }, settings: { ...elecArgs.settings, logoFull: null } }
+const esv = await read(await buildPdf(esvArgs))
+const order = ['A. Installation', 'B. Extent', 'C. Visual inspection', 'D1. Polarity', 'D2. Earth', 'D3. RCD', 'E. Smoke alarms', 'F. Observations', 'Certification']
+const at = order.map(h => esv.text.indexOf(h))
+log('the Victorian PDF follows the form: sections A to F, then certification',
+  at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), order.map((h, i) => `${h}@${at[i]}`).join(', '))
+log('with no "Whole site" or separate Troubleshooting part', !/Whole site|Troubleshooting/.test(esv.text))
+log('section A gives the address and the dates of this check and the one before',
+  /A\. Installation\nAddress\n10 Smith St, Richmond, VIC\nClient\nRental Co\nDate of this check\n2026-11-06\nDate of the previous check\n2024-10-01/.test(esv.text), esv.text.slice(esv.text.indexOf('A. Installation'), esv.text.indexOf('A. Installation') + 200))
+log('section E says when the smoke alarms are next due, from the site\'s smoke alarm check',
+  /Next smoke alarm check due\n2027-03-01/.test(esv.text))
+const fPart = esv.text.slice(at[7], at[8])
+log('section F lists each defect with what was done, and the comments',
+  fPart.includes('Switchboards\nCover missing — replaced on site') && fPart.includes('RCD 1 — lights — Push-button test\nDid not trip; RCD replaced') && /Note 1:/.test(fPart))
+const cert = esv.text.slice(at[8])
+log('the certification names the electrician, business, REC and licence numbers, and the dates',
+  /Electrician\nSam Sparks\nBusiness name\nSparks Electrical\nREC number\nREC-77\nLicence or registration number\nA12345\nInspection date\n2026-11-06\nNext check due\n2028-11-06\nOutcome declared\nNon-compliant/.test(cert), cert.slice(0, 300))
+log('with the declaration and the signature',
+  cert.replace(/\n/g, ' ').includes('I certify that this electrical safety check was carried out in accordance with section 4 of AS/NZS 3019') && /Signature/.test(cert))
+const esvBare = await read(await buildPdf({ ...esvArgs, location: { ...elecArgs.location, visits: [] } }))
+log('with nothing on record, it says so', /Date of the previous check\nNone on record/.test(esvBare.text) && /Next smoke alarm check due\nNo smoke alarm check on record/.test(esvBare.text))
+const esvOverflow = esv.pages.flatMap(p => p.items.filter(it => it.transform[4] + it.width > p.width - 41 || (it.transform[5] < 40 && !/^Page \d|^Electrical Safety Check ·/.test(it.str))).map(it => it.str))
+log('and nothing runs off its pages either', esvOverflow.length === 0, esvOverflow.slice(0, 3).join(' | '))
+log('every other workflow keeps the standard layout', /Whole site/.test(elec.text) && !/A\. Installation|Certification/.test(elec.text))
 
 // Wrapping, on its own.
 const { PDFDocument } = await import('pdf-lib')
@@ -257,6 +289,23 @@ try {
   await page.getByRole('button', { name: 'Export PDF' }).click()
   log('a second export asks whether it\'s a revision', (await page.getByRole('dialog').count()) === 1 && /revision/i.test(await page.getByRole('dialog').textContent()))
   await page.screenshot({ path: `${DIR}/pdf-export.png` })
+
+  // The Victorian check's PDF follows the form.
+  await openSite('#/vic-electrical-safety')
+  await page.getByRole('button', { name: 'Start electrical safety check' }).click()
+  await page.getByRole('button', { name: 'Export PDF' }).click()
+  const vicDialog = page.getByRole('dialog')
+  await vicDialog.getByLabel('Compliant', { exact: true }).check()
+  await vicDialog.getByLabel('Licence or registration number').fill('VIC-5')
+  const vicPad = await vicDialog.getByRole('img', { name: /Signature/ }).boundingBox()
+  await page.mouse.move(vicPad.x + 30, vicPad.y + 60)
+  await page.mouse.down()
+  for (let i = 1; i <= 12; i++) await page.mouse.move(vicPad.x + 30 + i * 20, vicPad.y + 60 + (i % 3) * 12)
+  await page.mouse.up()
+  download = page.waitForEvent('download', { timeout: 20000 })
+  await vicDialog.getByRole('button', { name: 'Sign and finish' }).click()
+  const vicPdf = await read(readFileSync(await (await download).path()))
+  log('the Victorian page\'s PDF is laid out as ESV\'s form', /A\. Installation/.test(vicPdf.text) && /Certification\nElectrician\nSam Sparks/.test(vicPdf.text) && !/Whole site/.test(vicPdf.text))
 } catch (e) {
   log('suite threw before finishing', false, e.message)
 } finally {

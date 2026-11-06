@@ -1,7 +1,9 @@
 import { buildReportSnapshot } from './reportSnapshot.js'
 import { reportImage } from './logo.js'
 import { answerTone } from './testTypes.js'
+import { addMonths } from './equipment.js'
 import { assetTypePlural } from '../data/packs/shared/assetTypes.js'
+import { WORKFLOWS } from '../data/packs/index.js'
 
 // PDF report for a visit (build plan D1), laid out from the same snapshot as the
 // Excel export and the copy a sent report keeps, so the three never disagree.
@@ -62,9 +64,21 @@ export function wrap(text, font, size, width) {
   return out
 }
 
+// The Victorian check's certification, under the signature. A proposal, like the
+// list: the electrician checks it before the pack ships.
+export const ESV_DECLARATION =
+  'I certify that this electrical safety check was carried out in accordance with section 4 of AS/NZS 3019, and that the results are as recorded in this report.'
+
+const intervalOf = kind => WORKFLOWS.find(w => w.id === kind)?.interval?.months ?? null
+
 /**
  * Builds the PDF and returns its bytes.
  *
+ *   layout     'esv' for the Victorian electrical check, laid out as Energy Safe
+ *              Victoria's report form is: sections A to F, then certification
+ *              (D1b). Anything else, the layout every other workflow uses.
+ *   location   the site, with its visits: the ESV layout reads the previous
+ *              check's date and the smoke alarm check's from them
  *   showLogo   false for a team that isn't Pro once limits are on (2.4)
  *   fonts      { regular, bold }: DejaVu Sans, as bytes
  */
@@ -78,8 +92,10 @@ export async function buildPdf({
   settings = null,
   assets = [],
   showLogo = true,
+  layout = 'standard',
   fonts,
 }) {
+  const esv = layout === 'esv'
   const { PDFDocument, rgb } = await import('pdf-lib')
   const fontkit = (await import('@pdf-lib/fontkit')).default
   const colour = c => rgb(...c)
@@ -200,8 +216,11 @@ export async function buildPdf({
     // Only a check that is signed off has these.
     ...(visit?.outcome ? [['Outcome', OUTCOME_TEXT[visit.outcome] ?? visit.outcome]] : []),
   ]
-  for (const [k, v] of details) {
-    row(k, v, { labelFont: bold, tone: k === 'Outcome' ? (visit.outcome === 'compliant' ? 'pass' : 'fail') : '' })
+  // The ESV form puts these in section A and the certification instead.
+  if (!esv) {
+    for (const [k, v] of details) {
+      row(k, v, { labelFont: bold, tone: k === 'Outcome' ? (visit.outcome === 'compliant' ? 'pass' : 'fail') : '' })
+    }
   }
   gap(12)
 
@@ -212,36 +231,84 @@ export async function buildPdf({
   const notesAndComments = ({ failed, comments }) => {
     bar('Troubleshooting')
     if (failed.length === 0) paragraph('No issues identified.', { tint: COLOURS.soft })
-    for (const f of failed) {
-      const note = f.mustReplace ? [f.note, 'Has to be replaced'].filter(Boolean).join(' — ') : f.note
-      row(f.item ? `${f.item} — ${f.label}` : f.label, note, { tone: 'fail' })
-    }
+    defects(failed)
     gap(6)
     bar('Comments')
     paragraph(comments || '—', { tint: comments ? COLOURS.ink : COLOURS.soft })
     gap(14)
   }
 
-  // ── The whole site ──────────────────────────────────────────────────────
-  if (snapshot.site) {
-    bar('Whole site', { navy: true })
-    for (const section of snapshot.site.sections) {
-      bar(section.label)
-      if (section.scope !== 'item') {
-        section.tests.forEach(result)
-      } else if (section.items.length === 0) {
-        paragraph('No items recorded', { tint: COLOURS.soft })
-      } else {
-        for (const item of section.items) {
-          ensure(40)
-          draw([item.room ? `${item.label} (${item.room})` : item.label], { size: 10, font: bold })
-          item.tests.forEach(result)
-          gap(4)
-        }
+  // One whole-site section: its tests, or each item and its tests.
+  const siteSection = section => {
+    bar(section.label)
+    if (section.scope !== 'item') {
+      section.tests.forEach(result)
+    } else if (section.items.length === 0) {
+      paragraph('No items recorded', { tint: COLOURS.soft })
+    } else {
+      for (const item of section.items) {
+        ensure(40)
+        draw([item.room ? `${item.label} (${item.room})` : item.label], { size: 10, font: bold })
+        item.tests.forEach(result)
+        gap(4)
       }
-      gap(8)
     }
+    gap(8)
+  }
+  const defects = failed => {
+    for (const f of failed) {
+      const note = f.mustReplace ? [f.note, 'Has to be replaced'].filter(Boolean).join(' — ') : f.note
+      row(f.item ? `${f.item} — ${f.label}` : f.label, note, { tone: 'fail' })
+    }
+  }
+
+  // ── The whole site ──────────────────────────────────────────────────────
+  if (snapshot.site && !esv) {
+    bar('Whole site', { navy: true })
+    snapshot.site.sections.forEach(siteSection)
     notesAndComments(snapshot.site)
+  }
+
+  // ── Sections A to F, as ESV's form has them (D1b) ───────────────────────
+  // The site's other visits say when this check was last done, and when its
+  // smoke alarms are next due.
+  const done = (kind, before) =>
+    (location?.visits ?? [])
+      .filter(v => v.kind === kind && v.completedAt && v.id !== visit?.id && (!before || v.completedAt < before))
+      .map(v => v.completedAt.slice(0, 10))
+      .sort()
+      .pop() ?? null
+  if (esv) {
+    const previous = done(visit?.kind, visit?.startedAt ?? visit?.completedAt)
+    bar('A. Installation', { navy: true })
+    row('Address', address, { labelFont: bold })
+    row('Client', client?.name ?? '', { labelFont: bold })
+    row('Date of this check', (visit?.completedAt ?? visit?.startedAt ?? '').slice(0, 10), { labelFont: bold })
+    row('Date of the previous check', previous ?? 'None on record', { labelFont: bold })
+    gap(10)
+    for (const section of snapshot.site?.sections ?? []) {
+      if (/^F\./.test(section.label)) {
+        // What the electrician wrote, then each defect with what was done.
+        siteSection(section)
+        y += 8
+        if (snapshot.site.failed.length) defects(snapshot.site.failed)
+        else paragraph('No defects found.', { tint: COLOURS.soft })
+        if (snapshot.site.comments) {
+          gap(4)
+          paragraph(snapshot.site.comments)
+        }
+        gap(10)
+        continue
+      }
+      siteSection(section)
+      if (/^E\./.test(section.label)) {
+        // From this site's smoke alarm check, which has its own report.
+        const smoke = done('vic_smoke_alarm')
+        y += 8
+        row('Next smoke alarm check due', smoke ? addMonths(smoke, intervalOf('vic_smoke_alarm') ?? 12) : 'No smoke alarm check on record')
+        gap(8)
+      }
+    }
   }
 
   // ── Equipment ───────────────────────────────────────────────────────────
@@ -294,31 +361,52 @@ export async function buildPdf({
     notesAndComments(room)
   })
 
-  // ── Signed off ──────────────────────────────────────────────────────────
+  // ── Signed off, or for the ESV form, certified ──────────────────────────
   const signoff = visit?.signoff
-  if (signoff) {
+  if (esv) {
+    ensure(230)
+    bar('Certification', { navy: true })
+    const completed = (visit?.completedAt ?? '').slice(0, 10)
+    const every = intervalOf(visit?.kind)
+    row('Electrician', signoff?.technician || visit?.technician || '', { labelFont: bold })
+    row('Business name', company.name ?? '', { labelFont: bold })
+    row('REC number', company.rec_number ?? '', { labelFont: bold })
+    row('Licence or registration number', signoff?.licence_number ?? '', { labelFont: bold })
+    row('Inspection date', completed, { labelFont: bold })
+    row('Next check due', completed && every ? addMonths(completed, every) : '', { labelFont: bold })
+    if (visit?.outcome) {
+      row('Outcome declared', OUTCOME_TEXT[visit.outcome] ?? visit.outcome, {
+        labelFont: bold,
+        tone: visit.outcome === 'compliant' ? 'pass' : 'fail',
+      })
+    }
+    gap(6)
+    paragraph(ESV_DECLARATION)
+  } else if (signoff) {
     ensure(170)
     bar('Signed off', { navy: true })
     row('Name', signoff.technician ?? '', { labelFont: bold })
     if (signoff.licence_number) row('Licence or registration number', signoff.licence_number, { labelFont: bold })
     row('Signed', (signoff.signed_at ?? '').slice(0, 10), { labelFont: bold })
     if (visit.outcome) row('Outcome declared', OUTCOME_TEXT[visit.outcome] ?? visit.outcome, { labelFont: bold })
-    if (signoff.signature) {
-      // The signature pad's 600 × 180 box, drawn at a third of its size.
-      const scale = 0.36
-      gap(8)
-      page.drawSvgPath(signoff.signature, {
-        x: MARGIN,
-        y,
-        scale,
-        borderColor: colour(COLOURS.ink),
-        borderWidth: 1.6 / scale,
-      })
-      y -= 180 * scale
-      page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + 600 * scale, y }, thickness: 0.6, color: colour(COLOURS.soft) })
-      gap(4)
-      draw(['Signature'], { size: 8, tint: COLOURS.soft })
-    }
+  }
+  if (signoff?.signature) {
+    // The signature pad's 600 × 180 box, drawn at about a third of its size,
+    // kept on one page with its line.
+    const scale = 0.36
+    ensure(180 * scale + 30)
+    gap(8)
+    page.drawSvgPath(signoff.signature, {
+      x: MARGIN,
+      y,
+      scale,
+      borderColor: colour(COLOURS.ink),
+      borderWidth: 1.6 / scale,
+    })
+    y -= 180 * scale
+    page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + 600 * scale, y }, thickness: 0.6, color: colour(COLOURS.soft) })
+    gap(4)
+    draw(['Signature'], { size: 8, tint: COLOURS.soft })
   }
 
   // ── Every page says what it belongs to ──────────────────────────────────

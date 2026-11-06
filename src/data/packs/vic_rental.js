@@ -39,6 +39,8 @@ export default {
         // Finished by signing off: the outcome, and the technician's name, licence
         // number and signature (C1).
         signoff: true,
+        // Its PDF follows ESV's report form: sections A to F, then certification (D1b).
+        pdfLayout: 'esv',
       },
       seed: VIC_ELECTRICAL_SAFETY,
     },

@@ -241,7 +241,9 @@ are read back with pdf.js for what they print and where: who it's from with lice
 numbers, a revision on every page, fails with their notes, "Ω" and "—", the equipment, the
 sign-off with its signature, the logo and when it's left off, wrapping, and nothing off the
 page or over the footer. Then "Export PDF" in a browser: a PDF named as the Excel report,
-counted as a revision, signed off first where the check ends that way (30 checks).
+counted as a revision, signed off first where the check ends that way. And the Victorian
+check laid out as ESV's form: sections A to F in order, the previous check's and the smoke
+alarms' dates from the site's records, defects under F, and the certification (41 checks).
 
 ```
 node tests/pdf.mjs

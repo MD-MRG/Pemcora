@@ -385,7 +385,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     const filename =
       exportFormat.current === 'pdf'
         ? // The logo is Pro's (2.4), once the limits are on.
-          await downloadPdf({ ...report, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
+          await downloadPdf({ ...report, layout: config.pdfLayout, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
         : await downloadReport({ ...report, sheetName: config.sheetName })
     recordExport(client.id, location.id, visit.id, { mode, filename })
     if (remember) setExportPreference(client.id, location.id, visit.id, mode)
