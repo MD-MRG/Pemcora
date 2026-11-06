@@ -198,6 +198,16 @@ const esvOverflow = esv.pages.flatMap(p => p.items.filter(it => it.transform[4] 
 log('and nothing runs off its pages either', esvOverflow.length === 0, esvOverflow.slice(0, 3).join(' | '))
 log('every other workflow keeps the standard layout', /Whole site/.test(elec.text) && !/A\. Installation|Certification/.test(elec.text))
 
+// ── Label photos (D1c) ──────────────────────────────────────────────────────
+// A small JPEG, made by Chrome as photo.js makes them, only smaller.
+const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAAGAAgDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAT/xAAgEAABAgUFAAAAAAAAAAAAAAAAFBUCBREhMSQyUlSh/8QAFQEBAQAAAAAAAAAAAAAAAAAABQb/xAAXEQADAQAAAAAAAAAAAAAAAAABAhEA/9oADAMBAAIRAxEAPwCBbLGVK0a7uqYuVdmMW9AAKTddKoWzf//Z', 'base64')
+const withPhoto = await read(await buildPdf({ ...elecArgs, settings: { ...elecArgs.settings, logoFull: null }, photos: { rcd1: JPEG, gone: JPEG } }))
+const photoPage = withPhoto.pages.find(p => /Label photo — RCD 1 — lights/.test(p.text))
+log('an item\'s label photo goes under its details in the equipment', !!photoPage && photoPage.images === 1 && /Rated trip current[^]*Label photo — RCD 1 — lights/.test(photoPage.text))
+log('and only items the report lists have one', withPhoto.pages.reduce((n, p) => n + p.images, 0) === 1)
+const badPhoto = await read(await buildPdf({ ...elecArgs, settings: { ...elecArgs.settings, logoFull: null }, photos: { rcd1: Buffer.from('not a photo') } }))
+log('a photo that can\'t be read is left out, and the report still goes', /RCD 1 — lights/.test(badPhoto.text) && !/Label photo/.test(badPhoto.text))
+
 // Wrapping, on its own.
 const { PDFDocument } = await import('pdf-lib')
 const fontkit = (await import('@pdf-lib/fontkit')).default
@@ -306,6 +316,84 @@ try {
   await vicDialog.getByRole('button', { name: 'Sign and finish' }).click()
   const vicPdf = await read(readFileSync(await (await download).path()))
   log('the Victorian page\'s PDF is laid out as ESV\'s form', /A\. Installation/.test(vicPdf.text) && /Certification\nElectrician\nSam Sparks/.test(vicPdf.text) && !/Whole site/.test(vicPdf.text))
+
+  // Label photos, fetched for the PDF (D1c). They come from the database and the
+  // photo bucket, answered here, so they need a backend address in .env. CI has none.
+  const configured = await page.evaluate(async () => (await import('/src/lib/supabase.js')).isSupabaseConfigured)
+  if (!configured) {
+    console.log('(the label photo checks need VITE_SUPABASE_URL in .env, and were skipped)')
+  } else {
+    const localhost = new URL(BASE).hostname
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
+    const net = { down: false, asked: [] }
+    await ctx.route('**/*', route => {
+      const req = route.request()
+      const url = new URL(req.url())
+      if (url.hostname === localhost) return route.continue()
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+      if (net.down) return route.abort('internetdisconnected')
+      net.asked.push(`${req.method()} ${url.pathname}${url.search}`)
+      const json = body => route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
+      if (url.pathname === '/rest/v1/attachments') {
+        return json([{ id: 'p1', asset_id: 'al1', storage_path: 'team/assets/al1/one.jpg', taken_at: '2026-11-01T00:00:00+00:00' }])
+      }
+      if (url.pathname.startsWith('/storage/v1/object/sign/evidence/') && req.method() === 'POST') {
+        return json({ signedURL: '/object/sign/evidence/team/assets/al1/one.jpg?token=t1' })
+      }
+      if (url.pathname.startsWith('/storage/v1/object/sign/evidence/')) {
+        return route.fulfill({ status: 200, contentType: 'image/jpeg', headers: cors, body: JPEG })
+      }
+      return route.abort()
+    })
+    // An alarm at the site, and the latest inspection of it, finished, with the list
+    // its whole-site step was worked from: that's what says which items it covers.
+    await page.evaluate(async () => {
+      const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/templateStore.js')).pop()
+      const { getTemplate } = await import(url ?? '/src/lib/templateStore.js')
+      const clients = JSON.parse(localStorage.getItem('fc.clients'))
+      const site = clients[0].locations[0]
+      site.assets = [{
+        id: 'al1', assetType: 'smoke_alarm', roomId: 'b1', label: 'Bedroom 1 alarm', make: '', model: '', serial: '',
+        attributes: {}, installedOn: null, expiresOn: null, removedAt: null, createdAt: '2025-01-01T00:00:00.000Z',
+      }]
+      const now = new Date().toISOString()
+      site.visits.push({
+        id: 'photo-visit', kind: 'qld_smoke_alarm', technician: 'Sam Sparks', startedAt: now, completedAt: now, rooms: {}, exports: [],
+        exportPreference: 'revision', outcome: 'compliant',
+        signoff: { technician: 'Sam Sparks', licence_number: 'QLD-77', signed_at: now, signature: 'M10 10 L100 50' },
+        siteResults: { template: getTemplate('qld_smoke_alarm'), results: {}, readings: {}, sections: {}, troubleshooting: {}, comments: '' },
+      })
+      localStorage.setItem('fc.clients', JSON.stringify(clients))
+    })
+    const asTeam = () =>
+      page.evaluate(async () => {
+        const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/entitlements.js')).pop()
+        const mod = await import(url ?? '/src/lib/entitlements.js')
+        await mod.openEntitlements('team', 'user', {
+          getEntitlements: async () => ({ enforced: false, accountType: 'provider', plan: 'pro', isPro: true, packs: ['core', 'qld_electrical'], starterPack: 'qld_electrical' }),
+        })
+      })
+    await openSite('#/qld-smoke-alarm')
+    await asTeam()
+    download = page.waitForEvent('download', { timeout: 20000 })
+    await page.getByRole('button', { name: 'Export PDF' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: /Save as a new revision|Replace/ }).first().click().catch(() => {})
+    const photoPdf = await read(readFileSync(await (await download).path()))
+    log('a team\'s PDF fetches the label photos of the site\'s items in one request',
+      net.asked.filter(a => a.startsWith('GET /rest/v1/attachments')).length === 1 && /asset_id=in\.\(al1\)/.test(decodeURIComponent(net.asked.find(a => a.startsWith('GET /rest/v1/attachments')) ?? '')),
+      net.asked.join(' | '))
+    log('and puts each under its item', photoPdf.pages.some(p => p.images === 1 && /Label photo — Bedroom 1 alarm/.test(p.text)), photoPdf.pages.map(p => p.images).join() + ' ' + photoPdf.text.split('\n').join(' | ').slice(-500))
+    log('saying nothing is missing', (await page.getByText('This PDF has no label photos').count()) === 0)
+
+    net.down = true
+    download = page.waitForEvent('download', { timeout: 20000 })
+    await page.getByRole('button', { name: 'Export PDF' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: /Save as a new revision|Replace/ }).first().click().catch(() => {})
+    const offlinePdf = await read(readFileSync(await (await download).path()))
+    log('with no signal the PDF still goes, without photos', /Bedroom 1 alarm/.test(offlinePdf.text) && !/Label photo/.test(offlinePdf.text))
+    log('and the page says why, and how to get them', /This PDF has no label photos: they need a connection/.test(await page.textContent('main')))
+    net.down = false
+  }
 } catch (e) {
   log('suite threw before finishing', false, e.message)
 } finally {

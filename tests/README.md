@@ -243,7 +243,10 @@ sign-off with its signature, the logo and when it's left off, wrapping, and noth
 page or over the footer. Then "Export PDF" in a browser: a PDF named as the Excel report,
 counted as a revision, signed off first where the check ends that way. And the Victorian
 check laid out as ESV's form: sections A to F in order, the previous check's and the smoke
-alarms' dates from the site's records, defects under F, and the certification (41 checks).
+alarms' dates from the site's records, defects under F, and the certification. And label
+photos: under their item, fetched in one request, left out with no signal and the page saying
+so, a photo that can't be read skipped (49 checks). The photo checks in the browser need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
 
 ```
 node tests/pdf.mjs

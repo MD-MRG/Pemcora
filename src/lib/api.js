@@ -1111,6 +1111,21 @@ export async function listAssetPhotos(teamId, assetId) {
   return data.map(photoFromRow)
 }
 
+/** The newest photo of each of these items, as { assetId: photo }, in one request (D1c). */
+export async function latestAssetPhotos(teamId, assetIds) {
+  if (!assetIds.length) return {}
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, asset_id, storage_path, taken_at')
+    .eq('team_id', teamId)
+    .in('asset_id', assetIds)
+    .order('taken_at', { ascending: false })
+  if (error) throw error
+  const latest = {}
+  for (const photo of data.map(photoFromRow)) latest[photo.assetId] ??= photo
+  return latest
+}
+
 /**
  * Adds a photo of an item, already made small enough (photo.js). The item has
  * to be in the database first.

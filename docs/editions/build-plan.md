@@ -1515,6 +1515,18 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - The declaration is a proposal, like the lists: "I certify that this electrical safety
     check was carried out in accordance with section 4 of AS/NZS 3019, and that the results
     are as recorded in this report." The electrician checks it with them.
+- How D1c (photos) came out:
+  - Making a PDF fetches the newest label photo of each of the site's items in one request,
+    then each photo through a link that lasts five minutes, and puts it under its item in the
+    Equipment part. Photos were made small when they were taken (C2c: 1600 px, JPEG about
+    70%), so they're embedded as they are.
+  - Only the label photos exist so far: nothing in the app takes a photo of a test yet.
+  - With no signal or no team the PDF goes without photos, and the page says so and how to get
+    them: export again once there's signal. A report is never held up for its photos, and one
+    that can't be read is left out.
+  - The Equipment part lists the item types the visit's own list tests, which the visit keeps
+    once its whole-site step is opened. A check signed off without ever opening that step has
+    no equipment, and so no photos, in its report.
 
 #### D2. Sending
 
@@ -1716,6 +1728,8 @@ Northern Territory, and for Queensland's electrical check:
   signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
   says so too.
 - Until 0010 is applied, the Account card can only sign out all other devices at once.
+- A PDF made with no signal has no label photos: they're fetched from the team's photo folder
+  when the PDF is made. The page says so.
 - A label photo needs a connection when it's taken: the device keeps no copy to send later
   (M.D.'s choice for C2). Everything else about the item saves offline. A photo replaced by a
   newer one stays in the bucket, and the screens show only the newest.

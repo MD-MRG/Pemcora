@@ -80,6 +80,8 @@ const intervalOf = kind => WORKFLOWS.find(w => w.id === kind)?.interval?.months 
  *   location   the site, with its visits: the ESV layout reads the previous
  *              check's date and the smoke alarm check's from them
  *   showLogo   false for a team that isn't Pro once limits are on (2.4)
+ *   photos     each item's label photo, as JPEG bytes by item id (D1c), already
+ *              made small when it was taken (photo.js: 1600 px, about 70%)
  *   fonts      { regular, bold }: DejaVu Sans, as bytes
  */
 export async function buildPdf({
@@ -93,6 +95,7 @@ export async function buildPdf({
   assets = [],
   showLogo = true,
   layout = 'standard',
+  photos = {},
   fonts,
 }) {
   const esv = layout === 'esv'
@@ -311,6 +314,27 @@ export async function buildPdf({
     }
   }
 
+  // An item's label photo, under its details, kept on one page.
+  const labelPhoto = async item => {
+    const bytes = photos[item.id]
+    if (!bytes) return
+    let image
+    try {
+      // A copy of its own: pdf-lib reads from the start of the bytes' memory, which
+      // isn't where a Node Buffer, or any other view into shared memory, begins.
+      image = await doc.embedJpg(Uint8Array.from(bytes))
+    } catch {
+      return // a photo that can't be read must not cost the client their report
+    }
+    const scale = Math.min(220 / image.width, 160 / image.height, 1)
+    const h = image.height * scale
+    ensure(h + 24)
+    gap(6)
+    page.drawImage(image, { x: MARGIN, y: y - h, width: image.width * scale, height: h })
+    y -= h + 2
+    draw([`Label photo — ${item.label}`], { size: 8, tint: COLOURS.soft })
+  }
+
   // ── Equipment ───────────────────────────────────────────────────────────
   if (snapshot.equipment.length) {
     bar('Equipment', { navy: true })
@@ -335,6 +359,7 @@ export async function buildPdf({
         if (item.status === 'replaced') row('Replaced', date(item.removedAt))
         else if (item.status === 'removed') row('Removed', date(item.removedAt))
         if (item.replaces) row('Put in', `${date(item.createdAt)}, replacing ${item.replaces}`)
+        await labelPhoto(item)
         gap(4)
       }
       gap(8)
