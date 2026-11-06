@@ -235,6 +235,7 @@ const testProblem = t => {
   const type = t.type ?? 'check'
   if (!TYPES.includes(type)) return `type ${type}`
   if (type === 'choice' && !(t.options?.length > 1)) return `${t.label}: no options`
+  if (t.failOptions && (type !== 'choice' || !t.failOptions.every(o => t.options.includes(o)))) return `${t.label}: failOptions not among its options`
   if (type === 'measure' && !t.unit) return `${t.label}: no unit`
   return null
 }

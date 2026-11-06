@@ -9,11 +9,17 @@
 // smoke alarm check due" line and the certification block are not here: they
 // come from Pemcora's records, Settings and the sign-off, and the report fills
 // them in. Readings carry no pass/fail limits until the electrician sets them.
+//
+// ESV's form records a visual inspection or polarity row as checked, not
+// applicable or not included, and the defect itself in section F. A row can also
+// be answered "Defect found" (M.D., 6 November): it counts as a fail, so it takes
+// a note and is listed with the visit's issues, as a failed RCD test is.
 
 const INCLUDED = ['Included', 'Not applicable', 'Not included']
-const CHECKED = ['Checked', 'Not applicable', 'Not included']
+const DEFECT = 'Defect found'
+const CHECKED = ['Checked', DEFECT, 'Not applicable', 'Not included']
 
-const choice = options => label => ({ label, type: 'choice', options })
+const choice = (options, failOptions) => label => ({ label, type: 'choice', options, ...(failOptions ? { failOptions } : {}) })
 const ohms = label => ({ label, type: 'measure', unit: 'Ω' })
 
 // `ref` is the form's own section letter, used only by the Victorian check.
@@ -66,7 +72,7 @@ const SECTIONS = [
       'Solar and other renewable systems',
       'Swimming pool equipment',
       'Vehicle chargers',
-    ].map(choice(CHECKED)),
+    ].map(choice(CHECKED, [DEFECT])),
   },
   {
     ref: 'D1',
@@ -85,7 +91,7 @@ const SECTIONS = [
       'Solar and other renewable systems',
       'Swimming pool equipment',
       'Vehicle chargers',
-    ].map(choice(CHECKED)),
+    ].map(choice(CHECKED, [DEFECT])),
   },
   {
     // A reading in ohms, or a note such as "double insulated".
