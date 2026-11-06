@@ -236,6 +236,17 @@ renewal that just failed, by the Auth server's error code, never its message (10
 node tests/renewal.mjs
 ```
 
+`pdf.mjs` is step D1. In Node, PDFs built from an AV visit and a Victorian electrical check
+are read back with pdf.js for what they print and where: who it's from with licence and REC
+numbers, a revision on every page, fails with their notes, "Ω" and "—", the equipment, the
+sign-off with its signature, the logo and when it's left off, wrapping, and nothing off the
+page or over the footer. Then "Export PDF" in a browser: a PDF named as the Excel report,
+counted as a revision, signed off first where the check ends that way (30 checks).
+
+```
+node tests/pdf.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew

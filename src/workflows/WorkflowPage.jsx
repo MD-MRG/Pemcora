@@ -41,6 +41,7 @@ import ExportDialog from '../components/ExportDialog.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import SignOffDialog from '../components/SignOffDialog.jsx'
 import { downloadReport } from '../lib/report.js'
+import { downloadPdf } from '../lib/pdfDownload.js'
 import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
 import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
@@ -69,7 +70,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onExportPdf, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
   const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
@@ -143,6 +144,15 @@ function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, s
             className="border-pass text-pass min-h-[46px] rounded-lg border-2 px-5 text-[14px] font-semibold hover:bg-green-50"
           >
             Export report
+          </button>
+        )}
+        {visit && (
+          <button
+            type="button"
+            onClick={onExportPdf}
+            className="border-pass text-pass min-h-[46px] rounded-lg border-2 px-5 text-[14px] font-semibold hover:bg-green-50"
+          >
+            Export PDF
           </button>
         )}
         {/* Admin-only, and never on an already-open visit. Editing a finished
@@ -355,6 +365,10 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     return [...map.entries()]
   }, [rooms])
 
+  // Which file the export in progress makes: the Excel workbook or the PDF. Both
+  // go the same way, signed off first where that's how the check ends, and both
+  // count as a revision of the report.
+  const exportFormat = useRef('xlsx')
   const runExport = async (mode, remember = false, visit = current) => {
     if (!visit) return
     const revision =
@@ -363,16 +377,33 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         : mode === 'replace'
           ? nextRevision(visit) - 1
           : nextRevision(visit)
-    const filename = await downloadReport({
+    const report = {
       client, location, visit, rooms, revision, reportTitle: config.reportTitle,
-      sheetName: config.sheetName,
       assets,
       settings: getSettings(),
-    })
+    }
+    const filename =
+      exportFormat.current === 'pdf'
+        ? // The logo is Pro's (2.4), once the limits are on.
+          await downloadPdf({ ...report, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
+        : await downloadReport({ ...report, sheetName: config.sheetName })
     recordExport(client.id, location.id, visit.id, { mode, filename })
     if (remember) setExportPreference(client.id, location.id, visit.id, mode)
     setAskExport(false)
     onChanged()
+  }
+
+  const exportAs = format => {
+    if (!current || awaitingTimeframe()) return
+    exportFormat.current = format
+    // Exporting finishes an open visit, and a check that's signed off is
+    // finished by signing. So sign first, then the report goes.
+    if (config.signoff && !current.completedAt) return setSigning({ thenExport: true })
+    const already = (current.exports ?? []).length > 0
+    // Only ask once a report exists, and skip the prompt if the
+    // technician chose to remember an answer for this visit.
+    if (already && !current.exportPreference) setAskExport(true)
+    else runExport(current.exportPreference ?? 'revision')
   }
 
   const floors = (location.floors ?? []).map(f => ({ id: f.id, label: f.label }))
@@ -513,17 +544,8 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           const first = rooms.find(r => r.status !== 'complete') ?? rooms[0]
           if (first) onOpenRoom(first.id)
         }}
-        onExport={() => {
-          if (!current || awaitingTimeframe()) return
-          // Exporting finishes an open visit, and a check that's signed off is
-          // finished by signing. So sign first, then the report goes.
-          if (config.signoff && !current.completedAt) return setSigning({ thenExport: true })
-          const already = (current.exports ?? []).length > 0
-          // Only ask once a report exists, and skip the prompt if the
-          // technician chose to remember an answer for this visit.
-          if (already && !current.exportPreference) setAskExport(true)
-          else runExport(current.exportPreference ?? 'revision')
-        }}
+        onExport={() => exportAs('xlsx')}
+        onExportPdf={() => exportAs('pdf')}
         onTechnician={value => {
           if (!current) return
           setVisitTechnician(client.id, location.id, current.id, value)

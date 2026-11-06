@@ -50,6 +50,7 @@ const SUITES = [
   'due',
   'devices',
   'renewal',
+  'pdf',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

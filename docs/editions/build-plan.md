@@ -1480,6 +1480,25 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Include licence numbers and the signature, the logo on Pro, and the revision number on
   corrected reports.
 - The Excel export stays.
+- Decided with M.D. before building it (6 November):
+  - Phase D is built on `editions-phase-d`, in the main folder.
+  - Three commits: D1 the PDF builder, a layout for every workflow and "Export PDF"; D1b the
+    Victorian electrical layout following the ESV form; D1c label photos in the PDF.
+  - "Export PDF" goes on every workflow, AV included, beside "Export report".
+- How D1 (the builder) came out:
+  - `src/lib/pdfReport.js` lays out the same snapshot as the Excel export, on A4 pages with
+    pdf-lib. It prints who it's from, with licence and REC numbers, the details and outcome,
+    the whole-site results with each item, the issues with their notes, the equipment, each
+    room, and for a check that is signed off, who signed it and the signature, drawn from its
+    stored path. Every page carries the report's title, client, revision and page number.
+  - The fonts are DejaVu Sans (free to embed), because the PDF's own fonts can't print "Ω",
+    "—" or "·". Only the characters a report uses are embedded. They're the build's own files,
+    so the offline cache keeps them (about 1.4 MB) and a PDF can be made with no signal.
+  - The logo is left off once the limits are on for a team that isn't Pro (2.4), as the photo
+    tag is. Until E6 every team's PDF has its logo, as its Excel report does.
+  - "Export PDF" goes the way "Export report" does: a check that ends in a sign-off is signed
+    first, and a second export asks whether it's a revision. Both count as revisions of the
+    one report.
 
 #### D2. Sending
 
