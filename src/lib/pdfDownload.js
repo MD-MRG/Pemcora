@@ -38,13 +38,19 @@ async function labelPhotos(assets) {
 }
 
 /**
- * Builds the PDF report and downloads it. Returns its filename, and whether label
- * photos had to be left out for want of a connection.
+ * Builds the PDF report: its bytes, its filename, and whether label photos had to
+ * be left out for want of a connection. Sending a report (D2) uses this too.
  */
-export async function downloadPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout }) {
+export async function makePdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout }) {
   const { photos, missing } = await labelPhotos(assets)
   const bytes = await buildPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, photos, fonts: await loadFonts() })
   const filename = buildFilename(client, visit, revision, reportTitle).replace(/\.xlsx$/, '.pdf')
+  return { bytes, filename, photosMissing: missing }
+}
+
+/** Builds the PDF report and downloads it. */
+export async function downloadPdf(report) {
+  const { bytes, filename, photosMissing } = await makePdf(report)
   triggerDownload(new Blob([bytes], { type: 'application/pdf' }), filename)
-  return { filename, photosMissing: missing }
+  return { filename, photosMissing }
 }

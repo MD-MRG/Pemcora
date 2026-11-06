@@ -42,8 +42,10 @@ import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import SignOffDialog from '../components/SignOffDialog.jsx'
 import { downloadReport } from '../lib/report.js'
 import { downloadPdf } from '../lib/pdfDownload.js'
+import { canSendReports, sendReport } from '../lib/sendReport.js'
+import { SendDialog, SentNotice, SentReports } from './SendReport.jsx'
 import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
-import { heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
+import { hasUnsavedWork, heldCount, heldVisits, outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { nextRevision, recordExport, setExportPreference } from '../lib/clientStore.js'
 import { refreshEntitlements, startNeedsUpgrade, usageLine, visitSheet } from '../lib/entitlements.js'
 
@@ -70,7 +72,7 @@ function StatusChip({ status, fails }) {
 }
 
 /* ── The visit state card — one place, one primary action ─────────────────── */
-function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onExportPdf, onTechnician, onReopen }) {
+function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, starting, usage, needsUpgrade, onStart, onContinue, onFinish, onExport, onExportPdf, canSend, sending, onSend, onTechnician, onReopen }) {
   const open = visit && !visit.completedAt
   const startLabel = needsUpgrade ? 'Upgrade to start' : visit ? config.newLabel : config.startLabel
 
@@ -153,6 +155,17 @@ function VisitCard({ visit, roomCount, doneCount, progress, config, canManage, s
             className="border-pass text-pass min-h-[46px] rounded-lg border-2 px-5 text-[14px] font-semibold hover:bg-green-50"
           >
             Export PDF
+          </button>
+        )}
+        {/* A finished visit only: what's sent can't be changed (2.10). */}
+        {visit && !open && canSend && (
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={sending}
+            className="bg-pass min-h-[46px] rounded-lg px-5 text-[14px] font-semibold text-white hover:bg-green-700 disabled:opacity-60"
+          >
+            {sending ? 'Sending…' : 'Send report'}
           </button>
         )}
         {/* Admin-only, and never on an already-open visit. Editing a finished
@@ -320,6 +333,12 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   const [startNote, setStartNote] = useState(null)
   const [askDiscard, setAskDiscard] = useState(null)
   const [sheet, setSheet] = useState(null)
+  // Sending (D2c): where it goes, whether it's on its way, and what came of it.
+  const [askSend, setAskSend] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [sentNote, setSentNote] = useState(null)
+  const [sentKey, setSentKey] = useState(0)
+  const sendTo = useRef('')
   const entitlements = useEntitlements()
   const roomTypes = useRoomTypes()
 
@@ -365,9 +384,9 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
     return [...map.entries()]
   }, [rooms])
 
-  // Which file the export in progress makes: the Excel workbook or the PDF. Both
-  // go the same way, signed off first where that's how the check ends, and both
-  // count as a revision of the report.
+  // Which file the export in progress makes: the Excel workbook, the PDF, or the
+  // PDF sent to someone ('send'). They go the same way, signed off first where
+  // that's how the check ends, and each counts as a revision of the report.
   const exportFormat = useRef('xlsx')
   const runExport = async (mode, remember = false, visit = current) => {
     if (!visit) return
@@ -383,7 +402,28 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
       settings: getSettings(),
     }
     let filename
-    if (exportFormat.current === 'pdf') {
+    if (exportFormat.current === 'send') {
+      // Only a revision that went is recorded: a refusal records nothing.
+      setAskExport(false)
+      setSending(true)
+      setSentNote(null)
+      try {
+        const sent = await sendReport({
+          ...report,
+          layout: config.pdfLayout,
+          showLogo: !(entitlements?.enforced && !entitlements.isPro),
+          email: sendTo.current,
+        })
+        filename = sent.filename
+        setSentNote({ sent })
+      } catch (e) {
+        setSentNote({ error: e.message || 'The report could not be sent.' })
+        return
+      } finally {
+        setSending(false)
+        setSentKey(k => k + 1)
+      }
+    } else if (exportFormat.current === 'pdf') {
       // The logo is Pro's (2.4), once the limits are on.
       const made = await downloadPdf({ ...report, layout: config.pdfLayout, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
       filename = made.filename
@@ -554,6 +594,12 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         }}
         onExport={() => exportAs('xlsx')}
         onExportPdf={() => exportAs('pdf')}
+        canSend={canSendReports()}
+        sending={sending}
+        onSend={() => {
+          setSentNote(null)
+          setAskSend(true)
+        }}
         onTechnician={value => {
           if (!current) return
           setVisitTechnician(client.id, location.id, current.id, value)
@@ -583,6 +629,21 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         <p className="border-fail/30 bg-fail/5 text-fail mb-4 rounded-lg border px-4 py-3 text-[13.5px]">
           {reopenError}
         </p>
+      )}
+
+      {sentNote && (
+        <div className="mb-4">
+          {sentNote.sent ? <SentNotice sent={sentNote.sent} /> : <Notice blocked title={sentNote.error} />}
+        </div>
+      )}
+
+      {current?.completedAt && canSendReports() && (
+        <SentReports
+          visitId={current.id}
+          title={config.reportTitle ? `${config.reportTitle} report` : 'report'}
+          offline={offline}
+          refreshKey={sentKey}
+        />
       )}
 
       {current && (
@@ -810,6 +871,21 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           from it, so anything you change here will differ from the copy the client holds until you
           export a new revision.
         </ConfirmDialog>
+      )}
+
+      {askSend && current && (
+        <SendDialog
+          defaultEmail={client.contactEmail}
+          offline={offline}
+          // The finished visit has to be in the database before it can be sent.
+          unsaved={saveStatus() !== null && hasUnsavedWork()}
+          onCancel={() => setAskSend(false)}
+          onSend={email => {
+            sendTo.current = email
+            setAskSend(false)
+            exportAs('send')
+          }}
+        />
       )}
 
       {askExport && current && (

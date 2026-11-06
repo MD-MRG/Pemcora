@@ -1580,6 +1580,25 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - It uses the secrets `send-invite` already has: `RESEND_API_KEY`, `INVITE_FROM` and
     `INVITE_APP_URL`. M.D. deploys it with `supabase functions deploy deliver-report`, after
     0011 is applied, so no report is ever emailed without the cap.
+- **M.D.'s note (6 November):** "Send report" is on every workflow, as Export PDF is, and a
+  send counts as a revision the same way.
+- How D2c (the app) came out:
+  - A finished visit on a signed-in team has "Send report". It asks where to, with the
+    client's contact email filled in, then goes the way Export PDF goes: once a report
+    exists it asks whether this is a new revision or replaces the last, and the send is
+    listed under Reports as that revision. A refused send records no revision.
+  - The app builds the snapshot and refuses there and then if a note still says
+    `[timeframe]`, naming where. Then it makes the PDF, puts it in
+    `reports/<team>/<uuid>.pdf` and calls `deliver-report` with its path.
+  - It needs a connection, and the device's own changes saved, since the database reads the
+    finished visit. The dialog says which is missing.
+  - What came of it is shown under the visit: emailed, or, with no mailer, the link to send
+    by hand with "Copy link". A refusal is shown in the database's words (the daily cap).
+  - Until `deliver-report` is deployed, the app records the report through `send_report()`
+    directly and hands over the link, as invitations do.
+  - A finished visit lists what was sent from it under "Sent": who to, when, and whether the
+    link has been opened, has expired or the report was saved. "Send again" sends a new link
+    to the same address. "Withdraw" asks first, and is there until the report is saved.
 
 #### D3. Report link page `#/r/<token>`
 
@@ -1768,6 +1787,9 @@ Northern Territory, and for Queensland's electrical check:
   signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
   says so too.
 - Until 0010 is applied, the Account card can only sign out all other devices at once.
+- A report that the database refuses after its PDF is uploaded (over the cap, say) leaves
+  that PDF in the team's report folder, and so does a withdrawn report: nothing in that
+  folder can be deleted (0007). Nobody outside the team can reach either.
 - A PDF made with no signal has no label photos: they're fetched from the team's photo folder
   when the PDF is made. The page says so.
 - A label photo needs a connection when it's taken: the device keeps no copy to send later

@@ -1161,6 +1161,108 @@ export async function photoUrl(path) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sending reports (D2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Puts a report's PDF in the team's report folder, where it can never be
+ * replaced or deleted (0007), and returns its path. A new name each time.
+ */
+export async function uploadReportPdf(teamId, bytes) {
+  const path = `${teamId}/${crypto.randomUUID()}.pdf`
+  const { error } = await supabase.storage
+    .from('reports')
+    .upload(path, new Blob([bytes], { type: 'application/pdf' }), { contentType: 'application/pdf', upsert: false })
+  if (error) throw error
+  return path
+}
+
+const reportLink = token => `${emailRedirectUrl()}#/r/${encodeURIComponent(token)}`
+
+/**
+ * Asks the deliver-report function to record a report and email its link.
+ * Always returns { id, link, emailed, email, expiresAt }: the page says "emailed
+ * to them" or "send them this" from the same shape, and never claims an email
+ * that didn't go.
+ *
+ * A refusal keeps its code and hint, which is how the daily cap ('send_cap') and
+ * an unfinished note ('unfinished') are told from anything else. A function
+ * that isn't deployed yet, or can't be reached, falls back to `direct`, the
+ * database call itself, as invitations do: the report is recorded, the cap and
+ * every other rule still hold, and the link is handed over by hand.
+ */
+async function deliver(body, direct) {
+  let data
+  let error
+  try {
+    ;({ data, error } = await supabase.functions.invoke('deliver-report', {
+      body: { ...body, appUrl: emailRedirectUrl() },
+    }))
+  } catch (e) {
+    error = e
+  }
+  if (!error) {
+    return { id: data.id, link: data.link, emailed: Boolean(data.emailed), email: data.email, expiresAt: data.expiresAt ?? null }
+  }
+  const said = await error.context?.json?.().catch(() => null)
+  if (said?.error) throw Object.assign(new Error(said.error), { code: said.code, hint: said.hint })
+  if (error.context?.status === 404 || /Failed to send|fetch|network/i.test(error.message ?? '')) {
+    const row = await direct()
+    return { id: row.id, link: reportLink(row.token), emailed: false, email: row.recipient_email, expiresAt: row.link_expires_at }
+  }
+  throw error
+}
+
+/** Records a sent report and emails its link. `title` is only for the email. */
+export function sendReportTo({ visitId, email, snapshot, filePath, title }) {
+  return deliver({ action: 'send', visitId, email, snapshot, filePath, title }, async () => {
+    const { data, error } = await supabase.rpc('send_report', {
+      p_visit_id: visitId,
+      p_recipient_email: email,
+      p_snapshot: snapshot,
+      p_file_path: filePath,
+    })
+    if (error) throw error
+    return data
+  })
+}
+
+/** "Send again": a new link to the same address, and the old one stops working. */
+export function resendReport(deliveryId, title) {
+  return deliver({ action: 'resend', deliveryId, title }, async () => {
+    const { data, error } = await supabase.rpc('resend_report', { p_delivery_id: deliveryId })
+    if (error) throw error
+    return data
+  })
+}
+
+/** "Withdraw": until the recipient saves it. Emails nobody. */
+export async function withdrawReport(deliveryId) {
+  const { error } = await supabase.rpc('revoke_report', { p_delivery_id: deliveryId })
+  if (error) throw error
+}
+
+/** The reports sent from a visit, newest first. */
+export async function listSentReports(visitId) {
+  const { data, error } = await supabase
+    .from('report_deliveries')
+    .select('id, recipient_email, sent_at, link_expires_at, opened_at, claimed_at')
+    .eq('visit_id', visitId)
+    .order('sent_at', { ascending: false })
+  if (error) throw error
+  return data.map(r => ({
+    id: r.id,
+    email: r.recipient_email,
+    sentAt: r.sent_at,
+    expiresAt: r.link_expires_at,
+    openedAt: r.opened_at,
+    // Saved by the recipient, or filed into their account by itself (0007 sets
+    // claimed_at for both): either way it can no longer be withdrawn.
+    savedAt: r.claimed_at,
+  }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Visits
 // ─────────────────────────────────────────────────────────────────────────────
 

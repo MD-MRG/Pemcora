@@ -266,6 +266,21 @@ or later.
 node tests/deliver-report.mjs
 ```
 
+`send-report.mjs` is step D2c, in a browser with the report bucket, the `deliver-report` function
+and the database answered by the test. Only a finished visit on a signed-in team offers "Send
+report", with the client's contact email filled in, and not with no connection or no address.
+The PDF goes to the team's report folder first, then the function gets its path, the visit,
+the snapshot and the address. A send is a revision, asked as Export PDF asks. The daily cap's
+refusal is shown in the database's words and records no revision. With no mailer, or the
+function not deployed yet, the link is handed over and never called emailed. The sent list:
+"Send again" for that delivery, "Withdraw" until it's saved. A note still saying `[timeframe]`
+is refused before anything leaves the device (34 checks). The sending checks need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/send-report.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew
