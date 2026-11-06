@@ -1559,6 +1559,27 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - 0011 replaces `send_report()` and `resend_report()` with 0007's bodies plus these
     checks. Re-running 0007 by itself puts back the versions without them, so 0011 is
     re-run after it.
+- How D2b (the `deliver-report` Edge Function) came out:
+  - The app calls it with `action: 'send'` (the visit, the address, the snapshot, the PDF's
+    path and the report's title) or `'resend'` (the delivery). It calls `send_report()` or
+    `resend_report()` with the caller's own login, so the database decides everything, and
+    emails the link `#/r/<token>` through Resend. "Withdraw" emails nobody, so the app calls
+    `revoke_report()` itself.
+  - The email is from Pemcora's address in `INVITE_FROM`, named "<business> via Pemcora", with
+    replies to the business's email in Settings, or to the person who sent it if there's none.
+    It says who sent what, for which site, done when, and until when the link works, and that
+    the report can be saved to a free account.
+  - The business, site, date and expiry come from the row the database wrote, never the
+    request. "Send again" goes to the address the report was first sent to. Only the title is
+    the app's, cut to one line and escaped.
+  - A refusal comes back with its code and hint: the cap as a 429 (`send_cap`), an
+    unfinished note as a 400 (`unfinished`).
+  - With no `RESEND_API_KEY` the report is still sent, and the link comes back
+    (`emailed: false`) for the app to hand over, as with invitations. If Resend refuses, the
+    report stands and counts towards the cap, and the link comes back the same way.
+  - It uses the secrets `send-invite` already has: `RESEND_API_KEY`, `INVITE_FROM` and
+    `INVITE_APP_URL`. M.D. deploys it with `supabase functions deploy deliver-report`, after
+    0011 is applied, so no report is ever emailed without the cap.
 
 #### D3. Report link page `#/r/<token>`
 

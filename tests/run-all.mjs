@@ -51,6 +51,7 @@ const SUITES = [
   'devices',
   'renewal',
   'pdf',
+  'deliver-report',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

@@ -252,6 +252,20 @@ so, a photo that can't be read skipped (49 checks). The photo checks in the brow
 node tests/pdf.mjs
 ```
 
+`deliver-report.mjs` is step D2b, in Node with no dev server. It loads the Edge Function's own
+`index.ts` (Node strips its types; a hook stands in for the Supabase client, and `Deno`, the
+database's answers and Resend are stand-ins too). It checks the function sends as the caller,
+never with a service key; a refusal comes back with its code and hint, the daily cap as a 429,
+with no email; the email's business, site and date come from the row the database wrote, and
+"Send again" goes to the address it was first sent to; From is Pemcora's address named
+"<business> via Pemcora", replies go to the business, and nothing typed adds a header or HTML;
+and with no mailer, or one that fails, the link still comes back (42 checks). Needs Node 22.18
+or later.
+
+```
+node tests/deliver-report.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew
