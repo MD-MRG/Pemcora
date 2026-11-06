@@ -8,6 +8,8 @@
 //
 //   check    PASS / FAIL / NA                     results[group][testId]
 //   choice   the chosen option's text             results[group][testId]
+//            — one listed in the test's `failOptions`, such as
+//            "Defect found", is a fail
 //   yesno    YES / NO / NA — a NO is a fail       results[group][testId]
 //   measure  { value, unit }                      readings[group][testId]
 //            and, when the test sets min or max,
@@ -50,6 +52,7 @@ export function isFail(test, value) {
     case 'yesno':
       return value === 'NO'
     case 'choice':
+      return value != null && (test.failOptions ?? []).includes(value)
     case 'text':
       return false
     default:

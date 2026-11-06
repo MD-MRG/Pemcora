@@ -160,6 +160,18 @@ try {
   const third = (await stored()).visits.find(v => v.id !== visit.id && v.id !== second.id)
   log('cancelled, nothing is finished or exported', !!third && !third.completedAt && !(third.exports ?? []).length)
 
+  // A defect found on inspection (M.D., 6 November): a fail like any other.
+  await openSite('#/qld-electrical-safety')
+  await page.getByRole('button', { name: /^Start/ }).first().click()
+  await page.getByRole('button', { name: /^Whole site/ }).click()
+  const defect = page.getByRole('button', { name: 'Switchboards: Defect found', exact: true })
+  await defect.click()
+  log('a visual inspection row can be answered "Defect found", shown as a fail',
+    (await defect.getAttribute('aria-pressed')) === 'true' && /bg-fail/.test(await defect.getAttribute('class')))
+  log('which asks for a note, as any fail does', (await page.getByRole('textbox', { name: 'Switchboards', exact: true }).count()) === 1)
+  await page.getByRole('button', { name: 'Back to the rooms' }).click()
+  log('and counts on the whole-site row', /1 FAIL/.test(await page.getByRole('button', { name: /^Whole site/ }).textContent()))
+
   // An AV visit finishes as it always has.
   await openSite('#/maintenance')
   await page.getByRole('button', { name: 'Start PM' }).click()

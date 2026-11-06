@@ -49,7 +49,8 @@ types (`src/lib/testTypes.js`): what each answer type keeps and when it is a
 fail, a template using every type round-tripping through the store, coverage
 gaps, the report snapshot (`src/lib/reportSnapshot.js`) for a whole-site visit
 with items and readings, whole-site fails reaching Home, and the Excel export —
-including an AV visit, which must export exactly as before (72 checks).
+including an AV visit, which must export exactly as before, and an electrical row answered
+"Defect found" counting as a fail (80 checks).
 
 ```
 node tests/template-types.mjs
@@ -164,7 +165,8 @@ node tests/site-step.mjs
 `signoff.mjs` is step C1f. A Queensland smoke alarm inspection finished by signing off, in a
 browser: what the sign-off needs, what's kept with the visit, the report it exports (read back
 with ExcelJS), a correction signed again, exporting an open check, and an AV visit finished and
-exported as it always was (22 checks).
+exported as it always was, and a "Defect found" on an electrical safety check shown as a fail
+(25 checks).
 
 ```
 node tests/signoff.mjs

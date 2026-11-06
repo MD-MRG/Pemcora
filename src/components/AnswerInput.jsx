@@ -109,7 +109,8 @@ export default function AnswerInput({ test, value, reading, onAnswer, label = te
     case 'choice':
       return (
         <Buttons
-          options={(test.options ?? []).map(o => ({ value: o, label: o, tone: 'plain' }))}
+          // An option that counts as a fail shows as one when chosen.
+          options={(test.options ?? []).map(o => ({ value: o, label: o, tone: (test.failOptions ?? []).includes(o) ? 'fail' : 'plain' }))}
           value={value}
           onChange={v => onAnswer(v)}
           label={label}

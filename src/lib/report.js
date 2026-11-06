@@ -118,7 +118,9 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   const resultRow = test => {
     const r = ws.addRow([test.label, test.answer])
     const c = r.getCell(2)
-    const tone = answerTone(test, test.value)
+    // The snapshot's own verdict first: it was worked out from the whole test,
+    // which knows answers such as "Defect found" that count as a fail.
+    const tone = test.fail ? 'fail' : answerTone(test, test.value)
     if (tone === 'pass') c.font = { bold: true, color: { argb: 'FF1E7A45' } }
     else if (tone === 'fail') c.font = { bold: true, color: { argb: 'FFC22E1C' } }
     else if (tone === 'na') c.font = { color: { argb: 'FF7C8894' } }

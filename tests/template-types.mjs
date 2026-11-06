@@ -505,3 +505,33 @@ const expected = [
 ]
 log('an AV visit exports exactly as before', same(avText, expected),
   avText.find((t, i) => t !== expected[i]) ?? '')
+
+// ── "Defect found" (M.D., 6 November) ───────────────────────────────────────
+// A visual inspection or polarity row can be answered "Defect found", which
+// counts as a fail; the other answers, and the extent rows, never do.
+const visual = sec(1)
+const switchboards = visual.tests.find(t => t.label === 'Switchboards')
+log('a visual inspection row offers "Defect found", and counts only that as a fail',
+  switchboards.options.includes('Defect found') && isFail(switchboards, 'Defect found') &&
+    !isFail(switchboards, 'Checked') && !isFail(switchboards, 'Not applicable') && !isFail(switchboards, undefined))
+log('so does every polarity row', sec(2).tests.every(t => t.failOptions?.join() === 'Defect found' && t.options.includes('Defect found')))
+log('an extent row has no such answer', sec(0).tests.every(t => !t.failOptions && !t.options.includes('Defect found')))
+log('a choice with no fail answer of its own still never fails', !isFail({ type: 'choice', options: ['A', 'B'] }, 'A'))
+log('and the report colours it as a fail', answerTone(switchboards, 'Defect found') === 'fail' && answerTone(switchboards, 'Checked') === '')
+
+const defectVisit = {
+  technician: 'Sam', startedAt: '2026-11-06T00:00:00Z', completedAt: '2026-11-06T02:00:00Z', rooms: {},
+  siteResults: {
+    template: vic,
+    results: { [visual.id]: { [switchboards.id]: 'Defect found', [visual.tests[0].id]: 'Checked' } },
+    troubleshooting: { [switchboards.id]: 'Cover missing on the main switchboard' },
+  },
+}
+log('it is one of the visit\'s fails', siteFails(defectVisit.siteResults).map(f => f.testId).join() === switchboards.id)
+const defectSnap = buildReportSnapshot({ visit: defectVisit, rooms: [], assets: [] })
+log('and the report lists it with its note',
+  same(defectSnap.site.failed, [{ label: 'Switchboards', note: 'Cover missing on the main switchboard' }]), JSON.stringify(defectSnap.site.failed))
+const defectRows = await rowsOf(await buildWorkbook({ client: { name: 'Rental Co' }, location: {}, visit: defectVisit, rooms: [], revision: 1, assets: [] }))
+const defectRow = defectRows.find(r => textOf(r) === 'Switchboards|Defect found')
+log('the Excel report prints it in the fail colour, and under Troubleshooting',
+  defectRow?.getCell(2).font?.color?.argb === 'FFC22E1C' && defectRows.map(textOf).includes('Switchboards|Cover missing on the main switchboard'))

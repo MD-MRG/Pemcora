@@ -527,13 +527,18 @@ room.
 |---|---|---|
 | A. Installation | address; date of previous check | filled in from Pemcora's records |
 | B. Extent of installation | main switchboard, main earthing system, kitchen, main bathroom, other bathrooms and ensuites, main bedroom, other bedrooms, living room, other living areas, laundry, garage, solar or battery system, electric water heater, dishwasher, electric room or space heaters, swimming pool equipment | included / not applicable / not included; pre-filled from the site's rooms |
-| C. Visual inspection (20) | consumers mains, switchboards, exposed earth electrode, metallic water pipe bond, RCDs (safety switches), circuit protection (circuit breakers and fuses), socket-outlets, light fittings, installation wiring, electric water heater, air conditioners, space heaters, cooking equipment, dishwasher, exhaust fans, ceiling fans, washing machine or dryer, solar and other renewable systems, swimming pool equipment, vehicle chargers | checked / not applicable / not included |
-| D1. Polarity and correct connections (12) | consumers mains, circuit protection, RCDs, socket-outlets, light fittings, electric water heater, air conditioners, cooking equipment, dishwasher, solar and other renewable systems, swimming pool equipment, vehicle chargers | checked / not applicable / not included |
+| C. Visual inspection (20) | consumers mains, switchboards, exposed earth electrode, metallic water pipe bond, RCDs (safety switches), circuit protection (circuit breakers and fuses), socket-outlets, light fittings, installation wiring, electric water heater, air conditioners, space heaters, cooking equipment, dishwasher, exhaust fans, ceiling fans, washing machine or dryer, solar and other renewable systems, swimming pool equipment, vehicle chargers | checked / defect found / not applicable / not included |
+| D1. Polarity and correct connections (12) | consumers mains, circuit protection, RCDs, socket-outlets, light fittings, electric water heater, air conditioners, cooking equipment, dishwasher, solar and other renewable systems, swimming pool equipment, vehicle chargers | checked / defect found / not applicable / not included |
 | D2. Earth continuity (14) | mains earth conductor, switchboard enclosure, metallic water pipe bond, socket-outlets, light fittings, exhaust fans, ceiling fans, electric water heater, air conditioners, cooking equipment, dishwasher, solar and other renewable systems, swimming pool equipment, vehicle chargers | reading in ohms, or a note such as double insulated |
 | D3. RCD testing (one row per RCD, repeated per item) | circuit protected, push-button test, time test, trip time | pass/fail; trip time in milliseconds |
 | E. Smoke alarms | all correctly installed, working and tested to the manufacturer's instructions; next smoke alarm check due | yes/no; date filled in from the smoke alarm check |
 | F. Observations and recommendations | each defect and what was done (repaired, replaced, retested) | text |
 | Certification | electrician and business name, REC number, licence or registration number, inspection date, next check due, declaration, signature | from sign-off and Settings |
+
+> **M.D.'s note (6 November):** a visual inspection or polarity row needs a way to record a
+> defect. "Defect found" is added to C and D1. It counts as a fail: it takes a note, shows in
+> red, and is listed with the visit's issues, as a failed RCD test is. The PDF can still print
+> the row as ESV's form does, with the defect under section F.
 
 ESV's form dates from 2021 and cites the 2007 edition of AS/NZS 3019, while Consumer Affairs
 Victoria now uses the standard's newer title ("Periodic assessment"). Check the form is
