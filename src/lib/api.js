@@ -1344,6 +1344,67 @@ export async function listComplianceItems(teamId) {
   return data ?? []
 }
 
+// ── A landlord's own checks (D4d) ─────────────────────────────────────────────
+
+// What a check entered by hand is called in the database: its own, by name, so
+// it can't be taken for a check a report keeps (those are named by workflow).
+export const ownObligation = label =>
+  `own:${String(label ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'check'}`
+
+/**
+ * A check entered by hand at a property: what it is, every how many months, and
+ * when it was last done. The database works out when it's next due.
+ */
+export async function addOwnCheck(teamId, locationId, { label, intervalMonths, lastDoneOn }) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .insert({
+      team_id: teamId,
+      location_id: locationId,
+      obligation: ownObligation(label),
+      label: String(label).trim(),
+      interval_months: intervalMonths,
+      last_done_on: lastDoneOn,
+    })
+    .select('id')
+    .single()
+  if (isDuplicate(error)) throw coded(`This property already has a check called "${String(label).trim()}".`, '23505')
+  if (error) throw error
+  return data.id
+}
+
+/** A check done again: its next due date moves on from this one. */
+export async function recordCheckDone(itemId, lastDoneOn) {
+  const { error } = await supabase.from('compliance_items').update({ last_done_on: lastDoneOn }).eq('id', itemId)
+  if (error) throw error
+}
+
+/** Removes a check entered by hand, and its certificate with it. */
+export async function removeOwnCheck(itemId, evidencePath) {
+  const { error } = await supabase.from('compliance_items').delete().eq('id', itemId).like('obligation', 'own:%')
+  if (error) throw error
+  if (evidencePath) await supabase.storage.from(EVIDENCE).remove([evidencePath])
+}
+
+/**
+ * Keeps a check's certificate, a PDF or a photo, in the account's own folder,
+ * on Pro once limits are on (D6). The file goes first, then the check names it;
+ * if that fails the file goes again, and a certificate it replaces is removed.
+ */
+export async function addCertificate(teamId, itemId, file, previous) {
+  const ext = file.type === 'application/pdf' ? 'pdf' : file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'
+  const path = `${teamId}/checks/${itemId}/${crypto.randomUUID()}.${ext}`
+  const { error: failed } = await supabase.storage.from(EVIDENCE).upload(path, file, { contentType: file.type, upsert: false })
+  if (failed) throw failed
+  const { error } = await supabase.from('compliance_items').update({ evidence_path: path }).eq('id', itemId)
+  if (error) {
+    await supabase.storage.from(EVIDENCE).remove([path])
+    throw error
+  }
+  if (previous) await supabase.storage.from(EVIDENCE).remove([previous])
+  return path
+}
+
 /** Stops the site a report came from filing later reports into the account by themselves. */
 export async function stopAutoFiling(deliveryId) {
   const { error } = await supabase.rpc('stop_auto_filing', { p_delivery_id: deliveryId })

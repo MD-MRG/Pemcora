@@ -1,14 +1,14 @@
 """
-Proves 0006 to 0013 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0014 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 to 0013 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0014 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006 to 0013 are read from instead (a copy with a fix being tried, say).
+0006 to 0014 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -28,7 +28,8 @@ OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
 EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
             "0010_signed_in_devices.sql", "0011_report_sending.sql",
-            "0012_report_file_access.sql", "0013_received_reports.sql")
+            "0012_report_file_access.sql", "0013_received_reports.sql",
+            "0014_certificates.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -126,7 +127,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 to 0013, twice ────────────────────────────────────────────────────
+# ── 0006 to 0014, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -2039,6 +2040,41 @@ check("D4a: the next report for that site waits to be saved, instead of filing i
 run_file(NEW / "0013_received_reports.sql")   # re-run last, after every other file's re-runs
 check("D4a: 0013 re-runs, and the landlord still reads only through it",
       one(J, "select count(*) from public.report_deliveries") == 0 and one(J, "select count(*) from public.received_reports() where id = %s", [D1]) == 1)
+
+# ── Step D4d: a landlord's own checks, and their certificates (0014) ─────────
+print("\n— Step D4d: checks a landlord enters by hand, and certificates for them")
+run_file(NEW / "0014_certificates.sql")
+OWN = one(J, """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on)
+               values (%s, %s, 'own:gas-check', 'Gas check', 24, '2025-03-15') returning id""", [TJ, JL])
+row = act(J, "select next_due_on, active from public.compliance_items where id = %s", [OWN])[0]
+check("D4d: a check entered by hand works out its next due date", str(row[0]) == "2027-03-15" and row[1] is True, str(row))
+act(J, "update public.compliance_items set last_done_on = '2026-11-01' where id = %s", [OWN])
+check("D4d: …and moves it on when it's done again",
+      str(one(J, "select next_due_on from public.compliance_items where id = %s", [OWN])) == "2028-11-01")
+refused("D4d: the same check twice at one property is refused", J,
+        "insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on) values (%s, %s, 'own:gas-check', 'Gas check', 12, '2026-01-01')",
+        [TJ, JL], sqlstate="23505")
+refused("D4d: nobody else can add one to the landlord's property", X,
+        "insert into public.compliance_items (team_id, location_id, obligation, label, interval_months) values (%s, %s, 'own:x', 'X', 12)",
+        [TJ, JL], sqlstate="42501")
+CERT = f"{TJ}/checks/{OWN}/{uuid.uuid4()}.pdf"
+# Limits are on in this run (see 184): a certificate is Pro's (decision D6).
+refused("D4d: on Free, with limits on, a certificate can't be kept", J,
+        "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [CERT], sqlstate="42501")
+su("update public.subscriptions set plan = 'pro', status = 'active' where team_id = %s", [TJ])
+act(J, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [CERT])
+act(J, "update public.compliance_items set evidence_path = %s where id = %s", [CERT, OWN])
+check("D4d: a certificate goes in the landlord's own folder, and the check names it",
+      one(J, "select evidence_path from public.compliance_items where id = %s", [OWN]) == CERT
+      and one(J, "select count(*) from storage.objects where bucket_id = 'evidence' and name = %s", [CERT]) == 1)
+refused("D4d: …never a file in another team's folder", J,
+        "update public.compliance_items set evidence_path = %s where id = %s", [f"{TA}/checks/x.pdf", OWN], sqlstate="42501")
+check("D4d: …and nobody else can read it", one(X, "select count(*) from storage.objects where bucket_id = 'evidence' and name = %s", [CERT]) == 0)
+refused("D4d: …or put one there", X, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [f"{TJ}/checks/{OWN}/sneaky.pdf"], sqlstate="42501")
+act(J, "delete from public.compliance_items where id = %s", [OWN])
+check("D4d: the landlord can remove a check they entered", su("select count(*) from public.compliance_items where id = %s", [OWN])[0][0] == 0)
+run_file(NEW / "0014_certificates.sql")
+check("D4d: 0014 re-runs", True)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

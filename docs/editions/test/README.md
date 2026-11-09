@@ -1,9 +1,9 @@
-# SQL-level checks for 0006 to 0013
+# SQL-level checks for 0006 to 0014
 
 `run_tests.py` builds a throwaway database from the real `supabase/migrations/0001–0005`,
-makes a team the way the app used to, applies `0006` to `0013` twice (re-run
+makes a team the way the app used to, applies `0006` to `0014` twice (re-run
 safety), then drives every gate, policy and RPC as real signed-in roles with RLS on.
-445 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
+458 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
 seats and invites, the column lock on `teams`, the re-check clock, photo gating,
 storage folders, and the whole report delivery → claim → auto-file loop. Then
 the build plan's Phase A rules: a second device joining an open visit, visit
@@ -33,7 +33,11 @@ the account a report was saved to reads it only through `received_reports()`, wi
 sender's ids inside or out; the sender still reads its own row; nobody else gets either; the
 saved account still reads the PDF, and the PDF check answers only for the asker's own; the
 landlord sees whether a report files itself and stops it with `stop_auto_filing()`, not by
-deleting the link; and 0013 re-runs after 0007's.
+deleting the link; and 0013 re-runs after 0007's. Then step D4d: a check a landlord enters by
+hand works out its next due date and moves it on when done again; the same one twice at a
+property is refused, and nobody else can add one; its certificate goes in the landlord's own
+folder (on Free with limits on, not at all), never names a file in another team's folder, and
+nobody else can read or add one; the landlord can remove the check; and 0014 re-runs.
 
 `00_supabase_stub.sql` stands in for the parts of Supabase plain Postgres lacks:
 the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.sessions` and

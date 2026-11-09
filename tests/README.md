@@ -352,6 +352,22 @@ none, it says how they arrive (30 checks).
 node tests/properties.mjs
 ```
 
+`landlord-checks.mjs` is step D4d: the certificate rules in Node, then a landlord's own checks on
+the Properties page and the landlord Due page in a browser, with `compliance_items`, the photo
+bucket and `due_list()` answered by the test. A check needs its name, every 1 to 120 months, and
+when it was last done; it's sent as the account's own (`own:…`) check at that property and
+shows when it's next due; the same name twice is refused in words. A check a report keeps has no
+actions. "Done again" moves it on, saving only the date. A certificate is a PDF or a photo up to
+10 MB, kept in `<team>/checks/<check>/`, named by the check and opened from it; replacing it
+takes the old file away; the bucket's refusal says certificates are Pro's; on Free with limits
+on there's no way to add one. Removing asks first, removes only a check entered by hand, and its
+certificate with it. The Due page lists the landlord's checks by their own names, filtered by
+owner, with no reminder switches (31 checks).
+
+```
+node tests/landlord-checks.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew

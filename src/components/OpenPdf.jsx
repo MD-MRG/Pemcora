@@ -9,7 +9,13 @@ import { GateButton } from '../screens/GateLayout.jsx'
 // browser blocks it as a pop-up; it's pointed at the PDF once the link comes back.
 //
 // `compact` is the small button for a list inside the app.
-export default function OpenPdf({ getUrl, hasFile, compact = false, label = 'Open the PDF' }) {
+export default function OpenPdf({
+  getUrl,
+  hasFile,
+  compact = false,
+  label = 'Open the PDF',
+  text = 'Open the PDF',
+}) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
   const [ready, setReady] = useState(null)
@@ -51,7 +57,7 @@ export default function OpenPdf({ getUrl, hasFile, compact = false, label = 'Ope
           aria-label={label}
           className="border-hair text-navy min-h-[38px] rounded-lg border px-3 text-[13px] font-semibold enabled:hover:bg-slate-50 disabled:opacity-40"
         >
-          {busy ? 'Opening…' : 'Open the PDF'}
+          {busy ? 'Opening…' : text}
         </button>
       ) : (
         <>

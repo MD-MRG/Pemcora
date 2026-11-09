@@ -131,7 +131,9 @@ so a reader knows which shape it is.
 | `report_sends` | every report a team has sent or sent again, and when (0011), for the daily cap. Withdrawing a report doesn't remove its send | `send_report()` and `resend_report()` only; no client access at all |
 
 Storage: two private buckets, one folder per team — `evidence/<team_id>/…` and
-`reports/<team_id>/…`. Delivered report files cannot be overwritten or deleted.
+`reports/<team_id>/…`. Delivered report files cannot be overwritten or deleted. The evidence
+bucket holds label photos and, on Pro, the certificates of checks a landlord enters by hand
+(`<team_id>/checks/<item>/…`, PDF or photo, 0014).
 
 ---
 

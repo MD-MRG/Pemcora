@@ -1724,6 +1724,25 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - What's due and the reports need a connection; without one the page says so and offers to
     try again, and the properties still show.
   - Editing or removing a property isn't here yet.
+- **M.D.'s note (9 November):** a certificate can be a PDF as well as a photo.
+- How D4d (own checks, certificates, Due) came out:
+  - Under each property's Due list, "Add a check": what it is, every how many months (1 to 120),
+    and when it was last done. It's the account's own `compliance_items` row (obligation
+    `own:<name>`), so the database works out the next due date, and the Due page and reminders
+    treat it like any other. The same name twice at a property is refused in words. The form
+    says the interval is theirs to check: Pemcora claims none.
+  - A check entered by hand can be done again (its next due date moves on), given a
+    certificate, or removed (asking first, its certificate going with it). A check a report
+    keeps has none of these: the next report moves it on.
+  - A certificate is a PDF or a photo, up to 10 MB, kept in the account's own folder of the
+    photo bucket (`<team>/checks/<check>/`) and opened from the check through a five-minute
+    link. Replacing one removes the old file. It's Pro's once limits are on (decision D6): the
+    page says so, and the bucket refuses anyway. Migration 0014 adds PDFs to what the bucket
+    takes (it took only JPEG, PNG and WebP, for label photos).
+  - The landlord's Due page is the electricians' Due page across their properties, the checks
+    named as they are on the property, filtered by owner, with no reminder switches: reminder
+    emails go to an electrician's clients, and a landlord's own list isn't emailed yet.
+  - `src/pages/ReceivingHolding.jsx` is gone: Properties, Reports and Due are all built.
 
 ### Phase E — Billing and limits
 

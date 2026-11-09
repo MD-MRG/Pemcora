@@ -13,6 +13,8 @@ import { listClients, saveClientLocation } from '../lib/clientStore.js'
 import { outsideChanges, saveStatus, subscribe } from '../lib/cache.js'
 import { ownersOf, propertyCards } from '../lib/properties.js'
 import { STATES } from '../lib/signup.js'
+import { useEntitlements } from '../context/team.js'
+import { AddCheck, OwnCheckActions } from './OwnChecks.jsx'
 
 // A landlord's or agency's Properties page (build plan D4c): each property,
 // under its owner, with what is due there and the reports filed under it.
@@ -165,6 +167,10 @@ export default function Properties() {
   const [adding, setAdding] = useState(false)
   const [askStop, setAskStop] = useState(null)
   const [problem, setProblem] = useState('')
+  const [addingCheck, setAddingCheck] = useState(null)
+  const entitlements = useEntitlements()
+  // Pro's, once the limits are on (D6); the database says the same.
+  const canKeepCertificates = !(entitlements?.enforced && !entitlements.isPro)
 
   const load = useCallback(async () => {
     if (!teamId) return
@@ -256,26 +262,59 @@ export default function Properties() {
               {p.checks.length === 0 ? (
                 <p className="text-ink-soft text-[13px]">
                   {remote && !remote.missing
-                    ? 'Nothing on record yet. A saved report adds its check.'
+                    ? 'Nothing on record yet. A saved report adds its check, or add one yourself.'
                     : '—'}
                 </p>
               ) : (
                 <ul className="m-0 list-none space-y-1 p-0">
                   {p.checks.map(c => (
-                    <li key={c.id} className="flex flex-wrap justify-between gap-x-4 text-[13px]">
-                      <span className="text-ink">{c.label}</span>
-                      <span className={TONE[c.state]}>
-                        {WHEN[c.state](c)}
-                        {c.lastDone && (
-                          <span className="text-ink-soft font-normal">
-                            {' '}
-                            · last done {c.lastDone}
-                          </span>
-                        )}
-                      </span>
+                    <li key={c.id} className="text-[13px]">
+                      <div className="flex flex-wrap justify-between gap-x-4">
+                        <span className="text-ink">{c.label}</span>
+                        <span className={TONE[c.state]}>
+                          {WHEN[c.state](c)}
+                          {c.lastDone && (
+                            <span className="text-ink-soft font-normal">
+                              {' '}
+                              · last done {c.lastDone}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      {c.own && (
+                        <OwnCheckActions
+                          check={c}
+                          teamId={teamId}
+                          canKeepCertificates={canKeepCertificates}
+                          onChanged={load}
+                        />
+                      )}
                     </li>
                   ))}
                 </ul>
+              )}
+              {addingCheck === p.id ? (
+                <AddCheck
+                  teamId={teamId}
+                  locationId={p.id}
+                  onCancel={() => setAddingCheck(null)}
+                  onDone={async () => {
+                    setAddingCheck(null)
+                    await load()
+                  }}
+                />
+              ) : (
+                remote &&
+                !remote.missing && (
+                  <button
+                    type="button"
+                    onClick={() => setAddingCheck(p.id)}
+                    aria-label={`Add a check at ${p.address}`}
+                    className="text-navy mt-2 text-[12.5px] font-semibold underline-offset-2 hover:underline"
+                  >
+                    + Add a check
+                  </button>
+                )
               )}
             </div>
 

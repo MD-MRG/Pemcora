@@ -61,7 +61,8 @@ export function propertyCards(
       state,
       hasCertificate: Boolean(item.evidence_path),
       evidencePath: item.evidence_path ?? null,
-      byReport: Boolean(item.satisfied_by),
+      // Entered by hand (D4d), so it can be done, given a certificate or removed here.
+      own: String(item.obligation ?? '').startsWith('own:'),
     })
   }
 
@@ -99,3 +100,17 @@ export function propertyCards(
 /** The owners already in the account, for the new property form. */
 export const ownersOf = clients =>
   [...new Set((clients ?? []).map(c => c.name).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+
+// ── Certificates for checks entered by hand (D4d) ──────────────────────────
+
+export const CERTIFICATE_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+export const CERTIFICATE_LIMIT = 10 * 1024 * 1024
+
+/** Whether a file can be kept as a certificate, or why not. */
+export function certificateProblem(file) {
+  if (!file) return 'Choose a file.'
+  if (!CERTIFICATE_TYPES.includes(file.type))
+    return 'A certificate has to be a PDF or a photo (JPEG, PNG or WebP).'
+  if (file.size > CERTIFICATE_LIMIT) return 'That file is over 10 MB.'
+  return null
+}

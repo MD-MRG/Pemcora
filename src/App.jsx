@@ -13,7 +13,6 @@ import CustomList from './pages/CustomList.jsx'
 import Teams from './pages/Teams.jsx'
 import Settings from './pages/Settings.jsx'
 import Due from './pages/Due.jsx'
-import ReceivingHolding from './pages/ReceivingHolding.jsx'
 import Reports from './pages/Reports.jsx'
 import Properties from './pages/Properties.jsx'
 import Workflow from './pages/Workflow.jsx'
@@ -84,7 +83,7 @@ export default function App() {
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/properties" element={<Properties />} />
                   <Route path="/reports" element={<Reports />} />
-                  <Route path="/due" element={<ReceivingHolding page="due" />} />
+                  <Route path="/due" element={<Due receiving />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Route>
               </Routes>
