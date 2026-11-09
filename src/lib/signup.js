@@ -37,10 +37,9 @@ export function starterPackFor(tradeId, stateId) {
 /**
  * What can be chosen today. An inspecting team opens once its pack's lists have been
  * checked by a licensed electrician, which is when `proposed` comes off the pack. Teams
- * that receive reports open at step D4, when they have pages to land on: switch
- * `receiving` on then.
+ * that receive reports opened at step D4, with their pages to land on.
  */
-export const OPEN_NOW = { pack: pack => !pack.proposed, receiving: false }
+export const OPEN_NOW = { pack: pack => !pack.proposed, receiving: true }
 
 export const stateIsOpen = (stateId, opening = OPEN_NOW) =>
   opening.pack(packById(starterPackFor('electrical', stateId)))

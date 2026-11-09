@@ -1480,6 +1480,53 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Include licence numbers and the signature, the logo on Pro, and the revision number on
   corrected reports.
 - The Excel export stays.
+- Decided with M.D. before building it (6 November):
+  - Phase D is built on `editions-phase-d`, in the main folder.
+  - Three commits: D1 the PDF builder, a layout for every workflow and "Export PDF"; D1b the
+    Victorian electrical layout following the ESV form; D1c label photos in the PDF.
+  - "Export PDF" goes on every workflow, AV included, beside "Export report".
+- How D1 (the builder) came out:
+  - `src/lib/pdfReport.js` lays out the same snapshot as the Excel export, on A4 pages with
+    pdf-lib. It prints who it's from, with licence and REC numbers, the details and outcome,
+    the whole-site results with each item, the issues with their notes, the equipment, each
+    room, and for a check that is signed off, who signed it and the signature, drawn from its
+    stored path. Every page carries the report's title, client, revision and page number.
+  - The fonts are DejaVu Sans (free to embed), because the PDF's own fonts can't print "Ω",
+    "—" or "·". Only the characters a report uses are embedded. They're the build's own files,
+    so the offline cache keeps them (about 1.4 MB) and a PDF can be made with no signal.
+  - The logo is left off once the limits are on for a team that isn't Pro (2.4), as the photo
+    tag is. Until E6 every team's PDF has its logo, as its Excel report does.
+  - "Export PDF" goes the way "Export report" does: a check that ends in a sign-off is signed
+    first, and a second export asks whether it's a revision. Both count as revisions of the
+    one report.
+- How D1b (the Victorian layout) came out:
+  - The Victorian electrical check's page asks for it (`pdfLayout: 'esv'`); every other
+    workflow keeps the standard layout.
+  - Section A gives the address, the client, the date of this check and of the previous one
+    at the site, from its own visits ("None on record" if there is none). Sections B to F
+    follow, as the list has them.
+  - Section E ends with when the site's smoke alarms are next due: its last smoke alarm check,
+    plus that check's interval ("No smoke alarm check on record" if there is none).
+  - Section F prints what the electrician wrote, then each defect with its note, which on the
+    form is where defects go. So there's no separate Troubleshooting part.
+  - Certification names the electrician, the business, its REC number, the electrician's
+    licence or registration number, the inspection date and the next check due, then the
+    declared outcome, a declaration and the signature.
+  - The declaration is a proposal, like the lists: "I certify that this electrical safety
+    check was carried out in accordance with section 4 of AS/NZS 3019, and that the results
+    are as recorded in this report." The electrician checks it with them.
+- How D1c (photos) came out:
+  - Making a PDF fetches the newest label photo of each of the site's items in one request,
+    then each photo through a link that lasts five minutes, and puts it under its item in the
+    Equipment part. Photos were made small when they were taken (C2c: 1600 px, JPEG about
+    70%), so they're embedded as they are.
+  - Only the label photos exist so far: nothing in the app takes a photo of a test yet.
+  - With no signal or no team the PDF goes without photos, and the page says so and how to get
+    them: export again once there's signal. A report is never held up for its photos, and one
+    that can't be read is left out.
+  - The Equipment part lists the item types the visit's own list tests, which the visit keeps
+    once its whole-site step is opened. A check signed off without ever opening that step has
+    no equipment, and so no photos, in its report.
 
 #### D2. Sending
 
@@ -1493,6 +1540,65 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Before the function emails anything, cap how many reports a team can send a day:
   `send_report()` has no limit yet, so any Free account could send unlimited email from
   Pemcora's domain to any address. (From the Phase A security review.)
+- **M.D.'s note (6 November):** three commits: D2 migration 0011 with the cap and the
+  `[timeframe]` rule, and its SQL checks; D2b the `deliver-report` Edge Function; D2c the
+  app's "Send report", "Send again" and "Withdraw". The cap is 10 reports in any 24 hours on
+  Free and 50 on Pro. The email comes from Pemcora's own address (`INVITE_FROM`), named
+  "<business> via Pemcora", with replies going to the business's email.
+- How D2 (migration 0011) came out:
+  - `report_sends` logs every send and every "Send again". Only `send_report()` and
+    `resend_report()` read or write it. Withdrawing a report doesn't take its send back, or
+    sending and withdrawing would get round the cap.
+  - Over the cap, both refuse with SQLSTATE `PT429` and hint `send_cap` before anything is
+    recorded. The team's row is locked while a send is counted, so two sends at once can't
+    both slip under.
+  - The cap holds from the day 0011 is applied, whatever `enforce_limits` says: it guards
+    Pemcora's email, not the plans.
+  - A snapshot with a fail marked `unfinished`, in the whole-site part or any room, is
+    refused with hint `unfinished`. The app checks first; this is the rule behind it.
+  - 0011 replaces `send_report()` and `resend_report()` with 0007's bodies plus these
+    checks. Re-running 0007 by itself puts back the versions without them, so 0011 is
+    re-run after it.
+- How D2b (the `deliver-report` Edge Function) came out:
+  - The app calls it with `action: 'send'` (the visit, the address, the snapshot, the PDF's
+    path and the report's title) or `'resend'` (the delivery). It calls `send_report()` or
+    `resend_report()` with the caller's own login, so the database decides everything, and
+    emails the link `#/r/<token>` through Resend. "Withdraw" emails nobody, so the app calls
+    `revoke_report()` itself.
+  - The email is from Pemcora's address in `INVITE_FROM`, named "<business> via Pemcora", with
+    replies to the business's email in Settings, or to the person who sent it if there's none.
+    It says who sent what, for which site, done when, and until when the link works, and that
+    the report can be saved to a free account.
+  - The business, site, date and expiry come from the row the database wrote, never the
+    request. "Send again" goes to the address the report was first sent to. Only the title is
+    the app's, cut to one line and escaped.
+  - A refusal comes back with its code and hint: the cap as a 429 (`send_cap`), an
+    unfinished note as a 400 (`unfinished`).
+  - With no `RESEND_API_KEY` the report is still sent, and the link comes back
+    (`emailed: false`) for the app to hand over, as with invitations. If Resend refuses, the
+    report stands and counts towards the cap, and the link comes back the same way.
+  - It uses the secrets `send-invite` already has: `RESEND_API_KEY`, `INVITE_FROM` and
+    `INVITE_APP_URL`. M.D. deploys it with `supabase functions deploy deliver-report`, after
+    0011 is applied, so no report is ever emailed without the cap.
+- **M.D.'s note (6 November):** "Send report" is on every workflow, as Export PDF is, and a
+  send counts as a revision the same way.
+- How D2c (the app) came out:
+  - A finished visit on a signed-in team has "Send report". It asks where to, with the
+    client's contact email filled in, then goes the way Export PDF goes: once a report
+    exists it asks whether this is a new revision or replaces the last, and the send is
+    listed under Reports as that revision. A refused send records no revision.
+  - The app builds the snapshot and refuses there and then if a note still says
+    `[timeframe]`, naming where. Then it makes the PDF, puts it in
+    `reports/<team>/<uuid>.pdf` and calls `deliver-report` with its path.
+  - It needs a connection, and the device's own changes saved, since the database reads the
+    finished visit. The dialog says which is missing.
+  - What came of it is shown under the visit: emailed, or, with no mailer, the link to send
+    by hand with "Copy link". A refusal is shown in the database's words (the daily cap).
+  - Until `deliver-report` is deployed, the app records the report through `send_report()`
+    directly and hands over the link, as invitations do.
+  - A finished visit lists what was sent from it under "Sent": who to, when, and whether the
+    link has been opened, has expired or the report was saved. "Send again" sends a new link
+    to the same address. "Withdraw" asks first, and is there until the report is saved.
 
 #### D3. Report link page `#/r/<token>`
 
@@ -1502,6 +1608,66 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   the cases where `report_preview()` would show the report.
 - "Save to your account": sign up or sign in with the same email, then `claim_report()`,
   then filing (pick a property or create it from the report's address).
+- **M.D.'s note (9 November):** three commits, with saving in D3: D3a the page and its
+  states; D3b the `report-file` function; D3c "Save to your account", which makes a landlord
+  or agency account there and then for someone who has none. Only a report link opens that:
+  general sign-up for landlords and agencies still opens in D4. A working link shows a
+  summary and the PDF, not the whole report as a page.
+- How D3a (the page) came out:
+  - `#/r/<token>` opens in front of the sign-in gate, signed in or not, and from a link
+    followed inside the app too. A link whose token isn't well formed asks the database
+    nothing.
+  - A working link shows who sent it, with their licence, REC, phone and email; the check,
+    the address, the client, the date, the outcome, who signed it off and, for a revision,
+    that it replaces the one before; then each issue with where it is and its note. All of it
+    is what `report_preview()` returns: the business and sign-off as the database wrote them.
+  - An expired link says so and names who to ask for a new one. A saved report asks them to
+    sign in. Neither shows anything of the report, since the database doesn't return it.
+  - With no connection the page says so, and "Try again" opens it once there is one.
+  - Opening the link marks the report opened (`report_preview()`), even when it's the sender
+    who opens it.
+- How D3b (the `report-file` function) came out:
+  - The page's "Open the PDF" asks `report-file` with the link's token and nothing else. It
+    gives a link to that report's PDF lasting five minutes, and only in the cases where
+    `report_preview()` shows the report: not once it's saved or filed into an account, not
+    past its 90 days, and not for a report sent without a PDF. The page then has no button.
+  - It takes no login: the visitor usually has none, and the app's publishable key isn't a
+    JWT, so it's deployed with the platform's login check off
+    (`supabase functions deploy report-file --no-verify-jwt`). The token is the key, as the
+    emailed link is. It uses the platform's service-role key, which never leaves the function,
+    to read that one row by token, only the four columns it decides by, and sign that one file.
+  - The new tab is opened on the tap, so browsers don't block it, and can't reach back into the
+    page. A refusal is shown in the function's words, and no connection says so.
+  - A saved report's PDF is for its account, signed in: D3c.
+  - Once deployed (9 November), every lookup was refused: on the live project the
+    service-role key holds no privilege on any table in `public`, and the local test database
+    grants it everything, so the suite hadn't seen it. Migration 0012 gives it exactly the five
+    columns `report-file` reads on `report_deliveries`, and takes away anything else it had
+    there, so it ends up the same on every project. M.D. applies it.
+- **M.D.'s note (9 November):** a new property made from a report goes under its owner: an
+  "Owner" field with the electrician's name for their client filled in, and an owner of that
+  name already in the account reused.
+- How D3c (saving) came out:
+  - Under the report, and under an expired link (saving never expires), "Save this report to
+    your account". Signed out, it offers "Create a free account" or "I have an account", on a
+    sign-in screen that asks for the address the report was sent to and leads back to it.
+  - The report is remembered on the device while a new account is confirmed: the
+    confirmation email opens the app, and signed in, it goes back to the report, once. Kept a
+    week at most.
+  - Signed in with no landlord or agency account, the page makes one: Landlord or Property
+    management, named from the address (editable). Only a report link opens that; general
+    sign-up for landlords and agencies opens in D4. With one account it saves straight to it;
+    with several, they choose.
+  - `claim_report()` decides who may save it. Saved, it's filed under a property with the same
+    address if the account has one. If not, the page asks which property: one already there,
+    or a new one at the report's address under its owner, or "File it later".
+  - The wrong address is told so, with a way to sign out and use the right one. Someone in the
+    team that sent it is told only the recipient can save it, and offered nothing.
+  - A saved report's link asks them to sign in. Signed in to its account, it opens, its PDF
+    comes through the account's own access to the report folder, and if it isn't filed yet it
+    asks which property. Anyone else is told it went to another account, and shown nothing.
+  - "Open Pemcora" opens the account it was saved to. Its Properties and Reports pages are
+    still the holding pages until D4.
 
 #### D4. Landlord and agency side
 
@@ -1513,6 +1679,70 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Read deliveries through a view that leaves out the provider-side ids
   (`provider_team_id`, `provider_location_id`, `visit_id`, `sent_by`, and the sign-off's
   `signed_by` inside the snapshot).
+- **M.D.'s note (9 November):** four commits: D4a migration 0013 and its SQL tests; D4b
+  landlord and agency sign-up and the Reports page; D4c the Properties page; D4d hand-entered
+  checks with a certificate upload on Pro, and the Due page. The landlord's Due page is the
+  electricians' Due page, across their properties. A hand-entered check is a name, how often
+  it's due in months, and when it was last done: Pemcora claims no legal intervals for them.
+- How D4a (migration 0013) came out:
+  - `report_deliveries` is read directly by the team that sent it only. The account it was
+    saved to reads `received_reports()` instead: every column it needs, none of the sender's
+    ids, and the snapshot without the sender's team or who signed it off. A function rather
+    than the view the plan named: a view that leaves RLS behind is what Supabase's advisor
+    flags, and this one has to, to read rows the landlord no longer can.
+  - `site_links` holds the sender's site and team too, so it's the sender's to read as well.
+    The landlord sees `files_itself` on each report, and `stop_auto_filing(report)` ends it.
+    Deleting a link directly is no longer allowed.
+  - The PDF stays readable by the account it was saved to: the bucket's rule asks
+    `can_read_received_report()`, which says only whether the asker may read that one file.
+  - A report's PDF is named `<sending team>/<name>.pdf`, and the bucket needs the name to make
+    a link, so the team's id is in `file_path`. It opens nothing.
+  - Re-running 0007 by itself puts back its policies, so 0013 is re-run after it.
+  - The saved report on a report link (D3c) now reads through `received_reports()`.
+- How D4b (sign-up and Reports) came out:
+  - Landlord and Property management can be chosen at sign-up (`OPEN_NOW.receiving`).
+  - The Reports page lists the account's reports from `received_reports()`, the ones not filed
+    first. Each says what it is, from which business, the address, when it was done, how it went
+    and which property it's filed under, and opens its PDF through the account's own access.
+  - "File it" asks which property, as saving does (D3c). A new property is made in the device's
+    own copy, under its owner, and saved before the report is filed under it, so the Properties
+    page has it at once. With no signal the property stays on the device and the page says to
+    file the report once there is. A filed report can be moved.
+  - A report whose site files later reports by itself says so, with "Stop that", which asks
+    first and calls `stop_auto_filing()`.
+  - It needs a connection, and says so.
+- How D4c (Properties) came out:
+  - Each property, by address, under its owner, from the account's own records on the device:
+    the list, and "Add a property" (owner, address, suburb, state, postcode), work with no
+    signal. An owner of the same name is reused, and the same address under the same owner is
+    refused.
+  - Under each, what's due there from its `compliance_items`: overdue first, then due in the
+    next 60 days, then later, each with when it was last done. Then the reports filed there,
+    newest first, each opening its PDF.
+  - A business whose site files its reports there by itself is named once, with "Stop that"
+    (`stop_auto_filing()`, by its latest report).
+  - What's due and the reports need a connection; without one the page says so and offers to
+    try again, and the properties still show.
+  - Editing or removing a property isn't here yet.
+- **M.D.'s note (9 November):** a certificate can be a PDF as well as a photo.
+- How D4d (own checks, certificates, Due) came out:
+  - Under each property's Due list, "Add a check": what it is, every how many months (1 to 120),
+    and when it was last done. It's the account's own `compliance_items` row (obligation
+    `own:<name>`), so the database works out the next due date, and the Due page and reminders
+    treat it like any other. The same name twice at a property is refused in words. The form
+    says the interval is theirs to check: Pemcora claims none.
+  - A check entered by hand can be done again (its next due date moves on), given a
+    certificate, or removed (asking first, its certificate going with it). A check a report
+    keeps has none of these: the next report moves it on.
+  - A certificate is a PDF or a photo, up to 10 MB, kept in the account's own folder of the
+    photo bucket (`<team>/checks/<check>/`) and opened from the check through a five-minute
+    link. Replacing one removes the old file. It's Pro's once limits are on (decision D6): the
+    page says so, and the bucket refuses anyway. Migration 0014 adds PDFs to what the bucket
+    takes (it took only JPEG, PNG and WebP, for label photos).
+  - The landlord's Due page is the electricians' Due page across their properties, the checks
+    named as they are on the property, filtered by owner, with no reminder switches: reminder
+    emails go to an electrician's clients, and a landlord's own list isn't emailed yet.
+  - `src/pages/ReceivingHolding.jsx` is gone: Properties, Reports and Due are all built.
 
 ### Phase E — Billing and limits
 
@@ -1522,6 +1752,8 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Products and prices: Pro per seat, and add-on packs.
 - Stripe Checkout, and the customer portal for card updates and cancellation, set to cancel
   at the end of the period.
+- The service-role key holds no table privileges on the live project (found in D3b). The
+  webhook needs its own grants on the tables it writes, as 0012 gave `report-file`.
 - A `stripe-webhook` Edge Function using the service-role key writes `subscriptions`
   (plan, status, seats, `current_period_end`, `cancel_at`, `past_due_since`) and add-on
   `team_packs`.
@@ -1681,6 +1913,17 @@ Northern Territory, and for Queensland's electrical check:
   signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
   says so too.
 - Until 0010 is applied, the Account card can only sign out all other devices at once.
+- Saving a report as someone with no landlord or agency account makes the account first,
+  then saves. If the report went to a different address, the account is made anyway and the
+  save is refused: `report_preview()` never reveals the address, so the page can't tell
+  before `claim_report()` does. The account stays, empty.
+- A sign-up made to save a report comes back to it only on the device it was made on. On
+  another, they open the email's report link again.
+- A report that the database refuses after its PDF is uploaded (over the cap, say) leaves
+  that PDF in the team's report folder, and so does a withdrawn report: nothing in that
+  folder can be deleted (0007). Nobody outside the team can reach either.
+- A PDF made with no signal has no label photos: they're fetched from the team's photo folder
+  when the PDF is made. The page says so.
 - A label photo needs a connection when it's taken: the device keeps no copy to send later
   (M.D.'s choice for C2). Everything else about the item saves offline. A photo replaced by a
   newer one stays in the bucket, and the screens show only the newest.

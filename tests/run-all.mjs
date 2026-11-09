@@ -50,6 +50,15 @@ const SUITES = [
   'due',
   'devices',
   'renewal',
+  'pdf',
+  'deliver-report',
+  'send-report',
+  'report-link',
+  'report-file',
+  'report-save',
+  'reports',
+  'properties',
+  'landlord-checks',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

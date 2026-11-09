@@ -70,8 +70,8 @@ const trade = id => TRADES.find(t => t.id === id)
 {
   log('on the live site, AV can be chosen', tradeIsOpen(trade('av')))
   log('electrical can\'t, until its lists are checked', !tradeIsOpen(trade('electrical')))
-  log('landlords can\'t, until they have pages', !tradeIsOpen(trade('landlord')))
-  log('nor property managers', !tradeIsOpen(trade('property')))
+  log('landlords can, since D4 gave them pages', tradeIsOpen(trade('landlord')))
+  log('and property managers', tradeIsOpen(trade('property')))
   log('and no state is open', STATES.every(s => !stateIsOpen(s.id)))
 
   // Each one opens by itself, as its pack is signed off, and not before.
@@ -79,8 +79,8 @@ const trade = id => TRADES.find(t => t.id === id)
   log('one pack signed off opens electrical work', tradeIsOpen(trade('electrical'), vicOnly))
   log('in that state', stateIsOpen('VIC', vicOnly))
   log('and no other', !stateIsOpen('QLD', vicOnly) && !stateIsOpen('NSW', vicOnly))
-  log('step D4\'s switch opens both kinds of landlord',
-    tradeIsOpen(trade('landlord'), { ...OPEN_NOW, receiving: true }) && tradeIsOpen(trade('property'), { ...OPEN_NOW, receiving: true }))
+  log('the switch D4 turned on is what opens both kinds of landlord',
+    !tradeIsOpen(trade('landlord'), { ...OPEN_NOW, receiving: false }) && !tradeIsOpen(trade('property'), { ...OPEN_NOW, receiving: false }))
 }
 
 {
@@ -165,10 +165,11 @@ try {
   log('a new person is asked what their team does', /What does your team do\?/.test(await bodyText(page)))
   log('and nothing has been created yet', (await createdTeams(page)).length === 0)
   log('AV integration can be chosen', await radio(page, /^AV integration/).isEnabled())
-  for (const label of ['Electrical work', 'Landlord', 'Property management']) {
-    log(`${label} says Coming soon, and can't be chosen`, await radio(page, new RegExp(`^${label}`)).isDisabled())
+  log('Electrical work says Coming soon, and can\'t be chosen', await radio(page, /^Electrical work/).isDisabled())
+  for (const label of ['Landlord', 'Property management']) {
+    log(`${label} can be chosen`, await radio(page, new RegExp(`^${label}`)).isEnabled())
   }
-  log('saying so three times', ((await bodyText(page)).match(/Coming soon/g) ?? []).length === 3)
+  log('saying Coming soon once', ((await bodyText(page)).match(/Coming soon/g) ?? []).length === 1)
   log('Continue waits for an answer', await button(page, 'Continue').isDisabled())
   log('and they can still sign out', (await button(page, 'Sign out').count()) === 1)
 

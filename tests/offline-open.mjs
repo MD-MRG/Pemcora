@@ -552,10 +552,11 @@ try {
       log('a new person is asked what their team does',
         await until(async () => (await avChoice.count()) === 1), (await page.textContent('body')).slice(0, 150))
       log('and no team has been made without asking', creates.length === 0)
+      // Landlords and property managers opened at D4.
       log('with the checks that aren\'t ready marked as coming soon',
         await page.getByRole('radio', { name: /^Electrical work/ }).isDisabled() &&
-        await page.getByRole('radio', { name: /^Landlord/ }).isDisabled() &&
-        await page.getByRole('radio', { name: /^Property management/ }).isDisabled())
+        await page.getByRole('radio', { name: /^Landlord/ }).isEnabled() &&
+        await page.getByRole('radio', { name: /^Property management/ }).isEnabled())
       log('and the sign-in screen no longer says AV Service', !/AV Service/i.test(await page.textContent('body')))
 
       await avChoice.check()

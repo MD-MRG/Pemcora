@@ -1111,6 +1111,21 @@ export async function listAssetPhotos(teamId, assetId) {
   return data.map(photoFromRow)
 }
 
+/** The newest photo of each of these items, as { assetId: photo }, in one request (D1c). */
+export async function latestAssetPhotos(teamId, assetIds) {
+  if (!assetIds.length) return {}
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id, asset_id, storage_path, taken_at')
+    .eq('team_id', teamId)
+    .in('asset_id', assetIds)
+    .order('taken_at', { ascending: false })
+  if (error) throw error
+  const latest = {}
+  for (const photo of data.map(photoFromRow)) latest[photo.assetId] ??= photo
+  return latest
+}
+
 /**
  * Adds a photo of an item, already made small enough (photo.js). The item has
  * to be in the database first.
@@ -1143,6 +1158,315 @@ export async function photoUrl(path) {
   const { data, error } = await supabase.storage.from(EVIDENCE).createSignedUrl(path, 300)
   if (error) throw error
   return data.signedUrl
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sending reports (D2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Puts a report's PDF in the team's report folder, where it can never be
+ * replaced or deleted (0007), and returns its path. A new name each time.
+ */
+export async function uploadReportPdf(teamId, bytes) {
+  const path = `${teamId}/${crypto.randomUUID()}.pdf`
+  const { error } = await supabase.storage
+    .from('reports')
+    .upload(path, new Blob([bytes], { type: 'application/pdf' }), { contentType: 'application/pdf', upsert: false })
+  if (error) throw error
+  return path
+}
+
+const reportLink = token => `${emailRedirectUrl()}#/r/${encodeURIComponent(token)}`
+
+/**
+ * Asks the deliver-report function to record a report and email its link.
+ * Always returns { id, link, emailed, email, expiresAt }: the page says "emailed
+ * to them" or "send them this" from the same shape, and never claims an email
+ * that didn't go.
+ *
+ * A refusal keeps its code and hint, which is how the daily cap ('send_cap') and
+ * an unfinished note ('unfinished') are told from anything else. A function
+ * that isn't deployed yet, or can't be reached, falls back to `direct`, the
+ * database call itself, as invitations do: the report is recorded, the cap and
+ * every other rule still hold, and the link is handed over by hand.
+ */
+async function deliver(body, direct) {
+  let data
+  let error
+  try {
+    ;({ data, error } = await supabase.functions.invoke('deliver-report', {
+      body: { ...body, appUrl: emailRedirectUrl() },
+    }))
+  } catch (e) {
+    error = e
+  }
+  if (!error) {
+    return { id: data.id, link: data.link, emailed: Boolean(data.emailed), email: data.email, expiresAt: data.expiresAt ?? null }
+  }
+  const said = await error.context?.json?.().catch(() => null)
+  if (said?.error) throw Object.assign(new Error(said.error), { code: said.code, hint: said.hint })
+  if (error.context?.status === 404 || /Failed to send|fetch|network/i.test(error.message ?? '')) {
+    const row = await direct()
+    return { id: row.id, link: reportLink(row.token), emailed: false, email: row.recipient_email, expiresAt: row.link_expires_at }
+  }
+  throw error
+}
+
+/** Records a sent report and emails its link. `title` is only for the email. */
+export function sendReportTo({ visitId, email, snapshot, filePath, title }) {
+  return deliver({ action: 'send', visitId, email, snapshot, filePath, title }, async () => {
+    const { data, error } = await supabase.rpc('send_report', {
+      p_visit_id: visitId,
+      p_recipient_email: email,
+      p_snapshot: snapshot,
+      p_file_path: filePath,
+    })
+    if (error) throw error
+    return data
+  })
+}
+
+/** "Send again": a new link to the same address, and the old one stops working. */
+export function resendReport(deliveryId, title) {
+  return deliver({ action: 'resend', deliveryId, title }, async () => {
+    const { data, error } = await supabase.rpc('resend_report', { p_delivery_id: deliveryId })
+    if (error) throw error
+    return data
+  })
+}
+
+/** "Withdraw": until the recipient saves it. Emails nobody. */
+export async function withdrawReport(deliveryId) {
+  const { error } = await supabase.rpc('revoke_report', { p_delivery_id: deliveryId })
+  if (error) throw error
+}
+
+/**
+ * What a report link shows (D3), to anyone holding it, signed in or not:
+ * { status: 'ok' | 'expired' | 'saved', ... }, or null for a link that leads
+ * nowhere. Only 'ok' carries the report. Marks the report opened.
+ */
+export async function previewReport(token) {
+  const { data, error } = await supabase.rpc('report_preview', { p_token: token })
+  if (error) throw error
+  const row = data?.[0]
+  if (!row) return null
+  return {
+    status: row.status,
+    workflow: row.workflow,
+    provider: row.provider,
+    completedOn: row.completed_on,
+    outcome: row.outcome,
+    site: row.site,
+    snapshot: row.snapshot,
+    hasFile: Boolean(row.has_file),
+    claimed: Boolean(row.claimed),
+  }
+}
+
+/**
+ * A link to a report's PDF, good for five minutes, from its report link's token
+ * (D3b). Needs no login: the report-file function gives one only while the link
+ * works. A refusal comes back with the function's own words and its `status`
+ * ('saved', 'expired', 'invalid', 'no-file').
+ */
+export async function reportFileUrl(token) {
+  const { data, error } = await supabase.functions.invoke('report-file', { body: { token } })
+  if (error) {
+    const said = await error.context?.json?.().catch(() => null)
+    if (said?.error) throw Object.assign(new Error(said.error), { status: said.status ?? null })
+    // The request never got an answer: no signal, most likely.
+    if (error.name === 'FunctionsFetchError' || error.name === 'FunctionsRelayError') {
+      throw Object.assign(new Error(error.message), { network: true })
+    }
+    throw error
+  }
+  return data.url
+}
+
+// ── Saving a report to an account (D3c) ──────────────────────────────────────
+
+/** The person's landlord and agency accounts, which are what a report is saved to. */
+export async function receivingTeams() {
+  const { data, error } = await supabase
+    .from('teams')
+    .select('id, name, account_type')
+    .in('account_type', ['landlord', 'agency'])
+    .order('name', { ascending: true })
+  if (error) throw error
+  return data.map(t => ({ id: t.id, name: t.name, accountType: t.account_type }))
+}
+
+/**
+ * A report link's delivery, if the person signed in is in the team that sent it
+ * (0013: only the sender reads the row itself; the account it was saved to reads
+ * receivedByToken). Null for anyone else, and for a link that leads nowhere.
+ */
+export async function deliveryByToken(token) {
+  const { data, error } = await supabase
+    .from('report_deliveries')
+    .select('id, provider_team_id, recipient_team_id, recipient_location_id, workflow_id, completed_on, outcome, site, snapshot, file_path')
+    .eq('token', token)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+/**
+ * A report saved to one of the person's accounts, by its link's token, through
+ * received_reports() (0013): what the account reads, without the sender's ids.
+ * Null when it isn't theirs.
+ */
+export async function receivedByToken(token) {
+  const { data, error } = await supabase.rpc('received_reports').eq('token', token).maybeSingle()
+  if (error) throw error
+  return data
+}
+
+/** An account's reports, newest first (D4b), through received_reports(). */
+export async function listReceivedReports(teamId) {
+  const { data, error } = await supabase
+    .rpc('received_reports')
+    .eq('recipient_team_id', teamId)
+    .order('sent_at', { ascending: false })
+  if (error) throw error
+  return data ?? []
+}
+
+/** What each of the account's properties owes, and when (D4c). Members only, by RLS. */
+export async function listComplianceItems(teamId) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .select('id, location_id, obligation, label, satisfied_by, interval_months, last_done_on, next_due_on, evidence_path, active')
+    .eq('team_id', teamId)
+  if (error) throw error
+  return data ?? []
+}
+
+// ── A landlord's own checks (D4d) ─────────────────────────────────────────────
+
+// What a check entered by hand is called in the database: its own, by name, so
+// it can't be taken for a check a report keeps (those are named by workflow).
+export const ownObligation = label =>
+  `own:${String(label ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'check'}`
+
+/**
+ * A check entered by hand at a property: what it is, every how many months, and
+ * when it was last done. The database works out when it's next due.
+ */
+export async function addOwnCheck(teamId, locationId, { label, intervalMonths, lastDoneOn }) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .insert({
+      team_id: teamId,
+      location_id: locationId,
+      obligation: ownObligation(label),
+      label: String(label).trim(),
+      interval_months: intervalMonths,
+      last_done_on: lastDoneOn,
+    })
+    .select('id')
+    .single()
+  if (isDuplicate(error)) throw coded(`This property already has a check called "${String(label).trim()}".`, '23505')
+  if (error) throw error
+  return data.id
+}
+
+/** A check done again: its next due date moves on from this one. */
+export async function recordCheckDone(itemId, lastDoneOn) {
+  const { error } = await supabase.from('compliance_items').update({ last_done_on: lastDoneOn }).eq('id', itemId)
+  if (error) throw error
+}
+
+/** Removes a check entered by hand, and its certificate with it. */
+export async function removeOwnCheck(itemId, evidencePath) {
+  const { error } = await supabase.from('compliance_items').delete().eq('id', itemId).like('obligation', 'own:%')
+  if (error) throw error
+  if (evidencePath) await supabase.storage.from(EVIDENCE).remove([evidencePath])
+}
+
+/**
+ * Keeps a check's certificate, a PDF or a photo, in the account's own folder,
+ * on Pro once limits are on (D6). The file goes first, then the check names it;
+ * if that fails the file goes again, and a certificate it replaces is removed.
+ */
+export async function addCertificate(teamId, itemId, file, previous) {
+  const ext = file.type === 'application/pdf' ? 'pdf' : file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'
+  const path = `${teamId}/checks/${itemId}/${crypto.randomUUID()}.${ext}`
+  const { error: failed } = await supabase.storage.from(EVIDENCE).upload(path, file, { contentType: file.type, upsert: false })
+  if (failed) throw failed
+  const { error } = await supabase.from('compliance_items').update({ evidence_path: path }).eq('id', itemId)
+  if (error) {
+    await supabase.storage.from(EVIDENCE).remove([path])
+    throw error
+  }
+  if (previous) await supabase.storage.from(EVIDENCE).remove([previous])
+  return path
+}
+
+/** Stops the site a report came from filing later reports into the account by themselves. */
+export async function stopAutoFiling(deliveryId) {
+  const { error } = await supabase.rpc('stop_auto_filing', { p_delivery_id: deliveryId })
+  if (error) throw error
+}
+
+/** A link to a saved report's PDF for its own account, good for five minutes. */
+export async function savedReportFileUrl(path) {
+  const { data, error } = await supabase.storage.from('reports').createSignedUrl(path, 300)
+  if (error) throw error
+  return data.signedUrl
+}
+
+/** Saves a report into one of the person's landlord or agency accounts. Files it when the address matches. */
+export async function claimReport(token, teamId) {
+  const { data, error } = await supabase.rpc('claim_report', { p_token: token, p_team_id: teamId })
+  if (error) throw error
+  return data
+}
+
+/** Files a saved report under one of its account's properties. */
+export async function fileReport(deliveryId, locationId) {
+  const { data, error } = await supabase.rpc('file_report', { p_delivery_id: deliveryId, p_location_id: locationId })
+  if (error) throw error
+  return data
+}
+
+/**
+ * A new property from a report's address, under its owner: one of that name
+ * already in the account, or a new one (M.D., D3c).
+ */
+export async function createProperty(teamId, owner, site) {
+  const name = String(owner ?? '').trim()
+  const clients = await listClients(teamId)
+  const client = clients.find(c => c.name.trim().toLowerCase() === name.toLowerCase()) ?? (await createClient(teamId, name))
+  return addLocation(teamId, client.id, {
+    address: site?.address,
+    suburb: site?.suburb,
+    city: site?.city,
+    state: site?.state,
+    postcode: site?.postcode,
+  })
+}
+
+/** The reports sent from a visit, newest first. */
+export async function listSentReports(visitId) {
+  const { data, error } = await supabase
+    .from('report_deliveries')
+    .select('id, recipient_email, sent_at, link_expires_at, opened_at, claimed_at')
+    .eq('visit_id', visitId)
+    .order('sent_at', { ascending: false })
+  if (error) throw error
+  return data.map(r => ({
+    id: r.id,
+    email: r.recipient_email,
+    sentAt: r.sent_at,
+    expiresAt: r.link_expires_at,
+    openedAt: r.opened_at,
+    // Saved by the recipient, or filed into their account by itself (0007 sets
+    // claimed_at for both): either way it can no longer be withdrawn.
+    savedAt: r.claimed_at,
+  }))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

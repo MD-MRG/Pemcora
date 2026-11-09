@@ -665,12 +665,12 @@ try {
     log(`a ${accountType} has its own navigation`,
       labels.join() === 'Properties,Reports,Due,Teams,Settings', labels.join(' | '))
     log('and lands on its properties', await until(() => address(page) === '#/properties'), address(page))
-    log('which says what will appear there', /Your properties will appear here/.test(await mainText(page)))
+    log('where it can add one', await until(async () => /Add a property/.test(await mainText(page))))
     log('with the header to match', (await page.locator('h1').textContent()) === 'Properties')
 
-    for (const [link, words] of [['Reports', 'Reports sent to you'], ['Due', 'coming due']]) {
+    for (const link of ['Reports', 'Due']) {
       await page.locator('nav a').filter({ hasText: new RegExp(`^${link}$`) }).click()
-      log(`${link} opens and says what will appear there`, await until(async () => new RegExp(words).test(await mainText(page))))
+      log(`${link} opens its own page`, await until(async () => (await page.locator('h1').textContent()) === link))
     }
 
     for (const path of ['#/maintenance', '#/new-client', '#/custom-list', '#/']) {

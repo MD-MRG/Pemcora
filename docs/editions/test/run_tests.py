@@ -1,14 +1,14 @@
 """
-Proves 0006 to 0010 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0014 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 to 0010 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0014 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006 to 0010 are read from instead (a copy with a fix being tried, say).
+0006 to 0014 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -27,7 +27,9 @@ import psycopg
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
 EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
-            "0010_signed_in_devices.sql")
+            "0010_signed_in_devices.sql", "0011_report_sending.sql",
+            "0012_report_file_access.sql", "0013_received_reports.sql",
+            "0014_certificates.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -125,7 +127,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 to 0010, twice ────────────────────────────────────────────────────
+# ── 0006 to 0014, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -367,8 +369,11 @@ check("the landlord sees none of the provider's own records",
       one(J, "select count(*) from public.visits where team_id = %s", [TA]) == 0
       and one(J, "select count(*) from public.clients where team_id = %s", [TA]) == 0
       and one(J, "select count(*) from public.locations where team_id = %s", [TA]) == 0)
-check("both sides can see the site link, nobody else",
-      one(A, "select count(*) from public.site_links") == 1 and one(J, "select count(*) from public.site_links") == 1
+# D4a (0013): the link holds the sender's site and team, so it's the sender's to
+# read. The landlord sees it as "files itself" on the report instead.
+check("the sender sees the site link; the landlord sees it only as the report filing itself; nobody else",
+      one(A, "select count(*) from public.site_links") == 1 and one(J, "select count(*) from public.site_links") == 0
+      and one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is True
       and one(X, "select count(*) from public.site_links") == 0)
 
 V2 = uuid.uuid4()
@@ -1871,6 +1876,205 @@ refused("C5: the logins themselves stay closed to signed-in users", C5_A, "selec
 run_file(NEW / "0010_signed_in_devices.sql")   # re-run last, after every other file's re-runs
 check("C5: 0010 re-runs after the rest and still answers",
       [r[0] for r in act(C5_A, "select * from public.my_devices()")] == [C5_A1])
+
+# ── Step D2: sending reports, capped, and nothing unfinished (0011) ────────────
+print("\n— Step D2: a daily cap on sending reports, and no [timeframe] left in one")
+# 0007 was re-run by itself above (R6, R7, B5), which puts back its send_report()
+# without the cap: re-running 0011 after it is how it's applied, and what's tested.
+run_file(NEW / "0011_report_sending.sql")
+D2U = user("d2-owner@sending.test")
+D2T = one(D2U, "select id from public.create_organisation('D2 Sparks', 'provider', 'vic_rental')")
+_, D2_L = add_site(D2U, D2T, "D2 Rental")
+D2_V = start_visit(D2U, D2T, D2_L, "vic_smoke_alarm", completed=True)
+D2_SENT = lambda team: su("select count(*) from public.report_deliveries where provider_team_id = %s", [team])[0][0]
+
+
+def d2_try(uid, sql, params):
+    """A send that, refused, fails its check instead of stopping the suite."""
+    try:
+        return one(uid, sql, params)
+    except psycopg.Error as e:
+        print(f"      refused: {e.sqlstate}: {str(e).splitlines()[0]}")
+        return None
+
+
+waiting = json.dumps({"site": {"failed": [{"label": "Works", "note": "Replace within [timeframe]", "unfinished": True}]}, "rooms": []})
+in_room = json.dumps({"site": None, "rooms": [{"name": "Bedroom", "failed": [{"label": "x", "note": "[timeframe]", "unfinished": True}]}]})
+refused("D2: a report with a note still saying [timeframe] isn't sent", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, waiting], sqlstate="23514", contains="[timeframe]")
+refused("D2: …nor one with it in a room", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, in_room], sqlstate="23514")
+check("D2: …and nothing was sent or counted", D2_SENT(D2T) == 0
+      and su("select count(*) from public.report_sends where team_id = %s", [D2T])[0][0] == 0)
+done_note = json.dumps({"site": {"failed": [{"label": "Works", "note": "Replace within 7 days"}]}, "rooms": []})
+D2_FIRST = d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test', %s::jsonb)", [D2_V, done_note])
+check("D2: one whose notes are finished goes", D2_FIRST is not None)
+
+for _ in range(9):
+    d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V])
+check("D2: a Free team sends 10 in a day", D2_SENT(D2T) == 10, str(D2_SENT(D2T)))
+refused("D2: …and the 11th is refused with the cap's code", D2U,
+        "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429", contains="10 reports")
+check("D2: …which sends nothing", D2_SENT(D2T) == 10)
+refused("D2: \"Send again\" counts too, since it emails", D2U, "select public.resend_report(%s)", [D2_FIRST], sqlstate="PT429")
+
+D2U2 = user("d2-other@sending.test")
+D2T2 = one(D2U2, "select id from public.create_organisation('D2 Other', 'provider', 'vic_rental')")
+_, D2_L2 = add_site(D2U2, D2T2, "D2 Other Rental")
+D2_V2 = start_visit(D2U2, D2T2, D2_L2, "vic_smoke_alarm", completed=True)
+check("D2: another team's sends are its own", d2_try(D2U2, "select id from public.send_report(%s, 'a@b.test')", [D2_V2]) is not None)
+
+su("update public.report_sends set sent_at = now() - interval '25 hours' where team_id = %s", [D2T])
+check("D2: a send more than 24 hours ago no longer counts",
+      d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V]) is not None)
+check("D2: …and \"Send again\" goes, with a new token",
+      d2_try(D2U, "select token from public.resend_report(%s)", [D2_FIRST]) is not None
+      and su("select count(*) from public.report_sends where team_id = %s and sent_at > now() - interval '1 hour'", [D2T])[0][0] == 2)
+
+su("update public.subscriptions set plan = 'pro', status = 'active' where team_id = %s", [D2T])
+for _ in range(48):
+    if d2_try(D2U, "select id from public.send_report(%s, 'owner@d2-landlord.test')", [D2_V]) is None:
+        break
+check("D2: a Pro team sends 50 in a day", su("select count(*) from public.report_sends where team_id = %s and sent_at > now() - interval '24 hours'", [D2T])[0][0] == 50)
+refused("D2: …and the 51st is refused", D2U, "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429", contains="50 reports")
+
+refused("D2: the send log is closed to members", D2U, "select * from public.report_sends", sqlstate="42501")
+refused("D2: …and so is counting a send by hand", D2U, "select public._count_report_send(%s, null)", [D2T], sqlstate="42501")
+refused("D2: …or reading a team's cap", D2U, "select public.report_send_cap(%s)", [D2T], sqlstate="42501")
+D2_LOGGED = lambda: su("select count(*) from public.report_sends where team_id = %s", [D2T])[0][0]
+before = D2_LOGGED()
+d2_try(D2U, "select public.revoke_report(%s)", [D2_FIRST])
+check("D2: withdrawing a report doesn't take its send back",
+      su("select count(*) from public.report_deliveries where id = %s", [D2_FIRST])[0][0] == 0
+      and D2_LOGGED() == before == 60, f"{before} -> {D2_LOGGED()}")
+
+run_file(NEW / "0011_report_sending.sql")   # re-run last, after every other file's re-runs
+refused("D2: 0011 re-runs and the cap still holds", D2U, "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429")
+
+# ── Step D3b: report-file reads five columns and nothing else (0012) ─────────
+print("\n— Step D3b: what the report-file function may read with the service-role key")
+# The stub grants service_role everything by default, as some projects do; the
+# live one granted it nothing. 0012 ends up the same on both.
+run_file(NEW / "0012_report_file_access.sql")
+
+
+def as_service(sql, params=None):
+    with db.transaction():
+        db.execute("set local role service_role")
+        cur = db.execute(sql, params)
+        return cur.fetchall() if cur.description else None
+
+
+def service_refused(name, sql, params=None):
+    try:
+        as_service(sql, params)
+    except psycopg.Error as e:
+        check(name, e.sqlstate == "42501", f"{e.sqlstate}: {str(e).splitlines()[0]}")
+        return
+    check(name, False, "it was allowed")
+
+
+D3_TOKEN, D3_PATH = su("select token, file_path from public.report_deliveries where file_path is not null limit 1")[0]
+try:
+    row = as_service("select file_path, link_expires_at, claimed_at, recipient_team_id from public.report_deliveries where token = %s", [D3_TOKEN])
+except psycopg.Error as e:
+    row = []
+    print(f"      refused: {e.sqlstate}: {str(e).splitlines()[0]}")
+check("D3b: the function's lookup works: one row, by token, the four columns it decides by", len(row) == 1 and row[0][0] == D3_PATH)
+service_refused("D3b: …but not the recipient's address", "select recipient_email from public.report_deliveries where token = %s", [D3_TOKEN])
+service_refused("D3b: …nor the report itself", "select snapshot from public.report_deliveries where token = %s", [D3_TOKEN])
+service_refused("D3b: …nor every column at once", "select * from public.report_deliveries limit 1")
+service_refused("D3b: …and it changes nothing", "update public.report_deliveries set claimed_at = now() where token = %s", [D3_TOKEN])
+run_file(NEW / "0012_report_file_access.sql")
+try:
+    again = as_service("select file_path from public.report_deliveries where token = %s", [D3_TOKEN])
+except psycopg.Error:
+    again = []
+check("D3b: 0012 re-runs, and the lookup still works", len(again) == 1)
+
+# ── Step D4a: landlords read their reports without the sender's ids (0013) ────
+print("\n— Step D4a: what the account a report was saved to reads, and what it doesn't")
+# 0007 was re-run by itself above, which puts back its policies: re-running 0013
+# after it is how it's applied.
+run_file(NEW / "0013_received_reports.sql")
+check("D4a: the landlord no longer reads the delivery row itself", one(J, "select count(*) from public.report_deliveries") == 0)
+check("D4a: …the team that sent it still does", one(A, "select count(*) from public.report_deliveries where id = %s", [D1]) == 1)
+mine = act(J, "select id, workflow, completed_on, recipient_email, file_path, recipient_location_id, snapshot from public.received_reports() where id = %s", [D1])
+check("D4a: received_reports() gives the landlord their report, filed where it is",
+      len(mine) == 1 and mine[0][1] == "Electrical safety check" and mine[0][3] == "jane@landlord.test" and mine[0][5] == JL, str(mine[0][:6]) if mine else "none")
+returned = su("select pg_get_function_result('public.received_reports()'::regprocedure)")[0][0]
+check("D4a: …and none of the sender's ids", not any(c in returned for c in ("provider_team_id", "provider_location_id", "visit_id", "sent_by", "claimed_by")), returned)
+snap = mine[0][6] if mine else {}
+check("D4a: …nor the sender's team or who signed it off, inside the report",
+      "team_id" not in (snap.get("provider") or {}) and "signed_by" not in (snap.get("signoff") or {}) and (snap.get("provider") or {}).get("name"))
+check("D4a: the team that sent it isn't given it that way", one(A, "select count(*) from public.received_reports()") == 0)
+check("D4a: …nor is anyone else", one(X, "select count(*) from public.received_reports()") == 0)
+refused("D4a: signed out, nothing", None, "select * from public.received_reports()", sqlstate="42501")
+check("D4a: the landlord still reads the report's PDF",
+      one(J, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 1)
+check("D4a: …and the sender theirs; an outsider neither",
+      one(A, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 1
+      and one(X, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 0)
+check("D4a: the PDF check answers only for the asker's own reports",
+      one(J, "select public.can_read_received_report(%s)", [f"{TA}/r1.pdf"]) is True
+      and one(X, "select public.can_read_received_report(%s)", [f"{TA}/r1.pdf"]) is False)
+
+check("D4a: the landlord sees whether a report's site files itself", one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is True)
+refused("D4a: …can't delete the link directly any more", J, "delete from public.site_links", sqlstate="42501")
+refused("D4a: an outsider can't stop it filing", X, "select public.stop_auto_filing(%s)", [D1], contains="not in your account")
+refused("D4a: …nor can the team that sent it, this way", A, "select public.stop_auto_filing(%s)", [D1], contains="not in your account")
+D4_LINKS = su("select count(*) from public.site_links where recipient_team_id = %s", [TJ])[0][0]
+act(J, "select public.stop_auto_filing(%s)", [D1])
+check("D4a: the landlord stops it filing itself", one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is False
+      and su("""select count(*) from public.site_links l join public.report_deliveries d
+                  on d.provider_location_id = l.provider_location_id and d.recipient_team_id = l.recipient_team_id
+                 where d.id = %s""", [D1])[0][0] == 0
+      and su("select count(*) from public.site_links where recipient_team_id = %s", [TJ])[0][0] == D4_LINKS - 1, f"{D4_LINKS} links before")
+check("D4a: …and the report stays filed where it was", one(J, "select recipient_location_id from public.received_reports() where id = %s", [D1]) == JL)
+V4A = uuid.uuid4()
+act(A, "insert into public.visits (id, team_id, location_id, kind) values (%s, %s, %s, 'vic_electrical_safety')", [V4A, TA, LOCS[0]])
+act(A, "update public.visits set completed_at = now(), outcome = 'compliant' where id = %s", [V4A])
+nxt = act(A, "select recipient_team_id, recipient_location_id from public.send_report(%s, 'jane@landlord.test')", [V4A])[0]
+check("D4a: the next report for that site waits to be saved, instead of filing itself", nxt[0] is None and nxt[1] is None, str(nxt))
+
+run_file(NEW / "0013_received_reports.sql")   # re-run last, after every other file's re-runs
+check("D4a: 0013 re-runs, and the landlord still reads only through it",
+      one(J, "select count(*) from public.report_deliveries") == 0 and one(J, "select count(*) from public.received_reports() where id = %s", [D1]) == 1)
+
+# ── Step D4d: a landlord's own checks, and their certificates (0014) ─────────
+print("\n— Step D4d: checks a landlord enters by hand, and certificates for them")
+run_file(NEW / "0014_certificates.sql")
+OWN = one(J, """insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on)
+               values (%s, %s, 'own:gas-check', 'Gas check', 24, '2025-03-15') returning id""", [TJ, JL])
+row = act(J, "select next_due_on, active from public.compliance_items where id = %s", [OWN])[0]
+check("D4d: a check entered by hand works out its next due date", str(row[0]) == "2027-03-15" and row[1] is True, str(row))
+act(J, "update public.compliance_items set last_done_on = '2026-11-01' where id = %s", [OWN])
+check("D4d: …and moves it on when it's done again",
+      str(one(J, "select next_due_on from public.compliance_items where id = %s", [OWN])) == "2028-11-01")
+refused("D4d: the same check twice at one property is refused", J,
+        "insert into public.compliance_items (team_id, location_id, obligation, label, interval_months, last_done_on) values (%s, %s, 'own:gas-check', 'Gas check', 12, '2026-01-01')",
+        [TJ, JL], sqlstate="23505")
+refused("D4d: nobody else can add one to the landlord's property", X,
+        "insert into public.compliance_items (team_id, location_id, obligation, label, interval_months) values (%s, %s, 'own:x', 'X', 12)",
+        [TJ, JL], sqlstate="42501")
+CERT = f"{TJ}/checks/{OWN}/{uuid.uuid4()}.pdf"
+# Limits are on in this run (see 184): a certificate is Pro's (decision D6).
+refused("D4d: on Free, with limits on, a certificate can't be kept", J,
+        "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [CERT], sqlstate="42501")
+su("update public.subscriptions set plan = 'pro', status = 'active' where team_id = %s", [TJ])
+act(J, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [CERT])
+act(J, "update public.compliance_items set evidence_path = %s where id = %s", [CERT, OWN])
+check("D4d: a certificate goes in the landlord's own folder, and the check names it",
+      one(J, "select evidence_path from public.compliance_items where id = %s", [OWN]) == CERT
+      and one(J, "select count(*) from storage.objects where bucket_id = 'evidence' and name = %s", [CERT]) == 1)
+refused("D4d: …never a file in another team's folder", J,
+        "update public.compliance_items set evidence_path = %s where id = %s", [f"{TA}/checks/x.pdf", OWN], sqlstate="42501")
+check("D4d: …and nobody else can read it", one(X, "select count(*) from storage.objects where bucket_id = 'evidence' and name = %s", [CERT]) == 0)
+refused("D4d: …or put one there", X, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [f"{TJ}/checks/{OWN}/sneaky.pdf"], sqlstate="42501")
+act(J, "delete from public.compliance_items where id = %s", [OWN])
+check("D4d: the landlord can remove a check they entered", su("select count(*) from public.compliance_items where id = %s", [OWN])[0][0] == 0)
+run_file(NEW / "0014_certificates.sql")
+check("D4d: 0014 re-runs", True)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

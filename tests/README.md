@@ -236,6 +236,138 @@ renewal that just failed, by the Auth server's error code, never its message (10
 node tests/renewal.mjs
 ```
 
+`pdf.mjs` is step D1. In Node, PDFs built from an AV visit and a Victorian electrical check
+are read back with pdf.js for what they print and where: who it's from with licence and REC
+numbers, a revision on every page, fails with their notes, "Ω" and "—", the equipment, the
+sign-off with its signature, the logo and when it's left off, wrapping, and nothing off the
+page or over the footer. Then "Export PDF" in a browser: a PDF named as the Excel report,
+counted as a revision, signed off first where the check ends that way. And the Victorian
+check laid out as ESV's form: sections A to F in order, the previous check's and the smoke
+alarms' dates from the site's records, defects under F, and the certification. And label
+photos: under their item, fetched in one request, left out with no signal and the page saying
+so, a photo that can't be read skipped (49 checks). The photo checks in the browser need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/pdf.mjs
+```
+
+`deliver-report.mjs` is step D2b, in Node with no dev server. It loads the Edge Function's own
+`index.ts` (Node strips its types; a hook stands in for the Supabase client, and `Deno`, the
+database's answers and Resend are stand-ins too). It checks the function sends as the caller,
+never with a service key; a refusal comes back with its code and hint, the daily cap as a 429,
+with no email; the email's business, site and date come from the row the database wrote, and
+"Send again" goes to the address it was first sent to; From is Pemcora's address named
+"<business> via Pemcora", replies go to the business, and nothing typed adds a header or HTML;
+and with no mailer, or one that fails, the link still comes back (42 checks). Needs Node 22.18
+or later.
+
+```
+node tests/deliver-report.mjs
+```
+
+`send-report.mjs` is step D2c, in a browser with the report bucket, the `deliver-report` function
+and the database answered by the test. Only a finished visit on a signed-in team offers "Send
+report", with the client's contact email filled in, and not with no connection or no address.
+The PDF goes to the team's report folder first, then the function gets its path, the visit,
+the snapshot and the address. A send is a revision, asked as Export PDF asks. The daily cap's
+refusal is shown in the database's words and records no revision. With no mailer, or the
+function not deployed yet, the link is handed over and never called emailed. The sent list:
+"Send again" for that delivery, "Withdraw" until it's saved. A note still saying `[timeframe]`
+is refused before anything leaves the device (34 checks). The sending checks need
+`VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/send-report.mjs
+```
+
+`report-link.mjs` is step D3a: the link's helpers in Node, then the `#/r/<token>` page in a
+browser with `report_preview()` answered by the test. The page opens for whoever holds the
+link, in front of the sign-in gate, and from inside the app too. A malformed link asks the
+database nothing, and an unknown one says it isn't valid. A working link shows who sent it
+with their numbers, what, where, when, the outcome, the sign-off, a revision, and each issue
+with its note. An expired link names who to ask and a saved report asks them to sign in,
+neither showing anything of the report. With no connection it says so and tries again.
+Step D3b: "Open the PDF" opens the five-minute link `report-file` gives in a new tab that can't
+reach back, asking with the link's token alone; a refusal is shown in the function's words and
+its tab closed; no connection says so; a report sent without a PDF has no button (36 checks). The page checks need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/report-link.mjs
+```
+
+`report-file.mjs` is step D3b, in Node with no dev server, like `deliver-report.mjs`: it loads the
+function's own `index.ts` with stand-ins. A link to the PDF is given only while
+`report_preview()` would show the report: not for one saved or filed into an account, past its
+90 days to the second, or with no PDF. It reads one row by token, only the four columns it
+decides by, and signs exactly that file in the report bucket for five minutes. A token that isn't
+one asks the database nothing (29 checks).
+
+```
+node tests/report-file.mjs
+```
+
+`report-save.mjs` is step D3c: the saving helpers in Node, then the page in a browser with the
+sign-in server and the database answered by the test. It signs in through the page's own form
+with a made-up account. Signed out, the report offers an account, and a sign-up made for it
+comes back to it once, after the email is confirmed. Someone with no landlord or agency account
+makes one there, named from their address, and the report is saved into it by its token. A
+report not filed by itself asks which property: one in the account, or a new one at the report's
+address under its owner, the electrician's client name filled in, an owner of that name already
+there reused and a new name making a new owner. One filed by itself says where; with two
+accounts they choose. The wrong address is offered a way to sign out; the sender is told only
+the recipient can save it. An expired link can still be saved. A saved report opens for its own
+account, its PDF through that account's access, and for no one else (43 checks). The page checks
+need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/report-save.mjs
+```
+
+`reports.mjs` is step D4b: a landlord's Reports page in a browser, with `received_reports()` and
+the report bucket answered by the test and the account's properties on the device. The reports
+are asked for by the account, the ones not filed first, each saying what, from whom, where, when,
+how it went and where it's filed. A PDF opens through the account's own access; one sent without
+says so. Filing makes the property in the device's copy under its owner, then files the report
+under it; a filed report can be moved; one whose site files itself can stop that, after asking.
+No reports, and no connection, each say so (23 checks). The checks need `VITE_SUPABASE_URL` in
+`.env`, though nothing is sent there.
+
+```
+node tests/reports.mjs
+```
+
+`properties.mjs` is step D4c: `src/lib/properties.js` in Node (when a check is overdue or due soon,
+the order of properties, checks and reports, a site that files itself named once), then a
+landlord's Properties page in a browser, with `compliance_items`, `received_reports()` and the
+report bucket answered by the test. Each property shows by address under its owner, asking for
+the account's own records only; what's due, overdue first, with when it was last done, a check
+switched off left out; the reports filed there, newest first, each opening its PDF; a site that
+files there by itself named once, and "Stop that" stopping it by its latest report. A property
+added on the device goes under an owner already there or a new one, and the same address twice
+is refused. With no connection the properties still show and the page says what needs one; with
+none, it says how they arrive (30 checks).
+
+```
+node tests/properties.mjs
+```
+
+`landlord-checks.mjs` is step D4d: the certificate rules in Node, then a landlord's own checks on
+the Properties page and the landlord Due page in a browser, with `compliance_items`, the photo
+bucket and `due_list()` answered by the test. A check needs its name, every 1 to 120 months, and
+when it was last done; it's sent as the account's own (`own:…`) check at that property and
+shows when it's next due; the same name twice is refused in words. A check a report keeps has no
+actions. "Done again" moves it on, saving only the date. A certificate is a PDF or a photo up to
+10 MB, kept in `<team>/checks/<check>/`, named by the check and opened from it; replacing it
+takes the old file away; the bucket's refusal says certificates are Pro's; on Free with limits
+on there's no way to add one. Removing asks first, removes only a check entered by hand, and its
+certificate with it. The Due page lists the landlord's checks by their own names, filtered by
+owner, with no reminder switches (31 checks).
+
+```
+node tests/landlord-checks.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew
