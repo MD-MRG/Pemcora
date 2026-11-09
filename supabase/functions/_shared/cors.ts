@@ -1,10 +1,11 @@
 // The app is served from github.io and the functions from supabase.co, so every
 // call is cross-origin and every one of them is preceded by a preflight.
 //
-// `*` is safe here only because both functions require a JWT: Supabase verifies
-// it before the handler runs, and neither one trusts a cookie for anything. A
-// page on another origin can reach these endpoints, but not with anybody's
-// credentials.
+// `*` is safe here because no function trusts a cookie for anything. Those that
+// act for someone take that person's JWT, which Supabase verifies before the
+// handler runs, so a page on another origin can reach them but not with
+// anybody's credentials. report-file takes no login at all: its key is the
+// report link's token, which a page elsewhere has no more than anyone else does.
 export const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

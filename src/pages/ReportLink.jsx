@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { previewReport } from '../lib/api.js'
+import { previewReport, reportFileUrl } from '../lib/api.js'
 import { isNetworkFailure } from '../lib/saveErrors.js'
 import { reportSummary, reportTokenFrom } from '../lib/reportLink.js'
 import Notice from '../components/Notice.jsx'
@@ -25,7 +25,67 @@ function Row({ label, children }) {
   )
 }
 
-function Report({ preview }) {
+// The PDF, through a link that lasts five minutes (report-file, D3b). The tab is
+// opened on the tap itself, while it still counts as one, or the browser blocks
+// it as a pop-up; it's pointed at the PDF once the link comes back.
+function OpenPdf({ token, hasFile }) {
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  const [ready, setReady] = useState(null)
+
+  if (!hasFile)
+    return <p className="text-ink-soft text-[12.5px]">This report was sent without a PDF.</p>
+
+  const open = async () => {
+    setProblem('')
+    setReady(null)
+    setBusy(true)
+    const tab = window.open('', '_blank')
+    try {
+      const url = await reportFileUrl(token)
+      if (tab) {
+        tab.opener = null
+        tab.location.replace(url)
+      } else {
+        setReady(url)
+      }
+    } catch (e) {
+      tab?.close()
+      setProblem(
+        navigator.onLine === false || e.network || isNetworkFailure(e)
+          ? 'Opening the PDF needs a connection.'
+          : e.message || 'The PDF could not be opened.',
+      )
+    }
+    setBusy(false)
+  }
+
+  return (
+    <div className="space-y-2">
+      <GateButton type="button" disabled={busy} onClick={open}>
+        {busy ? 'Opening…' : 'Open the PDF'}
+      </GateButton>
+      <p className="text-ink-soft text-[12.5px]">
+        The PDF is the full report, with every result. Save or print it from there.
+      </p>
+      {ready && (
+        <p className="text-[13px]">
+          <a
+            href={ready}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-navy font-semibold underline"
+          >
+            The PDF is ready: open it
+          </a>
+        </p>
+      )}
+      {problem && <Notice blocked title={problem} />}
+    </div>
+  )
+}
+
+function Report({ preview, token }) {
   const r = reportSummary(preview)
   return (
     <div className="space-y-5">
@@ -79,7 +139,7 @@ function Report({ preview }) {
         )}
       </section>
 
-      <p className="text-ink-soft text-[12.5px]">The PDF is the full report, with every result.</p>
+      <OpenPdf token={token} hasFile={r.hasFile} />
     </div>
   )
 }
@@ -185,7 +245,7 @@ export default function ReportLink({ hash }) {
       subtitle={`A report sent to you from ${reportSummary(preview).business || from}.`}
       footer={footer}
     >
-      <Report preview={preview} />
+      <Report preview={preview} token={token} />
     </GateLayout>
   )
 }

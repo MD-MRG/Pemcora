@@ -54,6 +54,7 @@ const SUITES = [
   'deliver-report',
   'send-report',
   'report-link',
+  'report-file',
 ]
 
 // Fail fast and clearly. Without this, every suite times out one after another

@@ -1265,6 +1265,26 @@ export async function previewReport(token) {
   }
 }
 
+/**
+ * A link to a report's PDF, good for five minutes, from its report link's token
+ * (D3b). Needs no login: the report-file function gives one only while the link
+ * works. A refusal comes back with the function's own words and its `status`
+ * ('saved', 'expired', 'invalid', 'no-file').
+ */
+export async function reportFileUrl(token) {
+  const { data, error } = await supabase.functions.invoke('report-file', { body: { token } })
+  if (error) {
+    const said = await error.context?.json?.().catch(() => null)
+    if (said?.error) throw Object.assign(new Error(said.error), { status: said.status ?? null })
+    // The request never got an answer: no signal, most likely.
+    if (error.name === 'FunctionsFetchError' || error.name === 'FunctionsRelayError') {
+      throw Object.assign(new Error(error.message), { network: true })
+    }
+    throw error
+  }
+  return data.url
+}
+
 /** The reports sent from a visit, newest first. */
 export async function listSentReports(visitId) {
   const { data, error } = await supabase

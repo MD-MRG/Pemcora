@@ -15,6 +15,9 @@
  *   - an expired link names who to ask, and shows nothing of the report
  *   - a saved report asks them to sign in, and shows nothing of it
  *   - with no connection it says so, and tries again
+ *   - D3b: "Open the PDF" opens the five-minute link report-file gives, in a new
+ *     tab; a refusal is shown in the function's words; a report with no PDF has
+ *     no button
  */
 import { chromium } from 'playwright-core'
 import { testContext } from './harness.mjs'
@@ -78,7 +81,8 @@ async function launch() {
 }
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
-const server = { answer: [PREVIEW], down: false, asked: [] }
+const server = { answer: [PREVIEW], down: false, asked: [], file: 'ok', pdfDown: false }
+const PDF = Buffer.from('%PDF-1.4 %%EOF')
 async function backend(route) {
   const req = route.request()
   const url = new URL(req.url())
@@ -86,6 +90,16 @@ async function backend(route) {
   if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
   server.asked.push({ path: url.pathname, body: req.postData() })
   if (server.down) return route.abort('internetdisconnected')
+  if (url.pathname === '/functions/v1/report-file') {
+    if (server.pdfDown) return route.abort('internetdisconnected')
+    if (server.file === 'expired') {
+      return route.fulfill({ status: 410, contentType: 'application/json', headers: cors, body: JSON.stringify({ status: 'expired', error: 'This link has expired.' }) })
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ url: `${url.origin}/storage/v1/object/sign/reports/team-1/abc.pdf?token=s`, expiresIn: 300 }) })
+  }
+  if (url.pathname === '/storage/v1/object/sign/reports/team-1/abc.pdf') {
+    return route.fulfill({ status: 200, contentType: 'application/pdf', headers: cors, body: PDF })
+  }
   if (url.pathname === '/rest/v1/rpc/report_preview') {
     return route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(server.answer) })
   }
@@ -128,6 +142,40 @@ try {
     log('…and each issue with its note', /Issues found \(2\)/.test(text) && /Hall alarm: Interconnected · must be replaced/.test(text) && text.includes('Replace within 7 days')
       && /Bedroom 1: Sounds when tested/.test(text) && text.includes('Battery flat'))
     await page.screenshot({ path: `${DIR}/report-link.png`, fullPage: true })
+
+    // D3b: the PDF.
+    server.asked = []
+    const popup = page.waitForEvent('popup', { timeout: 8000 })
+    await page.getByRole('button', { name: 'Open the PDF' }).click()
+    const tab = await popup
+    await until(async () => tab.url().includes('/object/sign/'))
+    log('"Open the PDF" opens the report\'s five-minute link in a new tab', tab.url().endsWith('/storage/v1/object/sign/reports/team-1/abc.pdf?token=s'), tab.url())
+    const fileCall = server.asked.find(a => a.path === '/functions/v1/report-file')
+    log('…asking report-file with the link\'s token and nothing else', JSON.stringify(JSON.parse(fileCall?.body ?? '{}')) === JSON.stringify({ token: TOKEN }))
+    log('…and the new tab can\'t reach back into this one', await tab.evaluate(() => window.opener === null))
+    await tab.close()
+
+    server.file = 'expired'
+    const refusedTab = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null)
+    await page.getByRole('button', { name: 'Open the PDF' }).click()
+    log('a refusal is shown in the function\'s words', await until(async () => /This link has expired\./.test(await body())))
+    const spare = await refusedTab
+    log('…and the tab it opened is closed again', !spare || (await until(async () => spare.isClosed())))
+    server.file = 'ok'
+
+    server.pdfDown = true
+    await page.getByRole('button', { name: 'Open the PDF' }).click()
+    log('with no connection the PDF says it needs one', await until(async () => /Opening the PDF needs a connection/.test(await body())))
+    server.pdfDown = false
+    for (const p of ctx.pages()) if (p !== page) await p.close()
+
+    server.answer = [{ ...PREVIEW, has_file: false }]
+    await open(`#/r/${TOKEN}`)
+    await until(async () => /A report sent to you from Sparky Co/.test(await body()))
+    log('a report sent without a PDF says so, with no button', /sent without a PDF/.test(await body()) && (await page.getByRole('button', { name: 'Open the PDF' }).count()) === 0)
+    server.answer = [PREVIEW]
+    await open(`#/r/${TOKEN}`)
+    await until(async () => /A report sent to you from Sparky Co/.test(await body()))
 
     // Reached from inside the app, without a reload.
     await page.evaluate(() => {

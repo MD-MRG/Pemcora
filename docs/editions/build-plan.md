@@ -1626,6 +1626,19 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - With no connection the page says so, and "Try again" opens it once there is one.
   - Opening the link marks the report opened (`report_preview()`), even when it's the sender
     who opens it.
+- How D3b (the `report-file` function) came out:
+  - The page's "Open the PDF" asks `report-file` with the link's token and nothing else. It
+    gives a link to that report's PDF lasting five minutes, and only in the cases where
+    `report_preview()` shows the report: not once it's saved or filed into an account, not
+    past its 90 days, and not for a report sent without a PDF. The page then has no button.
+  - It takes no login: the visitor usually has none, and the app's publishable key isn't a
+    JWT, so it's deployed with the platform's login check off
+    (`supabase functions deploy report-file --no-verify-jwt`). The token is the key, as the
+    emailed link is. It uses the platform's service-role key, which never leaves the function,
+    to read that one row by token, only the four columns it decides by, and sign that one file.
+  - The new tab is opened on the tap, so browsers don't block it, and can't reach back into the
+    page. A refusal is shown in the function's words, and no connection says so.
+  - A saved report's PDF is for its account, signed in: D3c.
 
 #### D4. Landlord and agency side
 

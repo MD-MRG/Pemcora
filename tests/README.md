@@ -287,11 +287,24 @@ link, in front of the sign-in gate, and from inside the app too. A malformed lin
 database nothing, and an unknown one says it isn't valid. A working link shows who sent it
 with their numbers, what, where, when, the outcome, the sign-off, a revision, and each issue
 with its note. An expired link names who to ask and a saved report asks them to sign in,
-neither showing anything of the report. With no connection it says so and tries again
-(29 checks). The page checks need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+neither showing anything of the report. With no connection it says so and tries again.
+Step D3b: "Open the PDF" opens the five-minute link `report-file` gives in a new tab that can't
+reach back, asking with the link's token alone; a refusal is shown in the function's words and
+its tab closed; no connection says so; a report sent without a PDF has no button (36 checks). The page checks need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
 
 ```
 node tests/report-link.mjs
+```
+
+`report-file.mjs` is step D3b, in Node with no dev server, like `deliver-report.mjs`: it loads the
+function's own `index.ts` with stand-ins. A link to the PDF is given only while
+`report_preview()` would show the report: not for one saved or filed into an account, past its
+90 days to the second, or with no PDF. It reads one row by token, only the four columns it
+decides by, and signs exactly that file in the report bucket for five minutes. A token that isn't
+one asks the database nothing (29 checks).
+
+```
+node tests/report-file.mjs
 ```
 
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
