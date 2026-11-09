@@ -1,14 +1,14 @@
 """
-Proves 0006 to 0011 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0012 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 to 0011 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0012 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006 to 0011 are read from instead (a copy with a fix being tried, say).
+0006 to 0012 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -27,7 +27,8 @@ import psycopg
 OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
 EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
-            "0010_signed_in_devices.sql", "0011_report_sending.sql")
+            "0010_signed_in_devices.sql", "0011_report_sending.sql",
+            "0012_report_file_access.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -125,7 +126,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 to 0011, twice ────────────────────────────────────────────────────
+# ── 0006 to 0012, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -1945,6 +1946,47 @@ check("D2: withdrawing a report doesn't take its send back",
 
 run_file(NEW / "0011_report_sending.sql")   # re-run last, after every other file's re-runs
 refused("D2: 0011 re-runs and the cap still holds", D2U, "select public.send_report(%s, 'owner@d2-landlord.test')", [D2_V], sqlstate="PT429")
+
+# ── Step D3b: report-file reads five columns and nothing else (0012) ─────────
+print("\n— Step D3b: what the report-file function may read with the service-role key")
+# The stub grants service_role everything by default, as some projects do; the
+# live one granted it nothing. 0012 ends up the same on both.
+run_file(NEW / "0012_report_file_access.sql")
+
+
+def as_service(sql, params=None):
+    with db.transaction():
+        db.execute("set local role service_role")
+        cur = db.execute(sql, params)
+        return cur.fetchall() if cur.description else None
+
+
+def service_refused(name, sql, params=None):
+    try:
+        as_service(sql, params)
+    except psycopg.Error as e:
+        check(name, e.sqlstate == "42501", f"{e.sqlstate}: {str(e).splitlines()[0]}")
+        return
+    check(name, False, "it was allowed")
+
+
+D3_TOKEN, D3_PATH = su("select token, file_path from public.report_deliveries where file_path is not null limit 1")[0]
+try:
+    row = as_service("select file_path, link_expires_at, claimed_at, recipient_team_id from public.report_deliveries where token = %s", [D3_TOKEN])
+except psycopg.Error as e:
+    row = []
+    print(f"      refused: {e.sqlstate}: {str(e).splitlines()[0]}")
+check("D3b: the function's lookup works: one row, by token, the four columns it decides by", len(row) == 1 and row[0][0] == D3_PATH)
+service_refused("D3b: …but not the recipient's address", "select recipient_email from public.report_deliveries where token = %s", [D3_TOKEN])
+service_refused("D3b: …nor the report itself", "select snapshot from public.report_deliveries where token = %s", [D3_TOKEN])
+service_refused("D3b: …nor every column at once", "select * from public.report_deliveries limit 1")
+service_refused("D3b: …and it changes nothing", "update public.report_deliveries set claimed_at = now() where token = %s", [D3_TOKEN])
+run_file(NEW / "0012_report_file_access.sql")
+try:
+    again = as_service("select file_path from public.report_deliveries where token = %s", [D3_TOKEN])
+except psycopg.Error:
+    again = []
+check("D3b: 0012 re-runs, and the lookup still works", len(again) == 1)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

@@ -1639,6 +1639,11 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - The new tab is opened on the tap, so browsers don't block it, and can't reach back into the
     page. A refusal is shown in the function's words, and no connection says so.
   - A saved report's PDF is for its account, signed in: D3c.
+  - Once deployed (9 November), every lookup was refused: on the live project the
+    service-role key holds no privilege on any table in `public`, and the local test database
+    grants it everything, so the suite hadn't seen it. Migration 0012 gives it exactly the five
+    columns `report-file` reads on `report_deliveries`, and takes away anything else it had
+    there, so it ends up the same on every project. M.D. applies it.
 - **M.D.'s note (9 November):** a new property made from a report goes under its owner: an
   "Owner" field with the electrician's name for their client filled in, and an owner of that
   name already in the account reused.
@@ -1683,6 +1688,8 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Products and prices: Pro per seat, and add-on packs.
 - Stripe Checkout, and the customer portal for card updates and cancellation, set to cancel
   at the end of the period.
+- The service-role key holds no table privileges on the live project (found in D3b). The
+  webhook needs its own grants on the tables it writes, as 0012 gave `report-file`.
 - A `stripe-webhook` Edge Function using the service-role key writes `subscriptions`
   (plan, status, seats, `current_period_end`, `cancel_at`, `past_due_since`) and add-on
   `team_packs`.

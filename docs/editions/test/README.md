@@ -1,9 +1,9 @@
-# SQL-level checks for 0006 to 0011
+# SQL-level checks for 0006 to 0012
 
 `run_tests.py` builds a throwaway database from the real `supabase/migrations/0001–0005`,
-makes a team the way the app used to, applies `0006` to `0011` twice (re-run
+makes a team the way the app used to, applies `0006` to `0012` twice (re-run
 safety), then drives every gate, policy and RPC as real signed-in roles with RLS on.
-416 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
+424 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
 seats and invites, the column lock on `teams`, the re-check clock, photo gating,
 storage folders, and the whole report delivery → claim → auto-file loop. Then
 the build plan's Phase A rules: a second device joining an open visit, visit
@@ -26,7 +26,9 @@ own logins only, refresh tokens going with an ended login, nothing for a signed-
 "Send again" counted, a withdrawn report's send not given back, a send older than 24 hours no
 longer counting), a report with a note still saying `[timeframe]` refused, the send log and its
 helpers closed to clients, and 0011 re-run after everything else, since re-running 0007 by
-itself puts back `send_report()` without the cap.
+itself puts back `send_report()` without the cap. Then step D3b: with the service-role key, the
+`report-file` function's lookup works, and nothing else on `report_deliveries` does (not the
+recipient's address, the report, every column, or a change), and 0012 re-runs.
 
 `00_supabase_stub.sql` stands in for the parts of Supabase plain Postgres lacks:
 the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.sessions` and
