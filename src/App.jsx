@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext.jsx'
 import { TeamProvider } from './context/TeamContext.jsx'
@@ -16,7 +16,8 @@ import Due from './pages/Due.jsx'
 import ReceivingHolding from './pages/ReceivingHolding.jsx'
 import Workflow from './pages/Workflow.jsx'
 import ReportLink from './pages/ReportLink.jsx'
-import { isReportLink } from './lib/reportLink.js'
+import { isReportLink, takePendingReport } from './lib/reportLink.js'
+import { useAuth } from './context/auth.js'
 import { WORKFLOW_NAV } from './nav.js'
 
 // Every other workflow's page comes from the pack registry. These three have
@@ -38,11 +39,24 @@ const watchHash = notify => {
 }
 const currentHash = () => window.location.hash
 
+// Someone who made an account to save a report confirms it from their email,
+// which opens the app, not the report. Signed in, they're taken back to it, once.
+function BackToReport() {
+  const { session, loading } = useAuth()
+  useEffect(() => {
+    if (loading || !session) return
+    const token = takePendingReport()
+    if (token && !isReportLink(window.location.hash)) window.location.hash = `#/r/${token}`
+  }, [session, loading])
+  return null
+}
+
 export default function App() {
   const hash = useSyncExternalStore(watchHash, currentHash)
   return (
     <AuthProvider>
       <TeamProvider>
+        <BackToReport />
         {isReportLink(hash) ? (
           <ReportLink hash={hash} />
         ) : (

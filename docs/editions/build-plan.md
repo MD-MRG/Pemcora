@@ -1639,6 +1639,30 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - The new tab is opened on the tap, so browsers don't block it, and can't reach back into the
     page. A refusal is shown in the function's words, and no connection says so.
   - A saved report's PDF is for its account, signed in: D3c.
+- **M.D.'s note (9 November):** a new property made from a report goes under its owner: an
+  "Owner" field with the electrician's name for their client filled in, and an owner of that
+  name already in the account reused.
+- How D3c (saving) came out:
+  - Under the report, and under an expired link (saving never expires), "Save this report to
+    your account". Signed out, it offers "Create a free account" or "I have an account", on a
+    sign-in screen that asks for the address the report was sent to and leads back to it.
+  - The report is remembered on the device while a new account is confirmed: the
+    confirmation email opens the app, and signed in, it goes back to the report, once. Kept a
+    week at most.
+  - Signed in with no landlord or agency account, the page makes one: Landlord or Property
+    management, named from the address (editable). Only a report link opens that; general
+    sign-up for landlords and agencies opens in D4. With one account it saves straight to it;
+    with several, they choose.
+  - `claim_report()` decides who may save it. Saved, it's filed under a property with the same
+    address if the account has one. If not, the page asks which property: one already there,
+    or a new one at the report's address under its owner, or "File it later".
+  - The wrong address is told so, with a way to sign out and use the right one. Someone in the
+    team that sent it is told only the recipient can save it, and offered nothing.
+  - A saved report's link asks them to sign in. Signed in to its account, it opens, its PDF
+    comes through the account's own access to the report folder, and if it isn't filed yet it
+    asks which property. Anyone else is told it went to another account, and shown nothing.
+  - "Open Pemcora" opens the account it was saved to. Its Properties and Reports pages are
+    still the holding pages until D4.
 
 #### D4. Landlord and agency side
 
@@ -1818,6 +1842,12 @@ Northern Territory, and for Queensland's electrical check:
   signal, and only a renewal that reaches the Auth server tells it to wipe. The Account card
   says so too.
 - Until 0010 is applied, the Account card can only sign out all other devices at once.
+- Saving a report as someone with no landlord or agency account makes the account first,
+  then saves. If the report went to a different address, the account is made anyway and the
+  save is refused: `report_preview()` never reveals the address, so the page can't tell
+  before `claim_report()` does. The account stays, empty.
+- A sign-up made to save a report comes back to it only on the device it was made on. On
+  another, they open the email's report link again.
 - A report that the database refuses after its PDF is uploaded (over the cap, say) leaves
   that PDF in the team's report folder, and so does a withdrawn report: nothing in that
   folder can be deleted (0007). Nobody outside the team can reach either.

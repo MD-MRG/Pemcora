@@ -10,10 +10,14 @@ import ResetPasswordScreen from './ResetPasswordScreen.jsx'
  * link. It changes three things: sign-up rather than sign-in is the opening
  * mode, the address is fixed, and the token rides along in user metadata so the
  * confirm trigger can place the new account in the team that invited it.
+ *
+ * `report`, when present, is `{ mode, onBack }` from a report link (D3c): someone
+ * saving a report to an account. It opens in `mode`, says to use the address
+ * the report went to, and offers the way back to it.
  */
-export default function AuthScreen({ invite = null }) {
+export default function AuthScreen({ invite = null, report = null }) {
   const { signIn, signUp, endedElsewhere } = useAuth()
-  const [mode, setMode] = useState(invite ? 'sign-up' : 'sign-in')
+  const [mode, setMode] = useState(invite ? 'sign-up' : (report?.mode ?? 'sign-in'))
   const [email, setEmail] = useState(invite?.email ?? '')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -66,7 +70,9 @@ export default function AuthScreen({ invite = null }) {
       setNotice(
         invite
           ? `Check ${email.trim()} for a confirmation link. Confirming it is what puts you in ${invite.teamName} — until then there is nothing to sign in to.`
-          : `Check ${email.trim()} for a confirmation link, then sign in.`,
+          : report
+            ? `Check ${email.trim()} for a confirmation link. Open it on this device and you'll come back to the report to save it.`
+            : `Check ${email.trim()} for a confirmation link, then sign in.`,
       )
       setMode('sign-in')
       setPassword('')
@@ -75,31 +81,49 @@ export default function AuthScreen({ invite = null }) {
   }
 
   const title = signingUp ? 'Create your account' : 'Sign in'
-  const subtitle = invite
+  const subtitle = report
     ? signingUp
-      ? `You have been invited to join ${invite.teamName}. Set a password and confirm your address, and you are in as a member.`
-      : `Sign in and you will be asked whether to join ${invite.teamName}.`
-    : signingUp
-      ? 'Your clients, visits and reports live with your team, on every device you sign in from.'
-      : 'Welcome back.'
+      ? 'Use the email address the report was sent to: only that address can save it. The account is free.'
+      : 'Sign in with the email address the report was sent to.'
+    : invite
+      ? signingUp
+        ? `You have been invited to join ${invite.teamName}. Set a password and confirm your address, and you are in as a member.`
+        : `Sign in and you will be asked whether to join ${invite.teamName}.`
+      : signingUp
+        ? 'Your clients, visits and reports live with your team, on every device you sign in from.'
+        : 'Welcome back.'
 
   return (
     <GateLayout
       title={title}
       subtitle={subtitle}
       footer={
-        <button
-          type="button"
-          onClick={() => {
-            setMode(signingUp ? 'sign-in' : 'sign-up')
-            setProblem('')
-            setNotice('')
-            setRefused(false)
-          }}
-          className="text-navy font-semibold underline-offset-2 hover:underline"
-        >
-          {signingUp ? 'I already have an account' : 'Create an account'}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              setMode(signingUp ? 'sign-in' : 'sign-up')
+              setProblem('')
+              setNotice('')
+              setRefused(false)
+            }}
+            className="text-navy font-semibold underline-offset-2 hover:underline"
+          >
+            {signingUp ? 'I already have an account' : 'Create an account'}
+          </button>
+          {report && (
+            <>
+              {' · '}
+              <button
+                type="button"
+                onClick={report.onBack}
+                className="text-navy font-semibold underline-offset-2 hover:underline"
+              >
+                Back to the report
+              </button>
+            </>
+          )}
+        </>
       }
     >
       <form onSubmit={submit} className="space-y-4">

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
-import { previewReport, reportFileUrl } from '../lib/api.js'
+import {
+  deliveryByToken,
+  previewReport,
+  receivingTeams,
+  reportFileUrl,
+  savedReportFileUrl,
+} from '../lib/api.js'
+import { useAuth } from '../context/auth.js'
+import AuthScreen from '../screens/AuthScreen.jsx'
+import SaveReport, { FileReport, Saved } from './SaveReport.jsx'
 import { isNetworkFailure } from '../lib/saveErrors.js'
-import { reportSummary, reportTokenFrom } from '../lib/reportLink.js'
+import { rememberReport, reportSummary, reportTokenFrom } from '../lib/reportLink.js'
 import Notice from '../components/Notice.jsx'
 import GateLayout, { GateButton } from '../screens/GateLayout.jsx'
 
@@ -28,7 +37,7 @@ function Row({ label, children }) {
 // The PDF, through a link that lasts five minutes (report-file, D3b). The tab is
 // opened on the tap itself, while it still counts as one, or the browser blocks
 // it as a pop-up; it's pointed at the PDF once the link comes back.
-function OpenPdf({ token, hasFile }) {
+function OpenPdf({ getUrl, hasFile }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
   const [ready, setReady] = useState(null)
@@ -42,7 +51,7 @@ function OpenPdf({ token, hasFile }) {
     setBusy(true)
     const tab = window.open('', '_blank')
     try {
-      const url = await reportFileUrl(token)
+      const url = await getUrl()
       if (tab) {
         tab.opener = null
         tab.location.replace(url)
@@ -85,7 +94,7 @@ function OpenPdf({ token, hasFile }) {
   )
 }
 
-function Report({ preview, token }) {
+function Report({ preview, getUrl }) {
   const r = reportSummary(preview)
   return (
     <div className="space-y-5">
@@ -139,7 +148,98 @@ function Report({ preview, token }) {
         )}
       </section>
 
-      <OpenPdf token={token} hasFile={r.hasFile} />
+      <OpenPdf getUrl={getUrl} hasFile={r.hasFile} />
+    </div>
+  )
+}
+
+// A saved delivery, as its own account reads it, in the shape the page shows.
+const asPreview = d => ({
+  status: 'ok',
+  provider: d.snapshot?.provider?.name ?? '',
+  completedOn: d.completed_on,
+  outcome: d.outcome,
+  site: d.site,
+  snapshot: d.snapshot,
+  hasFile: Boolean(d.file_path),
+})
+
+/**
+ * A saved report, for whoever signs in (D3c). Its own account sees it, its PDF
+ * through the bucket's rules, and can file it if it isn't yet. Anyone else is
+ * told it went to another account.
+ */
+function SavedReport({ token, onSignIn }) {
+  const { session, signOut } = useAuth()
+  const [state, setState] = useState({ loading: true })
+  const [filed, setFiled] = useState(undefined)
+
+  useEffect(() => {
+    if (!session) return
+    let alive = true
+    Promise.all([deliveryByToken(token), receivingTeams()])
+      .then(([delivery, teams]) => {
+        if (!alive) return
+        const team = delivery && teams.find(t => t.id === delivery.recipient_team_id)
+        setState({ delivery, team })
+      })
+      .catch(e => alive && setState({ error: e.message || 'The report could not be loaded.' }))
+    return () => {
+      alive = false
+    }
+  }, [session, token])
+
+  if (!session) {
+    return (
+      <div className="space-y-4">
+        <p className="text-ink-soft text-[13.5px]">
+          Sign in with the email it was sent to, to view it and download the PDF.
+        </p>
+        <GateButton type="button" onClick={onSignIn}>
+          Sign in
+        </GateButton>
+      </div>
+    )
+  }
+  if (state.loading) {
+    return (
+      <p className="text-ink-soft text-[13px]" role="status">
+        Opening it from your account…
+      </p>
+    )
+  }
+  if (state.error) return <Notice blocked title={state.error} />
+
+  const { delivery, team } = state
+  if (!team) {
+    return (
+      <div className="space-y-4">
+        <p className="text-ink-soft text-[13.5px]">
+          {delivery
+            ? 'Your team sent this report, and the person it went to has saved it.'
+            : 'It was saved to an account you aren’t signed in to. Sign in with the email it was sent to.'}
+        </p>
+        {!delivery && (
+          <GateButton type="button" onClick={signOut}>
+            Sign out
+          </GateButton>
+        )}
+      </div>
+    )
+  }
+
+  const where =
+    filed !== undefined ? filed : delivery.recipient_location_id ? 'one of its properties' : null
+  return (
+    <div>
+      <Report preview={asPreview(delivery)} getUrl={() => savedReportFileUrl(delivery.file_path)} />
+      <div className="border-hair mt-6 border-t pt-5">
+        {filed === undefined && !delivery.recipient_location_id ? (
+          <FileReport team={team} delivery={delivery} onDone={setFiled} />
+        ) : (
+          <Saved team={team} where={where} />
+        )}
+      </div>
     </div>
   )
 }
@@ -147,6 +247,13 @@ function Report({ preview, token }) {
 export default function ReportLink({ hash }) {
   const token = reportTokenFrom(hash)
   const [state, setState] = useState({ loading: true })
+  const { session } = useAuth()
+  // Signing in or up to save the report: the whole page, until there's a session.
+  const [auth, setAuth] = useState(null)
+  const startAuth = mode => {
+    rememberReport(token)
+    setAuth(mode)
+  }
 
   const load = useCallback(async () => {
     if (!token) return setState({ preview: null })
@@ -171,6 +278,8 @@ export default function ReportLink({ hash }) {
       Go to Pemcora
     </button>
   )
+
+  if (auth && !session) return <AuthScreen report={{ mode: auth, onBack: () => setAuth(null) }} />
 
   if (state.loading) {
     return (
@@ -218,21 +327,19 @@ export default function ReportLink({ hash }) {
           Report links work for 90 days. Ask {from} to send it again: a new link takes them a
           moment.
         </p>
+        <SaveReport token={token} expired onAuth={startAuth} />
       </GateLayout>
     )
   }
 
   if (preview.status === 'saved') {
     return (
-      <GateLayout title="This report has been saved to a Pemcora account" footer={footer}>
-        <div className="space-y-4">
-          <p className="text-ink-soft text-[13.5px]">
-            Sign in with the email it was sent to, to view it and download the PDF.
-          </p>
-          <GateButton type="button" onClick={leave}>
-            Sign in
-          </GateButton>
-        </div>
+      <GateLayout
+        wide={Boolean(session)}
+        title="This report has been saved to a Pemcora account"
+        footer={footer}
+      >
+        <SavedReport token={token} onSignIn={() => startAuth('sign-in')} />
       </GateLayout>
     )
   }
@@ -245,7 +352,8 @@ export default function ReportLink({ hash }) {
       subtitle={`A report sent to you from ${reportSummary(preview).business || from}.`}
       footer={footer}
     >
-      <Report preview={preview} token={token} />
+      <Report preview={preview} getUrl={() => reportFileUrl(token)} />
+      <SaveReport token={token} onAuth={startAuth} />
     </GateLayout>
   )
 }

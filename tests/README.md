@@ -307,6 +307,23 @@ one asks the database nothing (29 checks).
 node tests/report-file.mjs
 ```
 
+`report-save.mjs` is step D3c: the saving helpers in Node, then the page in a browser with the
+sign-in server and the database answered by the test. It signs in through the page's own form
+with a made-up account. Signed out, the report offers an account, and a sign-up made for it
+comes back to it once, after the email is confirmed. Someone with no landlord or agency account
+makes one there, named from their address, and the report is saved into it by its token. A
+report not filed by itself asks which property: one in the account, or a new one at the report's
+address under its owner, the electrician's client name filled in, an owner of that name already
+there reused and a new name making a new owner. One filed by itself says where; with two
+accounts they choose. The wrong address is offered a way to sign out; the sender is told only
+the recipient can save it. An expired link can still be saved. A saved report opens for its own
+account, its PDF through that account's access, and for no one else (43 checks). The page checks
+need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/report-save.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew

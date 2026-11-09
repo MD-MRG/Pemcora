@@ -88,3 +88,50 @@ export function reportSummary(preview) {
     hasFile: Boolean(preview?.hasFile),
   }
 }
+
+// ── Saving it (D3c) ──────────────────────────────────────────────────────────
+
+// A report being saved, remembered on this device while its new account is
+// confirmed: the confirmation link opens the app, not the report, and this is
+// how it gets back there. Kept a week at most, and used once.
+const PENDING = 'pemcora.pendingReport'
+const WEEK = 7 * 24 * 60 * 60 * 1000
+
+export function rememberReport(token, storage = globalThis.localStorage) {
+  try {
+    storage?.setItem(PENDING, JSON.stringify({ token, at: Date.now() }))
+  } catch {
+    /* private browsing: they'll open the email's link again */
+  }
+}
+
+/** The report to go back to, once: reading it forgets it. */
+export function takePendingReport(storage = globalThis.localStorage, now = Date.now()) {
+  try {
+    const saved = JSON.parse(storage?.getItem(PENDING) ?? 'null')
+    storage?.removeItem(PENDING)
+    if (!saved || now - saved.at > WEEK || !UUID.test(saved.token ?? '')) return null
+    return saved.token
+  } catch {
+    return null
+  }
+}
+
+/** "Jane Citizen's properties", from the address signed in with, for a new account's name. */
+export function defaultAccountName(email) {
+  const words = String(email ?? '')
+    .split('@')[0]
+    .split('+')[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1))
+    .join(' ')
+  return words ? `${words}'s properties` : 'My properties'
+}
+
+/** An account's properties, by address, each with its owner. */
+export function propertyChoices(clients) {
+  return (clients ?? [])
+    .flatMap(c => (c.locations ?? []).map(l => ({ id: l.id, label: siteLine(l), owner: c.name })))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}

@@ -1285,6 +1285,72 @@ export async function reportFileUrl(token) {
   return data.url
 }
 
+// ── Saving a report to an account (D3c) ──────────────────────────────────────
+
+/** The person's landlord and agency accounts, which are what a report is saved to. */
+export async function receivingTeams() {
+  const { data, error } = await supabase
+    .from('teams')
+    .select('id, name, account_type')
+    .in('account_type', ['landlord', 'agency'])
+    .order('name', { ascending: true })
+  if (error) throw error
+  return data.map(t => ({ id: t.id, name: t.name, accountType: t.account_type }))
+}
+
+/**
+ * A report link's delivery, if the person signed in may read it: they're in the
+ * team that sent it, or the account it was saved to (0007's policy). Null for
+ * anyone else, and for a link that leads nowhere.
+ */
+export async function deliveryByToken(token) {
+  const { data, error } = await supabase
+    .from('report_deliveries')
+    .select('id, provider_team_id, recipient_team_id, recipient_location_id, workflow_id, completed_on, outcome, site, snapshot, file_path')
+    .eq('token', token)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+/** A link to a saved report's PDF for its own account, good for five minutes. */
+export async function savedReportFileUrl(path) {
+  const { data, error } = await supabase.storage.from('reports').createSignedUrl(path, 300)
+  if (error) throw error
+  return data.signedUrl
+}
+
+/** Saves a report into one of the person's landlord or agency accounts. Files it when the address matches. */
+export async function claimReport(token, teamId) {
+  const { data, error } = await supabase.rpc('claim_report', { p_token: token, p_team_id: teamId })
+  if (error) throw error
+  return data
+}
+
+/** Files a saved report under one of its account's properties. */
+export async function fileReport(deliveryId, locationId) {
+  const { data, error } = await supabase.rpc('file_report', { p_delivery_id: deliveryId, p_location_id: locationId })
+  if (error) throw error
+  return data
+}
+
+/**
+ * A new property from a report's address, under its owner: one of that name
+ * already in the account, or a new one (M.D., D3c).
+ */
+export async function createProperty(teamId, owner, site) {
+  const name = String(owner ?? '').trim()
+  const clients = await listClients(teamId)
+  const client = clients.find(c => c.name.trim().toLowerCase() === name.toLowerCase()) ?? (await createClient(teamId, name))
+  return addLocation(teamId, client.id, {
+    address: site?.address,
+    suburb: site?.suburb,
+    city: site?.city,
+    state: site?.state,
+    postcode: site?.postcode,
+  })
+}
+
 /** The reports sent from a visit, newest first. */
 export async function listSentReports(visitId) {
   const { data, error } = await supabase
