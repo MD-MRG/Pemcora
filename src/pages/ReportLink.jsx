@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   deliveryByToken,
+  receivedByToken,
   previewReport,
   receivingTeams,
   reportFileUrl,
@@ -177,11 +178,13 @@ function SavedReport({ token, onSignIn }) {
   useEffect(() => {
     if (!session) return
     let alive = true
-    Promise.all([deliveryByToken(token), receivingTeams()])
-      .then(([delivery, teams]) => {
-        if (!alive) return
-        const team = delivery && teams.find(t => t.id === delivery.recipient_team_id)
-        setState({ delivery, team })
+    // Theirs through received_reports() (0013), without the sender's ids; failing
+    // that, the team that sent it reads its own row.
+    Promise.all([receivedByToken(token), receivingTeams()])
+      .then(async ([received, teams]) => {
+        const team = received && teams.find(t => t.id === received.recipient_team_id)
+        const delivery = received ?? (await deliveryByToken(token))
+        if (alive) setState({ delivery, team })
       })
       .catch(e => alive && setState({ error: e.message || 'The report could not be loaded.' }))
     return () => {

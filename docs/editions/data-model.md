@@ -203,6 +203,8 @@ publishable key in the bundle. Anything React hides, the REST API still answers.
 | `claim_report(token, team)` | the addressee only | saves into their landlord/agency team; auto-files when the address matches; works after the link expires |
 | `file_report(delivery, location)` | recipient members | files an unfiled report under a property |
 | `revoke_report(delivery)` | provider members | withdraws a report until it's claimed |
+| `received_reports()` | the account a report was saved to | its reports, without the sender's ids: no sending team, site, visit or sender, and the snapshot without the sender's team or who signed it off; with `files_itself` (0013). The row itself is the sender's only |
+| `stop_auto_filing(delivery)` | the account it was saved to | the report's site stops filing its next reports into the account by themselves; the report stays filed (0013) |
 | `due_list(team, within_days, expiry_months)` | members | the Due page: overdue, due soon, "not done yet" sites on a regular interval, and alarms expiring |
 | `due_opt_outs(team)` | members | the Due page's "no longer needed": which of the team's checks a client opted out of, from the opt-out list (0009) |
 | `my_devices()` | signed-in users | your own logins: id, browser details, signed in and last used; no tokens or IP addresses (0010) |

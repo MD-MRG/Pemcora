@@ -1679,6 +1679,26 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
 - Read deliveries through a view that leaves out the provider-side ids
   (`provider_team_id`, `provider_location_id`, `visit_id`, `sent_by`, and the sign-off's
   `signed_by` inside the snapshot).
+- **M.D.'s note (9 November):** four commits: D4a migration 0013 and its SQL tests; D4b
+  landlord and agency sign-up and the Reports page; D4c the Properties page; D4d hand-entered
+  checks with a certificate upload on Pro, and the Due page. The landlord's Due page is the
+  electricians' Due page, across their properties. A hand-entered check is a name, how often
+  it's due in months, and when it was last done: Pemcora claims no legal intervals for them.
+- How D4a (migration 0013) came out:
+  - `report_deliveries` is read directly by the team that sent it only. The account it was
+    saved to reads `received_reports()` instead: every column it needs, none of the sender's
+    ids, and the snapshot without the sender's team or who signed it off. A function rather
+    than the view the plan named: a view that leaves RLS behind is what Supabase's advisor
+    flags, and this one has to, to read rows the landlord no longer can.
+  - `site_links` holds the sender's site and team too, so it's the sender's to read as well.
+    The landlord sees `files_itself` on each report, and `stop_auto_filing(report)` ends it.
+    Deleting a link directly is no longer allowed.
+  - The PDF stays readable by the account it was saved to: the bucket's rule asks
+    `can_read_received_report()`, which says only whether the asker may read that one file.
+  - A report's PDF is named `<sending team>/<name>.pdf`, and the bucket needs the name to make
+    a link, so the team's id is in `file_path`. It opens nothing.
+  - Re-running 0007 by itself puts back its policies, so 0013 is re-run after it.
+  - The saved report on a report link (D3c) now reads through `received_reports()`.
 
 ### Phase E — Billing and limits
 

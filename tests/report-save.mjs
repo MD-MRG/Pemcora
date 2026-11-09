@@ -77,6 +77,7 @@ const fresh = () => {
     preview: [PREVIEW],
     teams: [],
     delivery: null,
+    received: null,
     claim: 'unfiled',
     clients: [{ id: 'c-rental', name: 'rental co', team_id: 't', locations: [{ id: 'loc-other', address: '5 Other St', suburb: 'Kew', floors: [] }] }],
     calls: [],
@@ -111,6 +112,13 @@ async function backend(route) {
     const one = (req.headers().accept ?? '').includes('vnd.pgrst.object')
     if (one) return server.delivery ? reply(200, server.delivery) : reply(406, { code: 'PGRST116', message: 'no rows', details: 'The result contains 0 rows', hint: null })
     return reply(200, server.delivery ? [server.delivery] : [])
+  }
+  if (path === '/rest/v1/rpc/received_reports') {
+    const one = (req.headers().accept ?? '').includes('vnd.pgrst.object')
+    const asked = (url.searchParams.get('token') ?? '').replace('eq.', '')
+    const row = server.received && server.received.token === asked ? server.received : null
+    if (one) return row ? reply(200, row) : reply(406, { code: 'PGRST116', message: 'no rows', details: 'The result contains 0 rows', hint: null })
+    return reply(200, row ? [row] : [])
   }
   if (path === '/rest/v1/rpc/create_organisation') {
     const team = { id: `team-${server.teams.length + 1}`, name: body.p_name, accountType: body.p_account_type }
@@ -287,20 +295,29 @@ try {
     fresh()
     server.preview = [{ ...PREVIEW, status: 'saved', snapshot: null, site: null, claimed: true }]
     server.teams = [{ id: 'team-a', name: 'Jane Rentals', accountType: 'landlord' }]
-    server.delivery = { id: 'd1', provider_team_id: null, recipient_team_id: 'team-a', recipient_location_id: null, workflow_id: 'qld_smoke_alarm', completed_on: '2026-11-06', outcome: 'compliant', site: SITE, snapshot: SNAPSHOT, file_path: 'team-p/abc.pdf' }
+    // D4a (0013): the account it was saved to reads it through received_reports(), not the row.
+    server.received = { id: 'd1', token: TOKEN, recipient_team_id: 'team-a', recipient_location_id: null, workflow_id: 'qld_smoke_alarm', completed_on: '2026-11-06', outcome: 'compliant', site: SITE, snapshot: SNAPSHOT, has_file: true, file_path: 'team-p/abc.pdf', files_itself: false }
     await open()
     log('a saved report asks them to sign in', (await page.getByRole('button', { name: 'Sign in' }).count()) === 1 && !/Toowong/.test(await body()))
     await signIn()
     log('signed in to its account, the report opens', await until(async () => /Sparky Co/.test(await body())) && /10 Smith St, Toowong QLD 4066/.test(await body()))
     log('…and, not filed yet, asks which property', /Which property is it for\?/.test(await body()))
-    const popup = page.waitForEvent('popup', { timeout: 8000 })
-    await page.getByRole('button', { name: 'Open the PDF' }).click()
+    const popup = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null)
+    await page.getByRole('button', { name: 'Open the PDF' }).click({ timeout: 5000 }).catch(() => {})
     const tab = await popup
-    await until(async () => tab.url().includes('token=mine'))
-    log('its PDF opens through the account\'s own access, not the link', /\/storage\/v1\/object\/sign\/reports\/team-p\/abc\.pdf\?token=mine$/.test(tab.url()) && calls('/functions/v1/report-file').length === 0, tab.url())
+    if (tab) await until(async () => tab.url().includes('token=mine'))
+    log('its PDF opens through the account\'s own access, not the link', /\/storage\/v1\/object\/sign\/reports\/team-p\/abc\.pdf\?token=mine$/.test(tab?.url() ?? '') && calls('/functions/v1/report-file').length === 0, tab?.url())
     const signCall = server.calls.find(c => c.path.startsWith('/storage/v1/object/sign/reports/') && c.method === 'POST')
     log('…signed in as them', (signCall?.auth ?? '').startsWith('Bearer ey'))
-    await tab.close()
+    log('…read through received_reports(), never the delivery row', calls('/rest/v1/rpc/received_reports').length >= 1 && calls('/rest/v1/report_deliveries').length === 0)
+    await tab?.close()
+
+    fresh()
+    server.preview = [{ ...PREVIEW, status: 'saved', snapshot: null, site: null, claimed: true }]
+    server.delivery = { id: 'd1', provider_team_id: 'team-p', recipient_team_id: 'team-x' }
+    await open()
+    await signIn()
+    log('the team that sent it is told its recipient saved it, and shown nothing more', await until(async () => /Your team sent this report, and the person it went to has saved it./.test(await body())) && !/Toowong/.test(await body()))
 
     fresh()
     server.preview = [{ ...PREVIEW, status: 'saved', snapshot: null, site: null, claimed: true }]

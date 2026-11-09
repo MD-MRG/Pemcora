@@ -1,14 +1,14 @@
 """
-Proves 0006 to 0012 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0013 on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
-the app did, then applies 0006 to 0012 twice (re-run safety) and drives every
+the app did, then applies 0006 to 0013 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
 All the files live in supabase/migrations. A second folder, if given, is where
-0006 to 0012 are read from instead (a copy with a fix being tried, say).
+0006 to 0013 are read from instead (a copy with a fix being tried, say).
 
 Connection details come from the usual libpq variables (PGHOST, PGPORT, PGUSER,
 PGPASSWORD). It drops and recreates a database called pemcora_editions_test and
@@ -28,7 +28,7 @@ OLD = Path(sys.argv[1])
 NEW = Path(sys.argv[2]) if len(sys.argv) > 2 else OLD
 EDITIONS = ("0006_editions.sql", "0007_compliance_and_reports.sql", "0008_signup.sql", "0009_due_opt_outs.sql",
             "0010_signed_in_devices.sql", "0011_report_sending.sql",
-            "0012_report_file_access.sql")
+            "0012_report_file_access.sql", "0013_received_reports.sql")
 STUB =Path(__file__).parent / "00_supabase_stub.sql"
 TEST_DB = "pemcora_editions_test"
 ADMIN = "dbname=postgres"
@@ -126,7 +126,7 @@ act(O, "insert into public.locations (id, client_id, team_id, address, suburb) v
     [L0, L0_CLIENT, T0])
 act(O, "insert into public.visits (team_id, location_id, kind, completed_at) values (%s, %s, 'maintenance', now())", [T0, L0])
 
-# ── 0006 to 0012, twice ────────────────────────────────────────────────────
+# ── 0006 to 0013, twice ────────────────────────────────────────────────────
 for attempt in (1, 2):
     for f in EDITIONS:
         try:
@@ -368,8 +368,11 @@ check("the landlord sees none of the provider's own records",
       one(J, "select count(*) from public.visits where team_id = %s", [TA]) == 0
       and one(J, "select count(*) from public.clients where team_id = %s", [TA]) == 0
       and one(J, "select count(*) from public.locations where team_id = %s", [TA]) == 0)
-check("both sides can see the site link, nobody else",
-      one(A, "select count(*) from public.site_links") == 1 and one(J, "select count(*) from public.site_links") == 1
+# D4a (0013): the link holds the sender's site and team, so it's the sender's to
+# read. The landlord sees it as "files itself" on the report instead.
+check("the sender sees the site link; the landlord sees it only as the report filing itself; nobody else",
+      one(A, "select count(*) from public.site_links") == 1 and one(J, "select count(*) from public.site_links") == 0
+      and one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is True
       and one(X, "select count(*) from public.site_links") == 0)
 
 V2 = uuid.uuid4()
@@ -1987,6 +1990,55 @@ try:
 except psycopg.Error:
     again = []
 check("D3b: 0012 re-runs, and the lookup still works", len(again) == 1)
+
+# ── Step D4a: landlords read their reports without the sender's ids (0013) ────
+print("\n— Step D4a: what the account a report was saved to reads, and what it doesn't")
+# 0007 was re-run by itself above, which puts back its policies: re-running 0013
+# after it is how it's applied.
+run_file(NEW / "0013_received_reports.sql")
+check("D4a: the landlord no longer reads the delivery row itself", one(J, "select count(*) from public.report_deliveries") == 0)
+check("D4a: …the team that sent it still does", one(A, "select count(*) from public.report_deliveries where id = %s", [D1]) == 1)
+mine = act(J, "select id, workflow, completed_on, recipient_email, file_path, recipient_location_id, snapshot from public.received_reports() where id = %s", [D1])
+check("D4a: received_reports() gives the landlord their report, filed where it is",
+      len(mine) == 1 and mine[0][1] == "Electrical safety check" and mine[0][3] == "jane@landlord.test" and mine[0][5] == JL, str(mine[0][:6]) if mine else "none")
+returned = su("select pg_get_function_result('public.received_reports()'::regprocedure)")[0][0]
+check("D4a: …and none of the sender's ids", not any(c in returned for c in ("provider_team_id", "provider_location_id", "visit_id", "sent_by", "claimed_by")), returned)
+snap = mine[0][6] if mine else {}
+check("D4a: …nor the sender's team or who signed it off, inside the report",
+      "team_id" not in (snap.get("provider") or {}) and "signed_by" not in (snap.get("signoff") or {}) and (snap.get("provider") or {}).get("name"))
+check("D4a: the team that sent it isn't given it that way", one(A, "select count(*) from public.received_reports()") == 0)
+check("D4a: …nor is anyone else", one(X, "select count(*) from public.received_reports()") == 0)
+refused("D4a: signed out, nothing", None, "select * from public.received_reports()", sqlstate="42501")
+check("D4a: the landlord still reads the report's PDF",
+      one(J, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 1)
+check("D4a: …and the sender theirs; an outsider neither",
+      one(A, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 1
+      and one(X, "select count(*) from storage.objects where bucket_id = 'reports' and name = %s", [f"{TA}/r1.pdf"]) == 0)
+check("D4a: the PDF check answers only for the asker's own reports",
+      one(J, "select public.can_read_received_report(%s)", [f"{TA}/r1.pdf"]) is True
+      and one(X, "select public.can_read_received_report(%s)", [f"{TA}/r1.pdf"]) is False)
+
+check("D4a: the landlord sees whether a report's site files itself", one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is True)
+refused("D4a: …can't delete the link directly any more", J, "delete from public.site_links", sqlstate="42501")
+refused("D4a: an outsider can't stop it filing", X, "select public.stop_auto_filing(%s)", [D1], contains="not in your account")
+refused("D4a: …nor can the team that sent it, this way", A, "select public.stop_auto_filing(%s)", [D1], contains="not in your account")
+D4_LINKS = su("select count(*) from public.site_links where recipient_team_id = %s", [TJ])[0][0]
+act(J, "select public.stop_auto_filing(%s)", [D1])
+check("D4a: the landlord stops it filing itself", one(J, "select files_itself from public.received_reports() where id = %s", [D1]) is False
+      and su("""select count(*) from public.site_links l join public.report_deliveries d
+                  on d.provider_location_id = l.provider_location_id and d.recipient_team_id = l.recipient_team_id
+                 where d.id = %s""", [D1])[0][0] == 0
+      and su("select count(*) from public.site_links where recipient_team_id = %s", [TJ])[0][0] == D4_LINKS - 1, f"{D4_LINKS} links before")
+check("D4a: …and the report stays filed where it was", one(J, "select recipient_location_id from public.received_reports() where id = %s", [D1]) == JL)
+V4A = uuid.uuid4()
+act(A, "insert into public.visits (id, team_id, location_id, kind) values (%s, %s, %s, 'vic_electrical_safety')", [V4A, TA, LOCS[0]])
+act(A, "update public.visits set completed_at = now(), outcome = 'compliant' where id = %s", [V4A])
+nxt = act(A, "select recipient_team_id, recipient_location_id from public.send_report(%s, 'jane@landlord.test')", [V4A])[0]
+check("D4a: the next report for that site waits to be saved, instead of filing itself", nxt[0] is None and nxt[1] is None, str(nxt))
+
+run_file(NEW / "0013_received_reports.sql")   # re-run last, after every other file's re-runs
+check("D4a: 0013 re-runs, and the landlord still reads only through it",
+      one(J, "select count(*) from public.report_deliveries") == 0 and one(J, "select count(*) from public.received_reports() where id = %s", [D1]) == 1)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

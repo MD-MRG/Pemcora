@@ -1,9 +1,9 @@
-# SQL-level checks for 0006 to 0012
+# SQL-level checks for 0006 to 0013
 
 `run_tests.py` builds a throwaway database from the real `supabase/migrations/0001–0005`,
-makes a team the way the app used to, applies `0006` to `0012` twice (re-run
+makes a team the way the app used to, applies `0006` to `0013` twice (re-run
 safety), then drives every gate, policy and RPC as real signed-in roles with RLS on.
-424 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
+445 checks: grandfathering, the enforcement switch, packs, the monthly allowance,
 seats and invites, the column lock on `teams`, the re-check clock, photo gating,
 storage folders, and the whole report delivery → claim → auto-file loop. Then
 the build plan's Phase A rules: a second device joining an open visit, visit
@@ -28,7 +28,12 @@ longer counting), a report with a note still saying `[timeframe]` refused, the s
 helpers closed to clients, and 0011 re-run after everything else, since re-running 0007 by
 itself puts back `send_report()` without the cap. Then step D3b: with the service-role key, the
 `report-file` function's lookup works, and nothing else on `report_deliveries` does (not the
-recipient's address, the report, every column, or a change), and 0012 re-runs.
+recipient's address, the report, every column, or a change), and 0012 re-runs. Then step D4a:
+the account a report was saved to reads it only through `received_reports()`, without the
+sender's ids inside or out; the sender still reads its own row; nobody else gets either; the
+saved account still reads the PDF, and the PDF check answers only for the asker's own; the
+landlord sees whether a report files itself and stops it with `stop_auto_filing()`, not by
+deleting the link; and 0013 re-runs after 0007's.
 
 `00_supabase_stub.sql` stands in for the parts of Supabase plain Postgres lacks:
 the `anon` / `authenticated` / `service_role` roles, `auth.users`, `auth.sessions` and

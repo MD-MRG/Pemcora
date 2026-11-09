@@ -1299,9 +1299,9 @@ export async function receivingTeams() {
 }
 
 /**
- * A report link's delivery, if the person signed in may read it: they're in the
- * team that sent it, or the account it was saved to (0007's policy). Null for
- * anyone else, and for a link that leads nowhere.
+ * A report link's delivery, if the person signed in is in the team that sent it
+ * (0013: only the sender reads the row itself; the account it was saved to reads
+ * receivedByToken). Null for anyone else, and for a link that leads nowhere.
  */
 export async function deliveryByToken(token) {
   const { data, error } = await supabase
@@ -1309,6 +1309,17 @@ export async function deliveryByToken(token) {
     .select('id, provider_team_id, recipient_team_id, recipient_location_id, workflow_id, completed_on, outcome, site, snapshot, file_path')
     .eq('token', token)
     .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+/**
+ * A report saved to one of the person's accounts, by its link's token, through
+ * received_reports() (0013): what the account reads, without the sender's ids.
+ * Null when it isn't theirs.
+ */
+export async function receivedByToken(token) {
+  const { data, error } = await supabase.rpc('received_reports').eq('token', token).maybeSingle()
   if (error) throw error
   return data
 }
