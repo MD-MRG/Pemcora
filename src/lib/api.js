@@ -1242,6 +1242,29 @@ export async function withdrawReport(deliveryId) {
   if (error) throw error
 }
 
+/**
+ * What a report link shows (D3), to anyone holding it, signed in or not:
+ * { status: 'ok' | 'expired' | 'saved', ... }, or null for a link that leads
+ * nowhere. Only 'ok' carries the report. Marks the report opened.
+ */
+export async function previewReport(token) {
+  const { data, error } = await supabase.rpc('report_preview', { p_token: token })
+  if (error) throw error
+  const row = data?.[0]
+  if (!row) return null
+  return {
+    status: row.status,
+    workflow: row.workflow,
+    provider: row.provider,
+    completedOn: row.completed_on,
+    outcome: row.outcome,
+    site: row.site,
+    snapshot: row.snapshot,
+    hasFile: Boolean(row.has_file),
+    claimed: Boolean(row.claimed),
+  }
+}
+
 /** The reports sent from a visit, newest first. */
 export async function listSentReports(visitId) {
   const { data, error } = await supabase

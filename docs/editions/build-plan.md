@@ -1608,6 +1608,24 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   the cases where `report_preview()` would show the report.
 - "Save to your account": sign up or sign in with the same email, then `claim_report()`,
   then filing (pick a property or create it from the report's address).
+- **M.D.'s note (9 November):** three commits, with saving in D3: D3a the page and its
+  states; D3b the `report-file` function; D3c "Save to your account", which makes a landlord
+  or agency account there and then for someone who has none. Only a report link opens that:
+  general sign-up for landlords and agencies still opens in D4. A working link shows a
+  summary and the PDF, not the whole report as a page.
+- How D3a (the page) came out:
+  - `#/r/<token>` opens in front of the sign-in gate, signed in or not, and from a link
+    followed inside the app too. A link whose token isn't well formed asks the database
+    nothing.
+  - A working link shows who sent it, with their licence, REC, phone and email; the check,
+    the address, the client, the date, the outcome, who signed it off and, for a revision,
+    that it replaces the one before; then each issue with where it is and its note. All of it
+    is what `report_preview()` returns: the business and sign-off as the database wrote them.
+  - An expired link says so and names who to ask for a new one. A saved report asks them to
+    sign in. Neither shows anything of the report, since the database doesn't return it.
+  - With no connection the page says so, and "Try again" opens it once there is one.
+  - Opening the link marks the report opened (`report_preview()`), even when it's the sender
+    who opens it.
 
 #### D4. Landlord and agency side
 

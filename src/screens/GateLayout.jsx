@@ -3,10 +3,11 @@ import { BrandMark } from '../components/icons.jsx'
 // The shell every pre-app screen sits in: not-configured, sign-in, onboarding.
 // Centred and narrow on purpose — none of these is a place to linger, and the
 // full navy rail would imply an app the person cannot reach yet.
-export default function GateLayout({ title, subtitle, children, footer }) {
+// `wide` is for the one screen that shows something to read: a report link (D3).
+export default function GateLayout({ title, subtitle, children, footer, wide = false }) {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-stage px-4 py-10">
-      <div className="w-full max-w-[400px]">
+      <div className={`w-full ${wide ? 'max-w-[640px]' : 'max-w-[400px]'}`}>
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-navy text-brass">
             <BrandMark size={24} />

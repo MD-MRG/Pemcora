@@ -281,6 +281,19 @@ is refused before anything leaves the device (34 checks). The sending checks nee
 node tests/send-report.mjs
 ```
 
+`report-link.mjs` is step D3a: the link's helpers in Node, then the `#/r/<token>` page in a
+browser with `report_preview()` answered by the test. The page opens for whoever holds the
+link, in front of the sign-in gate, and from inside the app too. A malformed link asks the
+database nothing, and an unknown one says it isn't valid. A working link shows who sent it
+with their numbers, what, where, when, the outcome, the sign-off, a revision, and each issue
+with its note. An expired link names who to ask and a saved report asks them to sign in,
+neither showing anything of the report. With no connection it says so and tries again
+(29 checks). The page checks need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
+
+```
+node tests/report-link.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew
