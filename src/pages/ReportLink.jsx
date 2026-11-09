@@ -11,7 +11,13 @@ import { useAuth } from '../context/auth.js'
 import AuthScreen from '../screens/AuthScreen.jsx'
 import SaveReport, { FileReport, Saved } from './SaveReport.jsx'
 import { isNetworkFailure } from '../lib/saveErrors.js'
-import { rememberReport, reportSummary, reportTokenFrom } from '../lib/reportLink.js'
+import {
+  receivedAsPreview,
+  rememberReport,
+  reportSummary,
+  reportTokenFrom,
+} from '../lib/reportLink.js'
+import OpenPdf from '../components/OpenPdf.jsx'
 import Notice from '../components/Notice.jsx'
 import GateLayout, { GateButton } from '../screens/GateLayout.jsx'
 
@@ -31,66 +37,6 @@ function Row({ label, children }) {
     <div className="border-hair flex flex-wrap gap-x-4 gap-y-0.5 border-b py-2 last:border-0">
       <dt className="text-ink-soft w-32 shrink-0 text-[12.5px] font-semibold">{label}</dt>
       <dd className="text-ink min-w-0 flex-1 text-[13.5px]">{children}</dd>
-    </div>
-  )
-}
-
-// The PDF, through a link that lasts five minutes (report-file, D3b). The tab is
-// opened on the tap itself, while it still counts as one, or the browser blocks
-// it as a pop-up; it's pointed at the PDF once the link comes back.
-function OpenPdf({ getUrl, hasFile }) {
-  const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState('')
-  const [ready, setReady] = useState(null)
-
-  if (!hasFile)
-    return <p className="text-ink-soft text-[12.5px]">This report was sent without a PDF.</p>
-
-  const open = async () => {
-    setProblem('')
-    setReady(null)
-    setBusy(true)
-    const tab = window.open('', '_blank')
-    try {
-      const url = await getUrl()
-      if (tab) {
-        tab.opener = null
-        tab.location.replace(url)
-      } else {
-        setReady(url)
-      }
-    } catch (e) {
-      tab?.close()
-      setProblem(
-        navigator.onLine === false || e.network || isNetworkFailure(e)
-          ? 'Opening the PDF needs a connection.'
-          : e.message || 'The PDF could not be opened.',
-      )
-    }
-    setBusy(false)
-  }
-
-  return (
-    <div className="space-y-2">
-      <GateButton type="button" disabled={busy} onClick={open}>
-        {busy ? 'Opening…' : 'Open the PDF'}
-      </GateButton>
-      <p className="text-ink-soft text-[12.5px]">
-        The PDF is the full report, with every result. Save or print it from there.
-      </p>
-      {ready && (
-        <p className="text-[13px]">
-          <a
-            href={ready}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-navy font-semibold underline"
-          >
-            The PDF is ready: open it
-          </a>
-        </p>
-      )}
-      {problem && <Notice blocked title={problem} />}
     </div>
   )
 }
@@ -153,17 +99,6 @@ function Report({ preview, getUrl }) {
     </div>
   )
 }
-
-// A saved delivery, as its own account reads it, in the shape the page shows.
-const asPreview = d => ({
-  status: 'ok',
-  provider: d.snapshot?.provider?.name ?? '',
-  completedOn: d.completed_on,
-  outcome: d.outcome,
-  site: d.site,
-  snapshot: d.snapshot,
-  hasFile: Boolean(d.file_path),
-})
 
 /**
  * A saved report, for whoever signs in (D3c). Its own account sees it, its PDF
@@ -235,7 +170,10 @@ function SavedReport({ token, onSignIn }) {
     filed !== undefined ? filed : delivery.recipient_location_id ? 'one of its properties' : null
   return (
     <div>
-      <Report preview={asPreview(delivery)} getUrl={() => savedReportFileUrl(delivery.file_path)} />
+      <Report
+        preview={receivedAsPreview(delivery)}
+        getUrl={() => savedReportFileUrl(delivery.file_path)}
+      />
       <div className="border-hair mt-6 border-t pt-5">
         {filed === undefined && !delivery.recipient_location_id ? (
           <FileReport team={team} delivery={delivery} onDone={setFiled} />

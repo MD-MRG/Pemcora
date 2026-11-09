@@ -135,3 +135,14 @@ export function propertyChoices(clients) {
     .flatMap(c => (c.locations ?? []).map(l => ({ id: l.id, label: siteLine(l), owner: c.name })))
     .sort((a, b) => a.label.localeCompare(b.label))
 }
+
+/** A report as its account reads it (received_reports(), 0013), in the shape reportSummary() takes. */
+export const receivedAsPreview = d => ({
+  status: 'ok',
+  provider: d.snapshot?.provider?.name ?? '',
+  completedOn: d.completed_on,
+  outcome: d.outcome,
+  site: d.site,
+  snapshot: d.snapshot,
+  hasFile: Boolean(d.has_file ?? d.file_path),
+})

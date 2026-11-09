@@ -56,8 +56,20 @@ export function Saved({ team, where }) {
   )
 }
 
-/** Which property a saved report is for: one already in the account, or a new one from its address. */
-export function FileReport({ team, delivery, onDone }) {
+/**
+ * Which property a saved report is for: one already in the account, or a new one
+ * from its address. On a report link it asks the database itself
+ * (`loadClients`, `makeProperty`); inside the app (D4b) it's given the device's
+ * own copy, so the new property is there at once.
+ */
+export function FileReport({
+  team,
+  delivery,
+  onDone,
+  loadClients = () => listClients(team.id),
+  makeProperty = (owner, site) => createProperty(team.id, owner, site),
+  subtitle = `Saved to ${team.name}. Nothing there has this address yet.`,
+}) {
   const [choices, setChoices] = useState(null)
   const [choice, setChoice] = useState('new')
   const [owner, setOwner] = useState(delivery.snapshot?.client ?? '')
@@ -67,12 +79,15 @@ export function FileReport({ team, delivery, onDone }) {
 
   useEffect(() => {
     let alive = true
-    listClients(team.id)
+    Promise.resolve()
+      .then(loadClients)
       .then(clients => alive && setChoices(propertyChoices(clients)))
       .catch(e => alive && setProblem(e.message))
     return () => {
       alive = false
     }
+    // Read once, when it opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [team.id])
 
   const file = async () => {
@@ -80,7 +95,7 @@ export function FileReport({ team, delivery, onDone }) {
     setProblem('')
     try {
       if (choice === 'new') {
-        const place = await createProperty(team.id, owner, delivery.site)
+        const place = await makeProperty(owner.trim(), delivery.site)
         await fileReport(delivery.id, place.id)
         onDone(address)
       } else {
@@ -100,7 +115,7 @@ export function FileReport({ team, delivery, onDone }) {
     >
       <input
         type="radio"
-        name="property"
+        name={`property-${delivery.id}`}
         checked={choice === id}
         onChange={() => setChoice(id)}
         className="mt-1"
@@ -113,7 +128,7 @@ export function FileReport({ team, delivery, onDone }) {
     <div className="space-y-3">
       <div>
         <p className={heading}>Which property is it for?</p>
-        <p className={soft}>Saved to {team.name}. Nothing there has this address yet.</p>
+        <p className={soft}>{subtitle}</p>
       </div>
       <div className="space-y-2" role="radiogroup" aria-label="Property">
         {option(

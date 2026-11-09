@@ -324,6 +324,19 @@ need `VITE_SUPABASE_URL` in `.env`, though nothing is sent there.
 node tests/report-save.mjs
 ```
 
+`reports.mjs` is step D4b: a landlord's Reports page in a browser, with `received_reports()` and
+the report bucket answered by the test and the account's properties on the device. The reports
+are asked for by the account, the ones not filed first, each saying what, from whom, where, when,
+how it went and where it's filed. A PDF opens through the account's own access; one sent without
+says so. Filing makes the property in the device's copy under its owner, then files the report
+under it; a filed report can be moved; one whose site files itself can stop that, after asking.
+No reports, and no connection, each say so (23 checks). The checks need `VITE_SUPABASE_URL` in
+`.env`, though nothing is sent there.
+
+```
+node tests/reports.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew

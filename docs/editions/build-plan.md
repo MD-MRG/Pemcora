@@ -1699,6 +1699,18 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
     a link, so the team's id is in `file_path`. It opens nothing.
   - Re-running 0007 by itself puts back its policies, so 0013 is re-run after it.
   - The saved report on a report link (D3c) now reads through `received_reports()`.
+- How D4b (sign-up and Reports) came out:
+  - Landlord and Property management can be chosen at sign-up (`OPEN_NOW.receiving`).
+  - The Reports page lists the account's reports from `received_reports()`, the ones not filed
+    first. Each says what it is, from which business, the address, when it was done, how it went
+    and which property it's filed under, and opens its PDF through the account's own access.
+  - "File it" asks which property, as saving does (D3c). A new property is made in the device's
+    own copy, under its owner, and saved before the report is filed under it, so the Properties
+    page has it at once. With no signal the property stays on the device and the page says to
+    file the report once there is. A filed report can be moved.
+  - A report whose site files later reports by itself says so, with "Stop that", which asks
+    first and calls `stop_auto_filing()`.
+  - It needs a connection, and says so.
 
 ### Phase E — Billing and limits
 

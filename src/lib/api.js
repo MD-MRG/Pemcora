@@ -1324,6 +1324,22 @@ export async function receivedByToken(token) {
   return data
 }
 
+/** An account's reports, newest first (D4b), through received_reports(). */
+export async function listReceivedReports(teamId) {
+  const { data, error } = await supabase
+    .rpc('received_reports')
+    .eq('recipient_team_id', teamId)
+    .order('sent_at', { ascending: false })
+  if (error) throw error
+  return data ?? []
+}
+
+/** Stops the site a report came from filing later reports into the account by themselves. */
+export async function stopAutoFiling(deliveryId) {
+  const { error } = await supabase.rpc('stop_auto_filing', { p_delivery_id: deliveryId })
+  if (error) throw error
+}
+
 /** A link to a saved report's PDF for its own account, good for five minutes. */
 export async function savedReportFileUrl(path) {
   const { data, error } = await supabase.storage.from('reports').createSignedUrl(path, 300)
