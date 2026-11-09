@@ -665,7 +665,7 @@ try {
     log(`a ${accountType} has its own navigation`,
       labels.join() === 'Properties,Reports,Due,Teams,Settings', labels.join(' | '))
     log('and lands on its properties', await until(() => address(page) === '#/properties'), address(page))
-    log('which says what will appear there', /Your properties will appear here/.test(await mainText(page)))
+    log('where it can add one', await until(async () => /Add a property/.test(await mainText(page))))
     log('with the header to match', (await page.locator('h1').textContent()) === 'Properties')
 
     for (const link of ['Reports', 'Due']) {

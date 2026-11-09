@@ -1334,6 +1334,16 @@ export async function listReceivedReports(teamId) {
   return data ?? []
 }
 
+/** What each of the account's properties owes, and when (D4c). Members only, by RLS. */
+export async function listComplianceItems(teamId) {
+  const { data, error } = await supabase
+    .from('compliance_items')
+    .select('id, location_id, obligation, label, satisfied_by, interval_months, last_done_on, next_due_on, evidence_path, active')
+    .eq('team_id', teamId)
+  if (error) throw error
+  return data ?? []
+}
+
 /** Stops the site a report came from filing later reports into the account by themselves. */
 export async function stopAutoFiling(deliveryId) {
   const { error } = await supabase.rpc('stop_auto_filing', { p_delivery_id: deliveryId })

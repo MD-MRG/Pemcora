@@ -1711,6 +1711,19 @@ another: a phone or tablet that was lost, or a laptop or PC that was lost, stole
   - A report whose site files later reports by itself says so, with "Stop that", which asks
     first and calls `stop_auto_filing()`.
   - It needs a connection, and says so.
+- How D4c (Properties) came out:
+  - Each property, by address, under its owner, from the account's own records on the device:
+    the list, and "Add a property" (owner, address, suburb, state, postcode), work with no
+    signal. An owner of the same name is reused, and the same address under the same owner is
+    refused.
+  - Under each, what's due there from its `compliance_items`: overdue first, then due in the
+    next 60 days, then later, each with when it was last done. Then the reports filed there,
+    newest first, each opening its PDF.
+  - A business whose site files its reports there by itself is named once, with "Stop that"
+    (`stop_auto_filing()`, by its latest report).
+  - What's due and the reports need a connection; without one the page says so and offers to
+    try again, and the properties still show.
+  - Editing or removing a property isn't here yet.
 
 ### Phase E — Billing and limits
 

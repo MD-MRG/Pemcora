@@ -337,6 +337,21 @@ No reports, and no connection, each say so (23 checks). The checks need `VITE_SU
 node tests/reports.mjs
 ```
 
+`properties.mjs` is step D4c: `src/lib/properties.js` in Node (when a check is overdue or due soon,
+the order of properties, checks and reports, a site that files itself named once), then a
+landlord's Properties page in a browser, with `compliance_items`, `received_reports()` and the
+report bucket answered by the test. Each property shows by address under its owner, asking for
+the account's own records only; what's due, overdue first, with when it was last done, a check
+switched off left out; the reports filed there, newest first, each opening its PDF; a site that
+files there by itself named once, and "Stop that" stopping it by its latest report. A property
+added on the device goes under an owner already there or a new one, and the same address twice
+is refused. With no connection the properties still show and the page says what needs one; with
+none, it says how they arrive (30 checks).
+
+```
+node tests/properties.mjs
+```
+
 `devices-e2e.mjs` is the live run for C5, like `offline-e2e.mjs`: not in `npm test`, and
 only run by M.D., with a test account, once 0010 is applied. It signs in four times, lists
 the logins, ends one from another and the rest at once, checks the ended ones can't renew

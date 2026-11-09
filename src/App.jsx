@@ -15,6 +15,7 @@ import Settings from './pages/Settings.jsx'
 import Due from './pages/Due.jsx'
 import ReceivingHolding from './pages/ReceivingHolding.jsx'
 import Reports from './pages/Reports.jsx'
+import Properties from './pages/Properties.jsx'
 import Workflow from './pages/Workflow.jsx'
 import ReportLink from './pages/ReportLink.jsx'
 import { isReportLink, takePendingReport } from './lib/reportLink.js'
@@ -81,7 +82,7 @@ export default function App() {
                   <Route path="/checks-due" element={<Due />} />
                   <Route path="/teams" element={<Teams />} />
                   <Route path="/settings" element={<Settings />} />
-                  <Route path="/properties" element={<ReceivingHolding page="properties" />} />
+                  <Route path="/properties" element={<Properties />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/due" element={<ReceivingHolding page="due" />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
