@@ -342,7 +342,12 @@ export async function saveMemberPrefs(teamId, userId, patch) {
 
 // Null if this person isn't in the team. A null limit is no limit.
 export async function getEntitlements(teamId) {
-  const { data, error } = await supabase.rpc('team_entitlements', { p_team_id: teamId })
+  // Room photos are asked for beside the rest (0022): team_entitlements() is
+  // Phase E's to change, so it isn't touched for them.
+  const [{ data, error }, roomPhotos] = await Promise.all([
+    supabase.rpc('team_entitlements', { p_team_id: teamId }),
+    roomPhotosAllowed(teamId),
+  ])
   if (error) throw error
   if (!data) return null
   return {
@@ -361,6 +366,7 @@ export async function getEntitlements(teamId) {
     openVisits: Number(data.open_visits ?? 0),
     starterPack: data.starter_pack ?? null,
     starterInUse: !!data.starter_in_use,
+    roomPhotos,
   }
 }
 
@@ -1183,12 +1189,20 @@ export async function photoUrls(paths) {
 
 // ── Room photos (0022) ───────────────────────────────────────────────────────
 //
-// Photos kept with a site's room, not with a visit, each with a description and
-// the date it was added. The database sets that date itself, so it can't be
-// backdated. In the team's folder under rooms/<room id>/.
+// Photos kept with a site's room, not with a visit, in two groups (General and
+// Issues), each with a description and the date it was added. The database sets
+// that date itself, so it can't be backdated. Each photo is two files in the
+// team's folder under rooms/<room id>/: a display copy (1600 px) for the screen
+// and the PDF, and the best full-quality JPEG that fits the bucket, to download.
+// For now only teams M.D. switches on have them; Pro teams too once the limits
+// are on (room_photos_allowed()).
 
-export const ROOM_PHOTO_LIMIT = 10
+export const ROOM_PHOTO_LIMIT = 20 // a group
 export const CAPTION_LIMIT = 300
+export const PHOTO_GROUPS = [
+  { id: 'general', label: 'General' },
+  { id: 'issue', label: 'Issues' },
+]
 
 /**
  * The database has no attachments.room_id until 0022 is applied. A read of the
@@ -1197,19 +1211,26 @@ export const CAPTION_LIMIT = 300
  */
 export const roomPhotosMissing = error => error?.code === '42703' || error?.code === 'PGRST204'
 
-/** Whether the database has room photos yet: false until 0022 is applied. */
-export async function roomPhotosReady(teamId) {
-  const { error } = await supabase.from('attachments').select('room_id').eq('team_id', teamId).limit(1)
-  if (roomPhotosMissing(error)) return false
-  if (error) throw error
-  return true
+/**
+ * Whether this team has room photos. False before 0022 (no such function), and
+ * on any failure: the section simply stays hidden.
+ */
+export async function roomPhotosAllowed(teamId) {
+  try {
+    const { data, error } = await supabase.rpc('room_photos_allowed', { p_team_id: teamId })
+    return !error && data === true
+  } catch {
+    return false
+  }
 }
 
-const ROOM_PHOTO_COLUMNS = 'id, room_id, storage_path, caption, taken_at, created_by'
+const ROOM_PHOTO_COLUMNS = 'id, room_id, category, storage_path, original_path, caption, taken_at, created_by'
 const roomPhotoFromRow = (r, emails = {}) => ({
   id: r.id,
   roomId: r.room_id,
+  category: r.category ?? 'general',
   path: r.storage_path,
+  originalPath: r.original_path ?? null,
   caption: r.caption ?? '',
   takenAt: r.taken_at,
   createdBy: r.created_by ?? null,
@@ -1217,8 +1238,8 @@ const roomPhotoFromRow = (r, emails = {}) => ({
 })
 
 /**
- * A room's photos, newest first, each with who added it (their email). Null
- * when the database has no room photos yet (0022 not applied).
+ * A room's photos, newest first, each with its group and who added it (their
+ * email). Null when the database has no room photos yet (0022 not applied).
  */
 export async function listRoomPhotos(teamId, roomId) {
   const [photos, members] = await Promise.all([
@@ -1261,25 +1282,40 @@ export async function roomPhotosOf(teamId, roomIds) {
 }
 
 /**
- * Adds a photo to a room, already made small (photo.js). The room has to be in
- * the database first. As for a label photo: the record first, where the plan
- * says no with the code the upgrade sheet looks for, then the file; a file that
- * fails to upload takes its record with it.
+ * Adds a photo to a room's group: `files.display`, made small (photo.js), and
+ * `files.original`, the full-quality JPEG. The room has to be in the database
+ * first. As for a label photo: the record first, where the database says no
+ * with the code the app looks for, then the files; if either fails to upload,
+ * what went up is removed and the record with it.
  */
-export async function addRoomPhoto(teamId, roomId, blob, caption = '') {
-  const path = `${teamId}/rooms/${roomId}/${crypto.randomUUID()}.jpg`
+export async function addRoomPhoto(teamId, roomId, files, category, caption = '') {
+  const base = `${teamId}/rooms/${roomId}/${crypto.randomUUID()}`
+  const path = `${base}.jpg`
+  const originalPath = `${base}-original.jpg`
   const { data, error } = await supabase
     .from('attachments')
-    .insert({ team_id: teamId, room_id: roomId, storage_path: path, caption: String(caption).slice(0, CAPTION_LIMIT) })
+    .insert({
+      team_id: teamId,
+      room_id: roomId,
+      category,
+      storage_path: path,
+      original_path: originalPath,
+      caption: String(caption).slice(0, CAPTION_LIMIT),
+    })
     .select(ROOM_PHOTO_COLUMNS)
     .single()
   if (error) throw await whenParentGone(error, [['rooms', roomId]])
-  const { error: failed } = await supabase.storage
-    .from(EVIDENCE)
-    .upload(path, blob, { contentType: 'image/jpeg', upsert: false })
-  if (failed) {
-    await supabase.from('attachments').delete().eq('id', data.id)
-    throw failed
+  const sent = []
+  for (const [where, blob] of [[path, files.display], [originalPath, files.original]]) {
+    const { error: failed } = await supabase.storage
+      .from(EVIDENCE)
+      .upload(where, blob, { contentType: 'image/jpeg', upsert: false })
+    if (failed) {
+      if (sent.length) await supabase.storage.from(EVIDENCE).remove(sent)
+      await supabase.from('attachments').delete().eq('id', data.id)
+      throw failed
+    }
+    sent.push(where)
   }
   return roomPhotoFromRow(data)
 }
@@ -1293,9 +1329,27 @@ export async function setRoomPhotoCaption(photoId, caption) {
   if (error) throw error
 }
 
-/** Deletes a room photo: the file, then its record, so no record names a file that's gone. */
+/** Moves a room photo to the other group: 'general' or 'issue'. */
+export async function setRoomPhotoCategory(photoId, category) {
+  const { error } = await supabase.from('attachments').update({ category }).eq('id', photoId)
+  if (error) throw error
+}
+
+/**
+ * A link that downloads a photo's full-quality file, named `filename`, good
+ * for five minutes. A photo with no full-quality file gives its display copy.
+ */
+export async function originalPhotoUrl(photo, filename) {
+  const { data, error } = await supabase.storage
+    .from(EVIDENCE)
+    .createSignedUrl(photo.originalPath ?? photo.path, 300, { download: filename })
+  if (error) throw error
+  return data.signedUrl
+}
+
+/** Deletes a room photo: both its files, then its record, so no record names a file that's gone. */
 export async function deleteRoomPhoto(photo) {
-  const { error: failed } = await supabase.storage.from(EVIDENCE).remove([photo.path])
+  const { error: failed } = await supabase.storage.from(EVIDENCE).remove([photo.path, photo.originalPath].filter(Boolean))
   if (failed) throw failed
   const { error } = await supabase.from('attachments').delete().eq('id', photo.id)
   if (error) throw error
@@ -1310,11 +1364,12 @@ const chunks = (list, size) => Array.from({ length: Math.ceil(list.length / size
  */
 async function removeRoomPhotoFiles(roomIds) {
   for (const ids of chunks(roomIds.filter(Boolean), 100)) {
-    const { data, error } = await supabase.from('attachments').select('storage_path').in('room_id', ids)
+    const { data, error } = await supabase.from('attachments').select('storage_path, original_path').in('room_id', ids)
     if (roomPhotosMissing(error)) return
     if (error) throw error
-    for (const paths of chunks(data.map(r => r.storage_path), 100)) {
-      const { error: failed } = await supabase.storage.from(EVIDENCE).remove(paths)
+    const paths = data.flatMap(r => [r.storage_path, r.original_path]).filter(Boolean)
+    for (const some of chunks(paths, 100)) {
+      const { error: failed } = await supabase.storage.from(EVIDENCE).remove(some)
       if (failed) throw failed
     }
   }
