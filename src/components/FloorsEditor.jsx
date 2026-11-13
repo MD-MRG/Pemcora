@@ -49,7 +49,7 @@ export function RoomTypeSelect({ roomTypes, value, onChange, label, ariaLabel })
   )
 }
 
-function FloorBlock({ floor, index, roomTypes, setFloorLabel, setRoom, addRoom, removeRoom, registerRef }) {
+function FloorBlock({ floor, index, roomTypes, setFloorLabel, setRoom, addRoom, removeRoom, registerRef, roomExtra }) {
   return (
     <section className="border-hair rounded-xl border bg-white p-4 shadow-sm">
       <Field
@@ -62,7 +62,8 @@ function FloorBlock({ floor, index, roomTypes, setFloorLabel, setRoom, addRoom, 
 
       <div className="mt-4 flex flex-col gap-3">
         {floor.rooms.map((room, ri) => (
-          <div key={room.id} className="flex items-end gap-2">
+          <div key={room.id}>
+          <div className="flex items-end gap-2">
             <div
               className={`grid min-w-0 flex-1 grid-cols-1 gap-2 ${roomTypes.length ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}
             >
@@ -106,6 +107,9 @@ function FloorBlock({ floor, index, roomTypes, setFloorLabel, setRoom, addRoom, 
               </button>
             )}
           </div>
+          {/* Whatever the caller adds under a room: Edit Client its photos. */}
+          {roomExtra?.(room)}
+          </div>
         ))}
       </div>
 
@@ -124,6 +128,7 @@ export default function FloorsEditor({
   addRoom,
   removeRoom,
   addFloor,
+  roomExtra,
 }) {
   // Offered only to a team whose packs check rooms by type. Others see the editor
   // as it always was.
@@ -161,6 +166,7 @@ export default function FloorsEditor({
           addRoom={addRoom}
           removeRoom={askRemove}
           registerRef={registerRef}
+          roomExtra={roomExtra}
         />
       ))}
       <AddButton tone="strong" onClick={addFloor}>

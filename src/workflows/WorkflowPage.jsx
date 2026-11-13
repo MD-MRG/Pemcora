@@ -11,6 +11,7 @@ import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrows
 import { RoomTypeSelect } from '../components/FloorsEditor.jsx'
 import SiteStep from './SiteStep.jsx'
 import EquipmentPanel from './EquipmentPanel.jsx'
+import RoomPhotos from '../components/RoomPhotos.jsx'
 import { SITE, gapLines, isSiteOnly, siteSectionsOf } from '../lib/siteStep.js'
 import { panelTypes } from '../lib/equipment.js'
 import { IconTrash } from '../components/icons.jsx'
@@ -1189,6 +1190,10 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
             className="border-hair text-ink focus:border-navy w-full resize-y rounded-lg border px-3 py-2 text-[14px] outline-none"
           />
         </section>
+
+        {/* The room's own photos, not this visit's: they can be added whether
+            or not the visit is finished. */}
+        {room && <RoomPhotos room={room} />}
 
         {!readOnly && (
         <button

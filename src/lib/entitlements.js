@@ -214,6 +214,12 @@ export const photoSheet = () => ({
   ask: 'to upgrade',
 })
 
+/** Photos of a room on Free, once the limits are on: the same sheet, about the room. */
+export const roomPhotoSheet = () => ({
+  ...photoSheet(),
+  lines: ['Photos keep what a room looks like with the site, and go in its reports. The room itself is saved without them.'],
+})
+
 function packSheet(e, packId) {
   const label = packById(packId)?.label ?? packId
   const canSwap = swapTargets(e).some(pack => pack.id === packId)

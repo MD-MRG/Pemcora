@@ -15,6 +15,13 @@
  *     floor, site or client loses its photos' files before it goes
  *   - before 0022 is applied, room photos are simply not there, and deleting a
  *     room works as it always did
+ *   - the Photos section, on the room during a visit and in the site's room
+ *     editor: several photos at once, each made small (1600 px JPEG), newest
+ *     first, up to 10 a room; a description saved when its box is left, at most
+ *     300 characters; "Added <date> by <who>"; full size; delete after asking
+ *   - a refusal gets the upgrade sheet; with no signal it says so and sends
+ *     nothing; an observer can look but not change; with no team, or before
+ *     0022, there's no section at all
  */
 import { chromium } from 'playwright-core'
 import { testContext } from './harness.mjs'
@@ -50,6 +57,21 @@ const MEMBERS = [
   { user_id: ME, email: 'me@sparky.test', role: 'owner', joined_at: '2026-01-01T00:00:00Z' },
   { user_id: PAT, email: 'pat@sparky.test', role: 'member', joined_at: '2026-01-02T00:00:00Z' },
 ]
+
+// A JPEG's width and height, from its frame header, wherever in the body it sits.
+function jpegSize(buf) {
+  let i = buf.indexOf(Buffer.from([0xff, 0xd8, 0xff]))
+  if (i < 0) return null
+  i += 2
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) return null
+    const marker = buf[i + 1]
+    const length = buf.readUInt16BE(i + 2)
+    if (marker >= 0xc0 && marker <= 0xc3) return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) }
+    i += 2 + length
+  }
+  return null
+}
 
 // ── The stand-in database and photo bucket ──────────────────────────────────
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' }
@@ -207,7 +229,11 @@ async function backend(route) {
   }
   if (path.startsWith('/storage/v1/object/evidence/') && method === 'POST') {
     if (server.failUpload) return json(route, 500, { statusCode: '500', error: 'Internal', message: 'Storage is having a bad day' })
-    server.files.set(path.slice('/storage/v1/object/evidence/'.length), req.postDataBuffer() ?? PIXEL)
+    // A Blob goes up as a form; keep the JPEG inside it, as the bucket does.
+    const sent = req.postDataBuffer() ?? PIXEL
+    const start = sent.indexOf(Buffer.from([0xff, 0xd8, 0xff]))
+    const end = sent.lastIndexOf(Buffer.from([0xff, 0xd9]))
+    server.files.set(path.slice('/storage/v1/object/evidence/'.length), start >= 0 && end > start ? sent.subarray(start, end + 2) : sent)
     return json(route, 200, { Key: path.slice('/storage/v1/object/'.length) })
   }
   return route.abort()
@@ -364,6 +390,241 @@ try {
       !plain.error && !server.rooms.has('r1') && !server.requests.some(r => r.path.startsWith('/storage/')), JSON.stringify(plain))
     server.missing = false
     log('after 0022 the app can tell too', (await api('roomPhotosReady', TEAM)).value === true)
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // The Photos section, on the room during a visit and in the site's editor
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n— On the room during a visit')
+    reset()
+    // A photo as a camera hands it over, and a second one to go with it.
+    const picture = (w, h) =>
+      page
+        .evaluate(
+          async ({ w, h }) => {
+            const c = document.createElement('canvas')
+            c.width = w
+            c.height = h
+            const g = c.getContext('2d')
+            for (let i = 0; i < 300; i++) {
+              g.fillStyle = `hsl(${(i * 37) % 360} 70% 50%)`
+              g.fillRect((i * 97) % w, (i * 53) % h, w / 20, h / 20)
+            }
+            const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9))
+            const bytes = new Uint8Array(await blob.arrayBuffer())
+            let s = ''
+            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+            return btoa(s)
+          },
+          { w, h },
+        )
+        .then(b64 => Buffer.from(b64, 'base64'))
+    const camera = await picture(2400, 1800)
+    const small = await picture(800, 600)
+    // One already there, added by Pat.
+    server.rows.push({
+      id: 'seed-1', team_id: TEAM, room_id: 'r1', storage_path: `${TEAM}/rooms/r1/seed-1.jpg`, caption: 'Meter box, east wall',
+      taken_at: '2026-11-09T23:30:00.000Z', created_by: PAT,
+    })
+    server.files.set(`${TEAM}/rooms/r1/seed-1.jpg`, small)
+
+    const SEED = [{
+      id: 'c1', name: 'Acme Corp',
+      locations: [{
+        id: 'l1', address: '1 George St', suburb: 'Sydney', city: 'Sydney', state: 'NSW', postcode: '2000',
+        floors: [{ id: 'f1', label: 'Ground', rooms: [{ id: 'r1', name: 'Kitchen', planNumber: '' }, { id: 'r2', name: 'Lounge', planNumber: '' }] }],
+        visits: [],
+      }],
+    }]
+    const ENTITLEMENTS = {
+      enforced: false, accountType: 'provider', plan: 'free', isPro: false, seatLimit: 1, seatsUsed: 1,
+      visitLimit: 1, visitsUsed: 0, packs: ['core', 'av'], pastDueUntil: null,
+      cancelAt: null, importUsed: false, openVisits: 0, starterPack: 'av', starterInUse: false,
+    }
+    await page.evaluate(seed => {
+      localStorage.setItem('fc.clients', JSON.stringify(seed))
+      localStorage.removeItem('fc.templates')
+    }, SEED)
+    const openTeam = entitlements =>
+      page.evaluate(
+        async ({ team, e }) => {
+          const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/entitlements.js')).pop()
+          const mod = await import(url ?? '/src/lib/entitlements.js')
+          await mod.openEntitlements(team, 'user', { getEntitlements: async () => e })
+        },
+        { team: TEAM, e: entitlements },
+      )
+    let started = false
+    const openKitchen = async (entitlements = ENTITLEMENTS) => {
+      await page.goto(BASE + '#/maintenance', { waitUntil: 'networkidle' })
+      await page.reload({ waitUntil: 'networkidle' })
+      await openTeam(entitlements)
+      await page.locator('tbody tr').filter({ hasText: 'Acme Corp' }).click()
+      await page.locator('tbody tr').filter({ hasText: '1 George St' }).click()
+      if (!started) {
+        await page.getByRole('button', { name: /^Start PM$/ }).click()
+        started = true
+      }
+      await page.getByRole('button', { name: /^Kitchen/ }).first().click()
+    }
+    const section = () => page.getByRole('region', { name: 'Photos of Kitchen' })
+    const text = async () => ((await section().count()) ? await section().textContent() : '')
+
+    await openKitchen()
+    log('the room has a Photos section', await until(async () => /1 of 10/.test(await text())), await text())
+    log('showing the photo already there, through a short-lived link',
+      await until(async () => /token=t1/.test((await section().getByRole('img').first().getAttribute('src')) ?? '')))
+    log('with its description, and when and by whom it was added',
+      (await section().getByRole('textbox').first().inputValue()) === 'Meter box, east wall' &&
+        /Added 10 Nov 2026 by pat@sparky\.test/.test(await text()), await text())
+    log('without saying Pro while the limits are off', !/Photos\s*Pro/.test(await text()))
+
+    // ── Several at once ───────────────────────────────────────────────────────
+    server.requests = []
+    await page.getByLabel('Choose photos of Kitchen').setInputFiles([
+      { name: 'IMG_0001.jpg', mimeType: 'image/jpeg', buffer: camera },
+      { name: 'IMG_0002.jpg', mimeType: 'image/jpeg', buffer: small },
+    ])
+    log('two photos chosen at once both go in', await until(async () => /3 of 10/.test(await text())), await text())
+    const uploads = server.requests.filter(r => r.method === 'POST' && r.path.startsWith('/storage/v1/object/evidence/'))
+    const sizes = server.rows.filter(r => r.id !== 'seed-1').map(r => jpegSize(server.files.get(r.storage_path) ?? Buffer.alloc(0)))
+    log('each made small first: 1600 × 1200 from the camera\'s 2400 × 1800, 800 × 600 kept',
+      uploads.length === 2 && sizes.some(s => s?.w === 1600 && s.h === 1200) && sizes.some(s => s?.w === 800 && s.h === 600), JSON.stringify(sizes))
+    log('newest first, each with its own description box', (await section().getByRole('textbox').count()) === 3 &&
+      (await section().getByRole('textbox').last().inputValue()) === 'Meter box, east wall')
+    await section().screenshot({ path: `${DIR}/room-photos.png` })
+
+    // ── A description, saved when the box is left ────────────────────────────
+    server.requests = []
+    const box = section().getByRole('textbox').first()
+    await box.fill('New switchboard, installed today')
+    log('nothing is saved while typing', !server.requests.some(r => r.method === 'PATCH'))
+    await box.blur()
+    log('leaving the box saves the description',
+      await until(() => server.requests.some(r => r.method === 'PATCH' && r.body?.caption === 'New switchboard, installed today')))
+    log('the box takes at most 300 characters', (await box.getAttribute('maxlength')) === '300')
+
+    // ── Full size ──────────────────────────────────────────────────────────
+    await section().getByRole('button', { name: /full size/ }).first().click()
+    const viewer = page.getByRole('dialog', { name: 'Photo of Kitchen' })
+    log('a photo opens full size, with its description',
+      (await viewer.count()) === 1 && /New switchboard, installed today/.test(await viewer.textContent()) && (await viewer.getByRole('img').count()) === 1)
+    await viewer.getByRole('button', { name: 'Close the photo' }).click()
+    log('and closes again', (await viewer.count()) === 0)
+
+    // ── Deleting, after asking ───────────────────────────────────────────────
+    server.requests = []
+    await section().getByRole('button', { name: /^Delete the photo/ }).last().click()
+    const confirm = page.getByRole('dialog', { name: 'Delete this photo?' })
+    log('deleting asks first', (await confirm.count()) === 1 && server.requests.length === 0)
+    await confirm.getByRole('button', { name: 'Cancel' }).click()
+    log('Cancel keeps it', server.rows.some(r => r.id === 'seed-1'))
+    await section().getByRole('button', { name: /^Delete the photo/ }).last().click()
+    await page.getByRole('dialog', { name: 'Delete this photo?' }).getByRole('button', { name: 'Delete photo' }).click()
+    log('Delete photo removes the file, then the record',
+      await until(async () => /2 of 10/.test(await text())) && !server.files.has(`${TEAM}/rooms/r1/seed-1.jpg`) && !server.rows.some(r => r.id === 'seed-1') &&
+        at(r => r.path === '/storage/v1/object/evidence') < at(r => r.method === 'DELETE' && r.path === '/rest/v1/attachments'))
+
+    // ── Up to 10 ───────────────────────────────────────────────────────────
+    for (let i = 0; i < 7; i++) {
+      server.clock += 60_000
+      const p = `${TEAM}/rooms/r1/more-${i}.jpg`
+      server.rows.push({ id: `more-${i}`, team_id: TEAM, room_id: 'r1', storage_path: p, caption: '', taken_at: new Date(server.clock).toISOString(), created_by: ME })
+      server.files.set(p, small)
+    }
+    await openKitchen()
+    await until(async () => /9 of 10/.test(await text()))
+    server.requests = []
+    await page.getByLabel('Choose photos of Kitchen').setInputFiles([1, 2, 3].map(n => ({ name: `IMG_10${n}.jpg`, mimeType: 'image/jpeg', buffer: small })))
+    log('a room holds up to 10: of three chosen, one goes in', await until(async () => /10 of 10/.test(await text())) &&
+      server.requests.filter(r => r.method === 'POST' && r.path === '/rest/v1/attachments').length === 1)
+    log('and it says the other two weren\'t added', /2 photos weren't added: a room holds up to 10/.test(await text()))
+    log('then adding is switched off', await section().getByRole('button', { name: 'Choose photos' }).isDisabled() &&
+      await section().getByRole('button', { name: 'Take a photo' }).isDisabled())
+
+    // ── The plan says no ─────────────────────────────────────────────────────
+    server.rows = server.rows.filter(r => !r.id.startsWith('more-'))
+    await openKitchen()
+    await until(async () => /3 of 10/.test(await text()))
+    server.refuse = true
+    server.requests = []
+    await page.getByLabel('Take a photo of Kitchen').setInputFiles({ name: 'IMG_2001.jpg', mimeType: 'image/jpeg', buffer: camera })
+    log('a refusal gets the upgrade sheet', await until(async () => (await page.getByRole('dialog').count()) === 1 && /Photos are part of Pro/.test(await page.getByRole('dialog').textContent())))
+    log('saying the room is saved without them', /The room itself is saved without them/.test(await page.getByRole('dialog').textContent()))
+    log('and nothing is uploaded', !server.requests.some(r => r.path.startsWith('/storage/v1/object/evidence/')))
+    await page.getByRole('dialog').getByRole('button', { name: /Not now|Close/ }).click()
+    server.refuse = false
+
+    // ── No signal ────────────────────────────────────────────────────────────
+    await ctx.setOffline(true)
+    server.requests = []
+    await page.getByLabel('Choose photos of Kitchen').setInputFiles({ name: 'IMG_3001.jpg', mimeType: 'image/jpeg', buffer: small })
+    log('with no signal it says photos need a connection', await until(async () => /need a connection/.test((await section().getByRole('alert').textContent().catch(() => '')) ?? '')))
+    log('and sends nothing', !server.requests.some(r => r.method !== 'GET'))
+    await ctx.setOffline(false)
+
+    // ── Not a photo ──────────────────────────────────────────────────────────
+    await page.getByLabel('Choose photos of Kitchen').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
+    log('a file that isn\'t a photo is left out, and says so', await until(async () => /notes\.txt: That file isn't a photo/.test(await text())))
+
+    // ── Once the limits are on ────────────────────────────────────────────────
+    await openKitchen({ ...ENTITLEMENTS, enforced: true })
+    log('a Free team is told photos are Pro', await until(async () => /Photos\s*Pro/.test(await text())))
+    await openKitchen({ ...ENTITLEMENTS, enforced: true, plan: 'pro', isPro: true })
+    log('a Pro team isn\'t', await until(async () => /3 of 10/.test(await text())) && !/Photos\s*Pro/.test(await text()))
+
+    // ── An observer (Phase E) ────────────────────────────────────────────────
+    await openKitchen({ ...ENTITLEMENTS, worker: false })
+    await until(async () => /3 of 10/.test(await text()))
+    log('an observer sees the photos but can\'t add or delete them',
+      (await section().getByRole('img').count()) === 3 && (await section().getByRole('button', { name: 'Choose photos' }).count()) === 0 &&
+        (await section().getByRole('button', { name: /^Delete the photo/ }).count()) === 0 && /You're an observer/.test(await text()))
+    log('nor change a description', (await section().getByRole('textbox').first().getAttribute('readonly')) !== null)
+
+    // ── Before 0022 ──────────────────────────────────────────────────────────
+    server.missing = true
+    await openKitchen()
+    await page.getByRole('heading', { name: 'Comments' }).waitFor()
+    await sleep(500)
+    log('before 0022 is applied, the room has no Photos section', (await section().count()) === 0 && !/Photos/.test(await page.textContent('main')))
+    server.missing = false
+
+    // ── With no team, as in local-only mode ───────────────────────────────────
+    await page.goto(BASE + '#/maintenance', { waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'networkidle' })
+    server.requests = []
+    await page.locator('tbody tr').filter({ hasText: 'Acme Corp' }).click()
+    await page.locator('tbody tr').filter({ hasText: '1 George St' }).click()
+    await page.getByRole('button', { name: /^Kitchen/ }).first().click()
+    await page.getByRole('heading', { name: 'Comments' }).waitFor()
+    log('with no team there\'s no Photos section, and nothing is asked of the database',
+      (await section().count()) === 0 && !server.requests.some(r => r.path.includes('attachments')))
+
+    // ── The site's room editor ───────────────────────────────────────────────
+    console.log('\n— In the site\'s room editor')
+    const openEditor = async (entitlements = ENTITLEMENTS) => {
+      await page.goto(BASE + '#/edit-client', { waitUntil: 'networkidle' })
+      await page.reload({ waitUntil: 'networkidle' })
+      await openTeam(entitlements)
+      await page.locator('tbody tr').filter({ hasText: 'Acme Corp' }).click()
+      await page.locator('tbody tr').filter({ hasText: '1 George St' }).click()
+    }
+    await openEditor()
+    const toggle = name => page.getByRole('button', { name: `Photos of ${name}` })
+    log('each saved room offers its photos', await until(async () => (await toggle('Kitchen').count()) === 1 && (await toggle('Lounge').count()) === 1))
+    log('closed until asked, so a big site doesn\'t load every room\'s photos', !server.requests.some(r => r.search.includes('room_id=eq.')))
+    await toggle('Kitchen').click()
+    log('opening it shows the room\'s photos, to add to there too',
+      await until(async () => /3 of 10/.test(await text())) && (await section().getByRole('button', { name: 'Choose photos' }).count()) === 1)
+    const offered = await page.getByRole('button', { name: /^Photos of / }).count()
+    await page.getByRole('button', { name: 'New Room' }).click()
+    await sleep(200)
+    log('a new room, still blank, offers none: a blank room isn\'t kept',
+      offered === 1 && (await page.getByRole('button', { name: /^Photos of / }).count()) === offered)
+    server.missing = true
+    await openEditor()
+    await sleep(500)
+    log('before 0022, the editor offers no photos', (await page.getByRole('button', { name: /^Photos of / }).count()) === 0)
+    server.missing = false
   }
 } catch (e) {
   log('suite threw before finishing', false, e.message)

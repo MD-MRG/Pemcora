@@ -4,6 +4,7 @@ import { useLocation as useRouterLocation } from 'react-router-dom'
 import Field from '../components/Field.jsx'
 import Notice from '../components/Notice.jsx'
 import FloorsEditor from '../components/FloorsEditor.jsx'
+import { RoomPhotosToggle } from '../components/RoomPhotos.jsx'
 import ClientCard from '../components/ClientCard.jsx'
 import { BackBar, ClientsTable, LocationsTable } from '../components/ClientBrowser.jsx'
 import {
@@ -200,6 +201,7 @@ function EditLevel({ client, locationId, isNew, onBack, onSaved, onAddLocation }
             addRoom={addRoom}
             removeRoom={removeRoom}
             addFloor={addFloor}
+            roomExtra={room => <RoomPhotosToggle room={room} />}
           />
         )}
       </div>
