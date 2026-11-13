@@ -430,11 +430,17 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
       filename = made.filename
       setStartNote(
         made.photosMissing
-          ? { title: 'This PDF has no label photos: they need a connection. Export it again once you have signal to include them.' }
+          ? { title: 'This PDF is missing photos: they need a connection. Export it again once you have signal to include them.' }
           : null,
       )
     } else {
-      filename = await downloadReport({ ...report, sheetName: config.sheetName })
+      const made = await downloadReport({ ...report, sheetName: config.sheetName })
+      filename = made.filename
+      setStartNote(
+        made.photosMissing
+          ? { title: 'This report doesn\'t list the rooms\' photos: they need a connection. Export it again once you have signal to include them.' }
+          : null,
+      )
     }
     recordExport(client.id, location.id, visit.id, { mode, filename })
     if (remember) setExportPreference(client.id, location.id, visit.id, mode)

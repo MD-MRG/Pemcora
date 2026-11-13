@@ -1,5 +1,6 @@
 import { buildReportSnapshot } from './reportSnapshot.js'
 import { makePdf } from './pdfDownload.js'
+import { roomPhotosForReport } from './roomPhotoReport.js'
 import { sendReportTo, uploadReportPdf } from './api.js'
 import { entitledTeam } from './entitlements.js'
 import { isSupabaseConfigured } from './supabase.js'
@@ -29,7 +30,7 @@ const refused = (message, hint = null) => Object.assign(new Error(message), { hi
 /**
  * Makes the report's PDF, puts it in the team's folder and sends it to `email`.
  * Returns what deliver-report says ({ id, link, emailed, email, expiresAt }),
- * the PDF's filename, and whether its label photos were left out.
+ * the PDF's filename, and whether any of its label or room photos were left out.
  *
  * Refuses before anything leaves the device when there's no team or no signal,
  * or when a note still says [timeframe]: a sent report can't be changed. The
@@ -42,8 +43,7 @@ export async function sendReport({ email, ...report }) {
   if (!looksLikeEmail(email)) throw refused('That is not an email address.')
 
   const { client, visit, rooms, assets, revision, reportTitle } = report
-  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle })
-  const where = unfinishedIn(snapshot)
+  const where = unfinishedIn(buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle }))
   if (where.length) {
     throw refused(
       `A note in ${where.join(', ')} still says [timeframe]. Reopen the visit and fill it in, then send the report.`,
@@ -51,7 +51,10 @@ export async function sendReport({ email, ...report }) {
     )
   }
 
-  const { bytes, filename, photosMissing } = await makePdf(report)
+  // Fetched once: the snapshot keeps their descriptions, the PDF the photos.
+  const roomPhotos = await roomPhotosForReport(rooms, visit, { withBytes: true })
+  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle, roomPhotos: roomPhotos.photos })
+  const { bytes, filename, photosMissing } = await makePdf({ ...report, roomPhotos })
   const filePath = await uploadReportPdf(teamId, bytes)
   const sent = await sendReportTo({
     visitId: visit.id,

@@ -27,6 +27,9 @@ import { assetFields, assetTypeLabel } from '../data/packs/shared/assetTypes.js'
 //            roomId, label, make, model, serial, installedOn, expiresOn,
 //            createdAt, removedAt, attributes }. The snapshot works out what
 //            stood there at the visit, so a report exported later doesn't change.
+//   roomPhotos  each room's photos (0022), as { roomId: [{ id, caption,
+//            takenAt }] }. Only those added by the day the visit was completed
+//            reach the report (photosAtVisit), for the same reason.
 //
 // `equipment` is the items of the types the visit's list tests one by one: those
 // standing when it finished, and those taken out during it, each with when it
@@ -107,11 +110,34 @@ const failRows = (section, place, itemId, itemLabel) =>
       }
     })
 
-function roomSnapshot(room, entry) {
+// The UTC day of an ISO time, as the report prints the visit's own dates.
+const dayOf = iso => {
+  const t = time(iso)
+  return t === null ? null : new Date(t).toISOString().slice(0, 10)
+}
+
+/**
+ * The room photos a report of this visit shows: those added on or before the
+ * day it was completed, oldest first, so a report exported again later says
+ * the same. A visit still open shows them all. Days are compared as the report
+ * prints them, by the date in UTC.
+ */
+export function photosAtVisit(photos, visit) {
+  const last = dayOf(visit?.completedAt)
+  return (photos ?? [])
+    .filter(p => !last || (dayOf(p.takenAt) ?? '') <= last)
+    .slice()
+    .sort((a, b) => (time(a.takenAt) ?? 0) - (time(b.takenAt) ?? 0))
+}
+
+function roomSnapshot(room, entry, photos) {
   const base = {
     name: room.name ?? '',
     floor: room.floorLabel ?? '',
     planNumber: room.planNumber ?? '',
+    // The room's own photos (0022), described, and dated when they were added.
+    // Only on a room that has some, so every other snapshot reads as it did.
+    ...(photos.length ? { photos: photos.map(p => ({ id: p.id, caption: p.caption ?? '', addedOn: dayOf(p.takenAt) ?? '' })) } : {}),
   }
   const template = entry?.template
   // A room never opened has no template of its own; report it as untested
@@ -223,6 +249,7 @@ export function buildReportSnapshot({
   assets = [],
   revision = 1,
   reportTitle = '',
+  roomPhotos = {},
 }) {
   const roomNames = new Map(rooms.map(r => [r.id, r.name ?? '']))
   // No room is opened in a whole-site check, and saying "not tested" about each
@@ -239,7 +266,7 @@ export function buildReportSnapshot({
     site: siteSnapshot(visit, assets, roomNames),
     rooms: rooms
       .filter(room => !siteOnly || visit?.rooms?.[room.id])
-      .map(room => roomSnapshot(room, visit?.rooms?.[room.id])),
+      .map(room => roomSnapshot(room, visit?.rooms?.[room.id], photosAtVisit(roomPhotos[room.id], visit))),
     equipment: equipmentSnapshot(visit, assets, roomNames),
   }
 }

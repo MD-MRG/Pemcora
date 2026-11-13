@@ -22,9 +22,43 @@
  *   - a refusal gets the upgrade sheet; with no signal it says so and sends
  *     nothing; an observer can look but not change; with no team, or before
  *     0022, there's no section at all
+ *   - reports: each room's photos with their description and the day added,
+ *     only those added by the day the visit was completed; the PDF embeds them
+ *     at about 1000 px (smaller if a big site's would be too large), the Excel
+ *     report lists them as "photo in the PDF"; a photo that can't be fetched
+ *     leaves the report building, saying so
  */
+import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright-core'
 import { testContext } from './harness.mjs'
+
+// The report builders are pure: they run here, in Node. templateStore.js (under
+// them) keeps edits in localStorage, so give it one before it loads.
+const store = new Map()
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
+})
+const { buildReportSnapshot, photosAtVisit } = await import('../src/lib/reportSnapshot.js')
+const { buildPdf } = await import('../src/lib/pdfReport.js')
+const { buildWorkbook } = await import('../src/lib/report.js')
+const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+
+// What a PDF holds: each page's text and how many images it draws.
+async function read(bytes) {
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableFontFace: true, verbosity: 0 }).promise
+  const pages = []
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i)
+    const items = (await page.getTextContent()).items.filter(it => it.str.trim())
+    const ops = await page.getOperatorList()
+    pages.push({
+      text: items.map(it => it.str.replace(/\s+/g, ' ').trim()).join('\n'),
+      images: ops.fnArray.filter(f => f === pdfjs.OPS.paintImageXObject).length,
+    })
+  }
+  return { pages, text: pages.map(p => p.text).join('\n') }
+}
 
 const DIR = process.argv[2] ?? '.'
 const BASE = process.env.PEMCORA_BASE ?? 'http://localhost:5173/'
@@ -242,12 +276,99 @@ async function backend(route) {
 const browser = await launch()
 const pageErrors = []
 try {
-  const ctx = await testContext(browser, { viewport: { width: 1280, height: 900 } })
+  const ctx = await testContext(browser, { viewport: { width: 1280, height: 900 }, acceptDownloads: true })
   await ctx.route('**/*', backend)
   const page = await ctx.newPage()
   page.on('pageerror', e => pageErrors.push(e.message))
 
   await page.goto(BASE, { waitUntil: 'networkidle' })
+  // A JPEG of w × h, made by the browser, as bytes.
+  const picture = (w, h) =>
+    page
+      .evaluate(
+        async ({ w, h }) => {
+          const c = document.createElement('canvas')
+          c.width = w
+          c.height = h
+          const g = c.getContext('2d')
+          for (let i = 0; i < 300; i++) {
+            g.fillStyle = `hsl(${(i * 37) % 360} 70% 50%)`
+            g.fillRect((i * 97) % w, (i * 53) % h, w / 20, h / 20)
+          }
+          const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9))
+          const bytes = new Uint8Array(await blob.arrayBuffer())
+          let s = ''
+          for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+          return btoa(s)
+        },
+        { w, h },
+      )
+      .then(b64 => Buffer.from(b64, 'base64'))
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Reports, in Node: the snapshot, the PDF and the workbook
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n— In the report (built in Node)')
+  const photoJpeg = await picture(1000, 750)
+  const ROOMS = [
+    { id: 'r1', name: 'Kitchen', floorLabel: 'Ground', planNumber: '' },
+    { id: 'r2', name: 'Lounge', floorLabel: 'Ground', planNumber: '' },
+    { id: 'r3', name: 'Laundry', floorLabel: 'Ground', planNumber: '' },
+  ]
+  const TEMPLATE = { mainLabel: 'Main test list', tests: [{ id: 't1', label: 'Power on' }], sections: [] }
+  const VISIT = {
+    id: 'v1', technician: 'Sam', startedAt: '2026-11-12T01:00:00.000Z', completedAt: '2026-11-12T05:00:00.000Z',
+    rooms: { r1: { template: TEMPLATE, sections: {}, results: { main: { t1: 'PASS' } }, troubleshooting: {}, comments: '' } },
+  }
+  const PHOTOS = {
+    r1: [
+      { id: 'k2', caption: 'Switchboard behind the pantry door', takenAt: '2026-11-12T03:00:00+00:00' },
+      { id: 'k1', caption: '', takenAt: '2026-11-01T22:00:00+00:00' },
+      { id: 'k3', caption: 'Later that evening', takenAt: '2026-11-12T23:30:00+00:00' },
+      { id: 'k4', caption: 'Added the next week', takenAt: '2026-11-19T01:00:00+00:00' },
+    ],
+    r2: [{ id: 'l1', caption: 'Water stain on the ceiling', takenAt: '2026-11-10T00:00:00+00:00' }],
+  }
+  const byVisit = photosAtVisit(PHOTOS.r1, VISIT)
+  log('a report shows the photos added by the day the visit was completed, oldest first',
+    byVisit.map(p => p.id).join() === 'k1,k2,k3', byVisit.map(p => p.id).join())
+  log('…and a visit still open shows them all', photosAtVisit(PHOTOS.r1, { ...VISIT, completedAt: null }).length === 4)
+  const snap = buildReportSnapshot({ client: { name: 'Acme Corp' }, visit: VISIT, rooms: ROOMS, roomPhotos: PHOTOS })
+  log('the snapshot gives each room its photos, described and dated',
+    JSON.stringify(snap.rooms[0].photos) === JSON.stringify([
+      { id: 'k1', caption: '', addedOn: '2026-11-01' },
+      { id: 'k2', caption: 'Switchboard behind the pantry door', addedOn: '2026-11-12' },
+      { id: 'k3', caption: 'Later that evening', addedOn: '2026-11-12' },
+    ]) && snap.rooms[1].photos?.[0]?.caption === 'Water stain on the ceiling', JSON.stringify(snap.rooms.map(r => r.photos)))
+  log('…and a room without photos reads as it always did (no photos key)',
+    !('photos' in snap.rooms[2]) && !('photos' in buildReportSnapshot({ visit: VISIT, rooms: ROOMS }).rooms[0]))
+
+  const FONTS = {
+    regular: readFileSync(new URL('../node_modules/dejavu-fonts-ttf/ttf/DejaVuSans.ttf', import.meta.url)),
+    bold: readFileSync(new URL('../node_modules/dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf', import.meta.url)),
+  }
+  const pdfArgs = { client: { name: 'Acme Corp' }, location: { address: '1 George St' }, visit: VISIT, rooms: ROOMS, reportTitle: 'Preventative Maintenance', fonts: FONTS }
+  const plainPdf = await read(await buildPdf(pdfArgs))
+  const pdf = await read(await buildPdf({ ...pdfArgs, roomPhotos: PHOTOS, roomPhotoBytes: { k1: photoJpeg, k2: photoJpeg, l1: photoJpeg } }))
+  log('the PDF shows each room\'s photos, with their descriptions and the day added',
+    /Switchboard behind the pantry door\nAdded 2026-11-12/.test(pdf.text) && /No description\nAdded 2026-11-01/.test(pdf.text) &&
+      /Water stain on the ceiling\nAdded 2026-11-10/.test(pdf.text), pdf.text.split('\n').slice(-30).join(' | '))
+  log('…the photos themselves, under the room they belong to',
+    pdf.pages.reduce((n, p) => n + p.images, 0) === 3 && plainPdf.pages.reduce((n, p) => n + p.images, 0) === 0 &&
+      /Room 1: Kitchen[^]*Photos[^]*Room 2: Lounge[^]*Not tested during this visit[^]*Photos[^]*Water stain/.test(pdf.text))
+  log('…a photo that couldn\'t be fetched says so in its place', /Photo not included in this copy\nLater that evening/.test(pdf.text))
+  log('…and nothing added after the visit was completed', !/Added the next week/.test(pdf.text))
+  log('a room with no photos has no Photos heading, as before', !/Room 3: Laundry[^]*Photos/.test(pdf.text) && !/Photos/.test(plainPdf.text))
+
+  const wb = await buildWorkbook({ ...pdfArgs, location: { address: '1 George St' }, roomPhotos: PHOTOS })
+  const rows = []
+  wb.worksheets[0].eachRow(r => rows.push([r.getCell(1).text, r.getCell(2).text]))
+  const cells = rows.map(r => r.join(' | ')).join('\n')
+  log('the Excel report lists each photo\'s description and date, with "photo in the PDF"',
+    /Switchboard behind the pantry door \| Added 2026-11-12 · photo in the PDF/.test(cells) &&
+      /No description \| Added 2026-11-01 · photo in the PDF/.test(cells) && /Water stain on the ceiling \| Added 2026-11-10 · photo in the PDF/.test(cells), cells.slice(-400))
+  log('…under the room, and not the one added after', /Room 1: Kitchen[^]*Photos[^]*Room 2: Lounge/.test(cells) && !/Added the next week/.test(cells))
+
   const configured = await page.evaluate(async () => (await import('/src/lib/supabase.js')).isSupabaseConfigured)
   if (!configured) {
     console.log('(the room photo checks need VITE_SUPABASE_URL in .env, and were skipped)')
@@ -397,27 +518,6 @@ try {
     console.log('\n— On the room during a visit')
     reset()
     // A photo as a camera hands it over, and a second one to go with it.
-    const picture = (w, h) =>
-      page
-        .evaluate(
-          async ({ w, h }) => {
-            const c = document.createElement('canvas')
-            c.width = w
-            c.height = h
-            const g = c.getContext('2d')
-            for (let i = 0; i < 300; i++) {
-              g.fillStyle = `hsl(${(i * 37) % 360} 70% 50%)`
-              g.fillRect((i * 97) % w, (i * 53) % h, w / 20, h / 20)
-            }
-            const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9))
-            const bytes = new Uint8Array(await blob.arrayBuffer())
-            let s = ''
-            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-            return btoa(s)
-          },
-          { w, h },
-        )
-        .then(b64 => Buffer.from(b64, 'base64'))
     const camera = await picture(2400, 1800)
     const small = await picture(800, 600)
     // One already there, added by Pat.
@@ -625,6 +725,90 @@ try {
     await sleep(500)
     log('before 0022, the editor offers no photos', (await page.getByRole('button', { name: /^Photos of / }).count()) === 0)
     server.missing = false
+
+    // ── A report's photos, fetched in the browser ────────────────────────────
+    console.log('\n— In the report (fetched in the browser)')
+    reset()
+    const big = await picture(1600, 1200)
+    const seedPhoto = (id, room, day, caption, file = big) => {
+      const p = `${TEAM}/rooms/${room}/${id}.jpg`
+      server.rows.push({ id, team_id: TEAM, room_id: room, storage_path: p, caption, taken_at: `${day}T02:00:00.000Z`, created_by: ME })
+      if (file) server.files.set(p, file)
+    }
+    seedPhoto('a1', 'r1', '2026-11-11', 'Switchboard behind the pantry door')
+    seedPhoto('a2', 'r1', '2026-11-12', 'Meter box, east wall')
+    seedPhoto('a3', 'r1', '2026-11-20', 'Added after the visit')
+    seedPhoto('b1', 'r2', '2026-11-11', 'Water stain on the ceiling', null) // its file can't be fetched
+    const rooms = [{ id: 'r1', name: 'Kitchen' }, { id: 'r2', name: 'Lounge' }]
+    const visit = { id: 'v1', startedAt: '2026-11-12T01:00:00.000Z', completedAt: '2026-11-12T05:00:00.000Z' }
+    const forReport = options =>
+      page.evaluate(
+        async ({ rooms, visit, options }) => {
+          const url = performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/src/lib/roomPhotoReport.js')).pop()
+          const mod = await import(url ?? '/src/lib/roomPhotoReport.js')
+          const out = await mod.roomPhotosForReport(rooms, visit, options)
+          const b64 = bytes => {
+            let s = ''
+            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+            return btoa(s)
+          }
+          return { ...out, bytes: Object.fromEntries(Object.entries(out.bytes).map(([id, bytes]) => [id, b64(bytes)])) }
+        },
+        { rooms, visit, options },
+      )
+    server.requests = []
+    const listed = await forReport({ withBytes: false })
+    log('the Excel report asks for every room\'s photos in one request, and not the photos',
+      server.requests.filter(r => r.path === '/rest/v1/attachments').length === 1 && /room_id=in\.\(r1,r2\)/.test(server.requests[0]?.search ?? '') &&
+        !server.requests.some(r => r.path.startsWith('/storage/')), server.requests.map(r => r.path + r.search).join(' | '))
+    log('…only those added by the day the visit was completed',
+      listed.photos.r1?.map(p => p.id).join() === 'a1,a2' && listed.photos.r2?.length === 1 && !listed.missing, JSON.stringify(listed.photos))
+    const fetched = await forReport({ withBytes: true })
+    const sizeOf = id => jpegSize(Buffer.from(fetched.bytes[id] ?? '', 'base64'))
+    log('the PDF\'s photos are made about 1000 px: 1000 × 750 from 1600 × 1200',
+      sizeOf('a1')?.w === 1000 && sizeOf('a1').h === 750 && sizeOf('a2')?.w === 1000, JSON.stringify([sizeOf('a1'), sizeOf('a2')]))
+    log('…not one added after the visit', !('a3' in fetched.bytes))
+    log('a photo that can\'t be fetched is left out, and the report says photos are missing', fetched.missing === true && !('b1' in fetched.bytes) && 'a1' in fetched.bytes)
+    const tight = await forReport({ withBytes: true, budget: 20_000 })
+    const tightSize = jpegSize(Buffer.from(tight.bytes.a1 ?? '', 'base64'))
+    log('a site whose photos would make the PDF too large gets them smaller still', tightSize?.w === 480 && tightSize.h === 360, JSON.stringify(tightSize))
+    await ctx.setOffline(true)
+    const offlineReport = await forReport({ withBytes: true })
+    await ctx.setOffline(false)
+    log('with no signal the report goes without them, and says so', offlineReport.missing === true && JSON.stringify(offlineReport.photos) === '{}')
+
+    // ── Exporting from the visit ─────────────────────────────────────────────
+    server.rows = server.rows.filter(r => r.id !== 'a3')
+    // The visit started above finishes when it's exported, today: every photo
+    // here was added before then.
+    await openKitchen()
+    await page.getByRole('button', { name: /^List$/ }).click()
+    const exported = async name => {
+      const download = page.waitForEvent('download', { timeout: 20000 })
+      await page.getByRole('button', { name }).click()
+      await page.getByRole('dialog').getByRole('button', { name: /Save as a new revision|Replace/ }).first().click({ timeout: 1500 }).catch(() => {})
+      return readFileSync(await (await download).path())
+    }
+    const visitPdf = await read(await exported('Export PDF'))
+    log('"Export PDF" puts the rooms\' photos in, with their descriptions and dates',
+      /Switchboard behind the pantry door\nAdded 2026-11-11/.test(visitPdf.text) && /Meter box, east wall\nAdded 2026-11-12/.test(visitPdf.text) &&
+        visitPdf.pages.reduce((n, p) => n + p.images, 0) === 2, visitPdf.text.split('\n').slice(-24).join(' | '))
+    log('…one it couldn\'t fetch says so in its place', /Photo not included in this copy\nWater stain on the ceiling/.test(visitPdf.text))
+    log('…and the page says photos are missing', await until(async () => /This PDF is missing photos: they need a connection/.test(await page.textContent('main'))))
+    server.files.set(`${TEAM}/rooms/r2/b1.jpg`, big)
+    const fullPdf = await read(await exported('Export PDF'))
+    log('with every photo there, the PDF has them all and the page says nothing is missing',
+      fullPdf.pages.reduce((n, p) => n + p.images, 0) === 3 && !/Photo not included/.test(fullPdf.text) &&
+        (await page.getByText('This PDF is missing photos').count()) === 0)
+    const xlsx = await exported(/^Export report$/)
+    const ExcelJS = (await import('exceljs')).default
+    const book = new ExcelJS.Workbook()
+    await book.xlsx.load(xlsx)
+    const sheet = []
+    book.worksheets[0].eachRow(r => sheet.push(`${r.getCell(1).text} | ${r.getCell(2).text}`))
+    log('"Export report" lists each photo\'s description and date, "photo in the PDF"',
+      sheet.includes('Switchboard behind the pantry door | Added 2026-11-11 · photo in the PDF') &&
+        sheet.includes('Water stain on the ceiling | Added 2026-11-11 · photo in the PDF'), sheet.slice(-12).join(' / '))
   }
 } catch (e) {
   log('suite threw before finishing', false, e.message)

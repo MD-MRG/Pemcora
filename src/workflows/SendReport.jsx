@@ -123,7 +123,7 @@ export function SentNotice({ sent, again = false }) {
       </div>
       {sent.photosMissing && (
         <p className="mt-2">
-          The PDF went without label photos: they need a connection when it&apos;s made.
+          The PDF went without some photos: they need a connection when it&apos;s made.
         </p>
       )}
     </Notice>

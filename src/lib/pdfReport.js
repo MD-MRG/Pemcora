@@ -82,6 +82,12 @@ const intervalOf = kind => WORKFLOWS.find(w => w.id === kind)?.interval?.months 
  *   showLogo   false for a team that isn't Pro once limits are on (2.4)
  *   photos     each item's label photo, as JPEG bytes by item id (D1c), already
  *              made small when it was taken (photo.js: 1600 px, about 70%)
+ *   roomPhotos      each room's photos (0022), as { roomId: [{ id, caption,
+ *                   takenAt }] }: the snapshot keeps those added by the day the
+ *                   visit was completed
+ *   roomPhotoBytes  their JPEG bytes by photo id, made small for the PDF
+ *                   (roomPhotoReport.js: about 1000 px). One missing prints a
+ *                   note in its place.
  *   fonts      { regular, bold }: DejaVu Sans, as bytes
  */
 export async function buildPdf({
@@ -96,6 +102,8 @@ export async function buildPdf({
   showLogo = true,
   layout = 'standard',
   photos = {},
+  roomPhotos = {},
+  roomPhotoBytes = {},
   fonts,
 }) {
   const esv = layout === 'esv'
@@ -227,7 +235,7 @@ export async function buildPdf({
   }
   gap(12)
 
-  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle })
+  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle, roomPhotos })
 
   // Fails and their notes, then the comments: the close of a room and of the
   // whole site alike.
@@ -367,16 +375,60 @@ export async function buildPdf({
     gap(6)
   }
 
+  // A room's photos (0022), each with its description and the day it was
+  // added beside it, kept on one page. One that couldn't be fetched says so
+  // in its place.
+  const PHOTO_W = 230
+  const PHOTO_H = 172
+  const roomPhotoList = async photos => {
+    // The heading stays with its first photo.
+    ensure(PHOTO_H + 50)
+    bar('Photos')
+    const textX = MARGIN + PHOTO_W + 12
+    const textW = inner - PHOTO_W - 12
+    for (const photo of photos) {
+      let image = null
+      const bytes = roomPhotoBytes[photo.id]
+      if (bytes) {
+        try {
+          image = await doc.embedJpg(Uint8Array.from(bytes)) // a copy of its own, as for a label photo
+        } catch {
+          image = null // a photo that can't be read must not cost the client their report
+        }
+      }
+      const scale = image ? Math.min(PHOTO_W / image.width, PHOTO_H / image.height, 1) : 0
+      const h = image ? image.height * scale : 48
+      const lines = wrap(photo.caption || 'No description', regular, 9.5, textW)
+      const textH = (lines.length + 1) * 9.5 * LINE
+      const rowH = Math.max(h, textH) + 10
+      ensure(rowH)
+      const top = y
+      if (image) {
+        page.drawImage(image, { x: MARGIN, y: top - h, width: image.width * scale, height: h })
+      } else {
+        page.drawRectangle({ x: MARGIN, y: top - h, width: PHOTO_W, height: h, borderColor: colour(COLOURS.hair), borderWidth: 0.8 })
+        page.drawText('Photo not included in this copy', { x: MARGIN + 8, y: top - h / 2 - 3, size: 8.5, font: regular, color: colour(COLOURS.soft) })
+      }
+      draw(lines, { x: textX, size: 9.5, tint: photo.caption ? COLOURS.ink : COLOURS.soft })
+      draw([`Added ${photo.addedOn}`], { x: textX, size: 8.5, tint: COLOURS.soft })
+      y = top - rowH
+    }
+  }
+
   // ── Each room ───────────────────────────────────────────────────────────
-  snapshot.rooms.forEach((room, i) => {
+  for (const [i, room] of snapshot.rooms.entries()) {
     bar(`Room ${i + 1}: ${room.name || '(unnamed)'}`, { navy: true })
     row('Floor', room.floor || '', { labelFont: bold })
     if (room.planNumber) row('Floor plan no.', room.planNumber, { labelFont: bold })
     gap(6)
     if (!room.tested) {
       paragraph('Not tested during this visit', { tint: COLOURS.soft })
+      if (room.photos) {
+        gap(8)
+        await roomPhotoList(room.photos)
+      }
       gap(14)
-      return
+      continue
     }
     for (const section of room.sections) {
       bar(section.label)
@@ -384,7 +436,11 @@ export async function buildPdf({
       gap(8)
     }
     notesAndComments(room)
-  })
+    if (room.photos) {
+      await roomPhotoList(room.photos)
+      gap(14)
+    }
+  }
 
   // ── Signed off, or for the ESV form, certified ──────────────────────────
   const signoff = visit?.signoff

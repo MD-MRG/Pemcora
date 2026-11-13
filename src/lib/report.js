@@ -75,7 +75,7 @@ const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } })
  */
 const OUTCOME_TEXT = { compliant: 'Compliant', non_compliant: 'Non-compliant' }
 
-export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [], sheetName = 'PM Report' }) {
+export async function buildWorkbook({ client, location, visit, rooms, revision, reportTitle = 'Preventative Maintenance', settings = null, assets = [], sheetName = 'PM Report', roomPhotos = {} }) {
   const mod = await import('exceljs')
   const ExcelJS = mod.default ?? mod
 
@@ -187,7 +187,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
   }
   blank()
 
-  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle })
+  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle, roomPhotos })
 
   // Fails and their notes, then the comments — the close of a room and of the
   // whole site alike.
@@ -276,6 +276,19 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     blank()
   }
 
+  // A room's photos (0022): the photos themselves are in the PDF, so the
+  // workbook lists each one's description and the day it was added.
+  const photoRows = photos => {
+    sectionHeader('Photos')
+    for (const photo of photos) {
+      const label = photo.caption || 'No description'
+      const note = `Added ${photo.addedOn} · photo in the PDF`
+      fitRow(ws.addRow([label, note]), label, note)
+    }
+    blank()
+    blank()
+  }
+
   snapshot.rooms.forEach((room, idx) => {
     roomHeader(`Room ${idx + 1}: ${room.name || '(unnamed)'}`)
     kv('Floor', room.floor || '')
@@ -285,7 +298,8 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
     if (!room.tested) {
       ws.addRow(['Not tested during this visit'])
       blank()
-      blank()
+      if (room.photos) photoRows(room.photos)
+      else blank()
       return
     }
 
@@ -295,6 +309,7 @@ export async function buildWorkbook({ client, location, visit, rooms, revision, 
       blank()
     }
     notesAndComments(room)
+    if (room.photos) photoRows(room.photos)
   })
 
   return wb
@@ -317,10 +332,18 @@ export function triggerDownload(buffer, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/**
+ * Builds the workbook and downloads it. Returns its filename, and whether the
+ * room photos' descriptions had to be left out for want of a connection.
+ */
 export async function downloadReport({ client, location, visit, rooms, revision, reportTitle, settings, assets, sheetName }) {
-  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle, settings, assets, sheetName })
+  // Loaded here, not at the top: it reaches the database, and buildWorkbook
+  // stays pure for the suites that run it in Node.
+  const { roomPhotosForReport } = await import('./roomPhotoReport.js')
+  const room = await roomPhotosForReport(rooms, visit)
+  const wb = await buildWorkbook({ client, location, visit, rooms, revision, reportTitle, settings, assets, sheetName, roomPhotos: room.photos })
   const buffer = await wb.xlsx.writeBuffer()
   const filename = buildFilename(client, visit, revision, reportTitle)
   triggerDownload(buffer, filename)
-  return filename
+  return { filename, photosMissing: room.missing }
 }
