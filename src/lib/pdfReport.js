@@ -82,7 +82,7 @@ const intervalOf = kind => WORKFLOWS.find(w => w.id === kind)?.interval?.months 
  *   showLogo   false for a team that isn't Pro once limits are on (2.4)
  *   photos     each item's label photo, as JPEG bytes by item id (D1c), already
  *              made small when it was taken (photo.js: 1600 px, about 70%)
- *   roomPhotos      each room's photos (0022), as { roomId: [{ id, caption,
+ *   roomPhotos      each room's photos (0022), as { roomId: [{ id, category, caption,
  *                   takenAt }] }: the snapshot keeps those added by the day the
  *                   visit was completed
  *   roomPhotoBytes  their JPEG bytes by photo id, made small for the PDF
@@ -375,15 +375,23 @@ export async function buildPdf({
     gap(6)
   }
 
-  // A room's photos (0022), each with its description and the day it was
-  // added beside it, kept on one page. One that couldn't be fetched says so
-  // in its place.
+  // A room's photos (0022), General then Issues, each with its description and
+  // the day it was added beside it, kept on one page. One that couldn't be
+  // fetched says so in its place.
   const PHOTO_W = 230
   const PHOTO_H = 172
+  const PHOTO_GROUPS = [['general', 'General'], ['issue', 'Issues']]
   const roomPhotoList = async photos => {
-    // The heading stays with its first photo.
-    ensure(PHOTO_H + 50)
-    bar('Photos')
+    for (const [id, label] of PHOTO_GROUPS) {
+      const group = photos.filter(p => (p.category ?? 'general') === id)
+      if (!group.length) continue
+      // The heading stays with its first photo.
+      ensure(PHOTO_H + 50)
+      bar(`Photos — ${label}`)
+      await photoRows(group)
+    }
+  }
+  const photoRows = async photos => {
     const textX = MARGIN + PHOTO_W + 12
     const textW = inner - PHOTO_W - 12
     for (const photo of photos) {

@@ -43,6 +43,8 @@ import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import SignOffDialog from '../components/SignOffDialog.jsx'
 import { downloadReport } from '../lib/report.js'
 import { downloadPdf } from '../lib/pdfDownload.js'
+import { countReportPhotos } from '../lib/roomPhotoReport.js'
+import PhotoChoiceDialog from '../components/PhotoChoiceDialog.jsx'
 import { canSendReports, sendReport } from '../lib/sendReport.js'
 import { SendDialog, SentNotice, SentReports } from './SendReport.jsx'
 import { isFail, MAIN, notesAwaitingTimeframe, sectionsForRoomType, siteFails, typeOf } from '../lib/testTypes.js'
@@ -389,8 +391,22 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
   // PDF sent to someone ('send'). They go the same way, signed off first where
   // that's how the check ends, and each counts as a revision of the report.
   const exportFormat = useRef('xlsx')
+  // Which room photos a PDF carries (M.D.): all, none, or one group. Asked each
+  // time a PDF is made or sent, once the rooms have photos for this visit.
+  const photoChoice = useRef(null)
+  const [choosingPhotos, setChoosingPhotos] = useState(null)
   const runExport = async (mode, remember = false, visit = current) => {
     if (!visit) return
+    if ((exportFormat.current === 'pdf' || exportFormat.current === 'send') && photoChoice.current === null) {
+      const counts = await countReportPhotos(rooms, visit)
+      if (counts.all > 0) {
+        setAskExport(false)
+        setChoosingPhotos({ mode, remember, visit, counts })
+        return
+      }
+    }
+    const include = photoChoice.current ?? 'all'
+    photoChoice.current = null
     const revision =
       (visit.exports ?? []).length === 0
         ? 1
@@ -414,6 +430,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           layout: config.pdfLayout,
           showLogo: !(entitlements?.enforced && !entitlements.isPro),
           email: sendTo.current,
+          include,
         })
         filename = sent.filename
         setSentNote({ sent })
@@ -426,7 +443,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
       }
     } else if (exportFormat.current === 'pdf') {
       // The logo is Pro's (2.4), once the limits are on.
-      const made = await downloadPdf({ ...report, layout: config.pdfLayout, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
+      const made = await downloadPdf({ ...report, include, layout: config.pdfLayout, showLogo: !(entitlements?.enforced && !entitlements.isPro) })
       filename = made.filename
       setStartNote(
         made.photosMissing
@@ -434,13 +451,7 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
           : null,
       )
     } else {
-      const made = await downloadReport({ ...report, sheetName: config.sheetName })
-      filename = made.filename
-      setStartNote(
-        made.photosMissing
-          ? { title: 'This report doesn\'t list the rooms\' photos: they need a connection. Export it again once you have signal to include them.' }
-          : null,
-      )
+      filename = await downloadReport({ ...report, sheetName: config.sheetName })
     }
     recordExport(client.id, location.id, visit.id, { mode, filename })
     if (remember) setExportPreference(client.id, location.id, visit.id, mode)
@@ -904,6 +915,20 @@ function VisitLevel({ client, location, config, canManage, onBack, onOpenRoom, o
         />
       )}
 
+      {choosingPhotos && (
+        <PhotoChoiceDialog
+          counts={choosingPhotos.counts}
+          sending={exportFormat.current === 'send'}
+          onCancel={() => setChoosingPhotos(null)}
+          onChoose={include => {
+            const { mode, remember, visit } = choosingPhotos
+            setChoosingPhotos(null)
+            photoChoice.current = include
+            runExport(mode, remember, visit)
+          }}
+        />
+      )}
+
       {visits.length > 1 && (
         <section className="mt-6">
           <h3 className="text-ink-soft mb-2 text-[11.5px] font-semibold tracking-[.08em] uppercase">
@@ -1199,7 +1224,7 @@ function RoomLevel({ client, location, visit, roomId, rooms, readOnly, config, c
 
         {/* The room's own photos, not this visit's: they can be added whether
             or not the visit is finished. */}
-        {room && <RoomPhotos room={room} />}
+        {room && <RoomPhotos room={room} clientName={client.name} />}
 
         {!readOnly && (
         <button

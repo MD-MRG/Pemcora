@@ -42,7 +42,8 @@ export async function sendReport({ email, ...report }) {
   if (navigator.onLine === false) throw refused('Sending a report needs a connection.', 'offline')
   if (!looksLikeEmail(email)) throw refused('That is not an email address.')
 
-  const { client, visit, rooms, assets, revision, reportTitle } = report
+  // `include`: which room photos the PDF carries, as chosen ('all' unless asked).
+  const { client, visit, rooms, assets, revision, reportTitle, include = 'all' } = report
   const where = unfinishedIn(buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle }))
   if (where.length) {
     throw refused(
@@ -52,8 +53,8 @@ export async function sendReport({ email, ...report }) {
   }
 
   // Fetched once: the snapshot keeps their descriptions, the PDF the photos.
-  const roomPhotos = await roomPhotosForReport(rooms, visit, { withBytes: true })
-  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle, roomPhotos: roomPhotos.photos })
+  const roomPhotos = await roomPhotosForReport(rooms, visit, { withBytes: true, include })
+  const snapshot = buildReportSnapshot({ client, visit, rooms, assets, revision, reportTitle, roomPhotos: roomPhotos.photos, include })
   const { bytes, filename, photosMissing } = await makePdf({ ...report, roomPhotos })
   const filePath = await uploadReportPdf(teamId, bytes)
   const sent = await sendReportTo({

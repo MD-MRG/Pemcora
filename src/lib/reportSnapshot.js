@@ -27,9 +27,11 @@ import { assetFields, assetTypeLabel } from '../data/packs/shared/assetTypes.js'
 //            roomId, label, make, model, serial, installedOn, expiresOn,
 //            createdAt, removedAt, attributes }. The snapshot works out what
 //            stood there at the visit, so a report exported later doesn't change.
-//   roomPhotos  each room's photos (0022), as { roomId: [{ id, caption,
-//            takenAt }] }. Only those added by the day the visit was completed
-//            reach the report (photosAtVisit), for the same reason.
+//   roomPhotos  each room's photos (0022), as { roomId: [{ id, category,
+//            caption, takenAt }] }. Only those added by the day the visit was
+//            completed reach the report (photosAtVisit), for the same reason.
+//   include  which of them the report carries: 'all', 'none', 'general' or
+//            'issue' (photosForChoice), as asked when the PDF is made.
 //
 // `equipment` is the items of the types the visit's list tests one by one: those
 // standing when it finished, and those taken out during it, each with when it
@@ -130,14 +132,37 @@ export function photosAtVisit(photos, visit) {
     .sort((a, b) => (time(a.takenAt) ?? 0) - (time(b.takenAt) ?? 0))
 }
 
+/** The ways a PDF can be asked to carry room photos (M.D.). */
+export const PHOTO_CHOICES = ['all', 'general', 'issue', 'none']
+
+/**
+ * The photos a report carries when it's made with `include`: 'all', 'none', or
+ * one group, 'general' or 'issue'. Anything else is taken as 'all'.
+ */
+export function photosForChoice(photos, include = 'all') {
+  if (include === 'none') return []
+  if (include === 'general' || include === 'issue') return (photos ?? []).filter(p => (p.category ?? 'general') === include)
+  return photos ?? []
+}
+
 function roomSnapshot(room, entry, photos) {
   const base = {
     name: room.name ?? '',
     floor: room.floorLabel ?? '',
     planNumber: room.planNumber ?? '',
-    // The room's own photos (0022), described, and dated when they were added.
-    // Only on a room that has some, so every other snapshot reads as it did.
-    ...(photos.length ? { photos: photos.map(p => ({ id: p.id, caption: p.caption ?? '', addedOn: dayOf(p.takenAt) ?? '' })) } : {}),
+    // The room's own photos (0022), in their group, described, and dated when
+    // they were added. Only on a room that has some, so every other snapshot
+    // reads as it did.
+    ...(photos.length
+      ? {
+          photos: photos.map(p => ({
+            id: p.id,
+            category: p.category ?? 'general',
+            caption: p.caption ?? '',
+            addedOn: dayOf(p.takenAt) ?? '',
+          })),
+        }
+      : {}),
   }
   const template = entry?.template
   // A room never opened has no template of its own; report it as untested
@@ -250,6 +275,7 @@ export function buildReportSnapshot({
   revision = 1,
   reportTitle = '',
   roomPhotos = {},
+  include = 'all',
 }) {
   const roomNames = new Map(rooms.map(r => [r.id, r.name ?? '']))
   // No room is opened in a whole-site check, and saying "not tested" about each
@@ -266,7 +292,7 @@ export function buildReportSnapshot({
     site: siteSnapshot(visit, assets, roomNames),
     rooms: rooms
       .filter(room => !siteOnly || visit?.rooms?.[room.id])
-      .map(room => roomSnapshot(room, visit?.rooms?.[room.id], photosAtVisit(roomPhotos[room.id], visit))),
+      .map(room => roomSnapshot(room, visit?.rooms?.[room.id], photosForChoice(photosAtVisit(roomPhotos[room.id], visit), include))),
     equipment: equipmentSnapshot(visit, assets, roomNames),
   }
 }

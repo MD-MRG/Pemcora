@@ -43,10 +43,10 @@ async function labelPhotos(assets) {
  * photos had to be left out for want of a connection. Sending a report (D2) uses
  * this too, handing over the room photos it already fetched for its snapshot.
  */
-export async function makePdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, roomPhotos }) {
+export async function makePdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, roomPhotos, include = 'all' }) {
   const [{ photos, missing }, room] = await Promise.all([
     labelPhotos(assets),
-    roomPhotos ?? roomPhotosForReport(rooms, visit, { withBytes: true }),
+    roomPhotos ?? roomPhotosForReport(rooms, visit, { withBytes: true, include }),
   ])
   const bytes = await buildPdf({
     client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, photos,
