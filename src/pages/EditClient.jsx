@@ -201,7 +201,7 @@ function EditLevel({ client, locationId, isNew, onBack, onSaved, onAddLocation }
             addRoom={addRoom}
             removeRoom={removeRoom}
             addFloor={addFloor}
-            roomExtra={room => <RoomPhotosToggle room={room} />}
+            roomExtra={room => <RoomPhotosToggle room={room} clientName={client.name} />}
           />
         )}
       </div>
