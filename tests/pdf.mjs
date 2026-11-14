@@ -335,6 +335,8 @@ try {
       net.asked.push(`${req.method()} ${url.pathname}${url.search}`)
       const json = body => route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) })
       if (url.pathname === '/rest/v1/attachments') {
+        // A room's photos are asked for by room_id (0022): this site's rooms have none.
+        if (url.search.includes('room_id')) return json([])
         return json([{ id: 'p1', asset_id: 'al1', storage_path: 'team/assets/al1/one.jpg', taken_at: '2026-11-01T00:00:00+00:00' }])
       }
       if (url.pathname.startsWith('/storage/v1/object/sign/evidence/') && req.method() === 'POST') {
@@ -380,10 +382,11 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: /Save as a new revision|Replace/ }).first().click().catch(() => {})
     const photoPdf = await read(readFileSync(await (await download).path()))
     log('a team\'s PDF fetches the label photos of the site\'s items in one request',
-      net.asked.filter(a => a.startsWith('GET /rest/v1/attachments')).length === 1 && /asset_id=in\.\(al1\)/.test(decodeURIComponent(net.asked.find(a => a.startsWith('GET /rest/v1/attachments')) ?? '')),
+      net.asked.filter(a => a.startsWith('GET /rest/v1/attachments') && a.includes('asset_id')).length === 1 &&
+        /asset_id=in\.\(al1\)/.test(decodeURIComponent(net.asked.find(a => a.startsWith('GET /rest/v1/attachments') && a.includes('asset_id')) ?? '')),
       net.asked.join(' | '))
     log('and puts each under its item', photoPdf.pages.some(p => p.images === 1 && /Label photo — Bedroom 1 alarm/.test(p.text)), photoPdf.pages.map(p => p.images).join() + ' ' + photoPdf.text.split('\n').join(' | ').slice(-500))
-    log('saying nothing is missing', (await page.getByText('This PDF has no label photos').count()) === 0)
+    log('saying nothing is missing', (await page.getByText('This PDF is missing photos').count()) === 0)
 
     net.down = true
     download = page.waitForEvent('download', { timeout: 20000 })
@@ -391,7 +394,7 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: /Save as a new revision|Replace/ }).first().click().catch(() => {})
     const offlinePdf = await read(readFileSync(await (await download).path()))
     log('with no signal the PDF still goes, without photos', /Bedroom 1 alarm/.test(offlinePdf.text) && !/Label photo/.test(offlinePdf.text))
-    log('and the page says why, and how to get them', /This PDF has no label photos: they need a connection/.test(await page.textContent('main')))
+    log('and the page says why, and how to get them', /This PDF is missing photos: they need a connection/.test(await page.textContent('main')))
     net.down = false
   }
 } catch (e) {

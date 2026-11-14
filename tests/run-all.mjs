@@ -46,6 +46,7 @@ const SUITES = [
   'signoff',
   'equipment',
   'label-photo',
+  'room-photos',
   'client-settings',
   'due',
   'devices',

@@ -1,9 +1,10 @@
 """
-Proves 0006 to 0014 on a throwaway local Postgres with a Supabase stub.
+Proves 0006 to 0014, and 0022, on a throwaway local Postgres with a Supabase stub.
 
 Applies 0001-0005 (the real files from the repo), creates a "legacy" team the way
 the app did, then applies 0006 to 0014 twice (re-run safety) and drives every
 gate, policy and RPC as real signed-in roles — RLS on, no superuser shortcuts.
+0022 (room photos) is applied last, twice, without Phase E's 0015–0021.
 
     PGHOST=localhost PGUSER=postgres python3 docs/editions/test/run_tests.py supabase/migrations
 
@@ -2075,6 +2076,214 @@ act(J, "delete from public.compliance_items where id = %s", [OWN])
 check("D4d: the landlord can remove a check they entered", su("select count(*) from public.compliance_items where id = %s", [OWN])[0][0] == 0)
 run_file(NEW / "0014_certificates.sql")
 check("D4d: 0014 re-runs", True)
+
+# ── Room photos (0022) ──────────────────────────────────────────────────────
+# Photos kept with a site's room, in two groups, with a full-quality file: a
+# same-team room, the server's date, a short description, and, for now, only
+# teams switched on in team_features (Pro too, once limits are on). Numbered
+# after Phase E's 0015–0021 but applied without them, as it is here.
+print("\n— Room photos: photos kept with a room (0022)")
+RP_BEFORE = su("select count(*) from public.attachments")[0][0]
+for attempt in (1, 2):
+    try:
+        run_file(NEW / "0022_room_photos.sql")
+        check(f"RP: 0022 applies (run {attempt})", True)
+    except psycopg.Error as e:
+        check(f"RP: 0022 applies (run {attempt})", False, str(e))
+        sys.exit(1)
+check("RP: …and the photos already there are kept", su("select count(*) from public.attachments")[0][0] == RP_BEFORE)
+RP_SQL = (NEW / "0022_room_photos.sql").read_text()
+RP_VERIFY = su(RP_SQL[RP_SQL.rindex("\nselect"):])[0]   # the file's last statement
+check("RP: the verification query reads as its header says",
+      tuple(RP_VERIFY) == (3, 1, 3, 1, 1, True, 2, 1, 0, 1, 0, 0), str(RP_VERIFY))
+
+
+def rp_room(uid, team, lid, name):
+    floor = uuid.uuid4()
+    room = uuid.uuid4()
+    act(uid, "insert into public.floors (id, location_id, team_id, label) values (%s, %s, %s, 'Ground')", [floor, lid, team])
+    act(uid, "insert into public.rooms (id, floor_id, team_id, name) values (%s, %s, %s, %s)", [room, floor, team, name])
+    return room
+
+
+def rp_photo(uid, team, room, category="general", caption="", extra=None, upload=True):
+    """Both files, then the record, as the app does it."""
+    base = f"{team}/rooms/{room}/{uuid.uuid4()}"
+    shown, original = f"{base}.jpg", f"{base}-original.jpg"
+    if upload:
+        for p in (shown, original):
+            act(uid, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [p])
+    cols = {"team_id": team, "room_id": room, "category": category, "storage_path": shown,
+            "original_path": original, "caption": caption, **(extra or {})}
+    sql = (f"insert into public.attachments ({', '.join(cols)}) "
+           f"values ({', '.join(['%s'] * len(cols))}) returning id")
+    return one(uid, sql, list(cols.values()))
+
+
+def rp_site(uid, team, address):
+    cid, lid = uuid.uuid4(), uuid.uuid4()
+    act(uid, "insert into public.clients (id, team_id, name) values (%s, %s, %s)", [cid, team, f"Client of {address}"])
+    act(uid, "insert into public.locations (id, client_id, team_id, address, suburb) values (%s, %s, %s, %s, 'Elsewhere')",
+        [lid, cid, team, address])
+    return lid
+
+
+# Three teams: A's is Pro (section E), X's is on Free, and W's is on Free and
+# switched on by M.D.
+W = user("switched-on@room-photos.test")
+TW = one(W, "select id from public.create_organisation('Switched On', 'provider', 'av')")
+RP_ROOM = rp_room(A, TA, LOCS[0], "Kitchen")
+RP_ROOM2 = rp_room(A, TA, LOCS[0], "Laundry")
+RPX_ROOM = rp_room(X, TX, rp_site(X, TX, "9 Other St"), "Lounge")
+RPW_ROOM = rp_room(W, TW, rp_site(W, TW, "3 Switch St"), "Office")
+
+# ── The switch is M.D.'s alone ──────────────────────────────────────────────
+refused("RP: a member can't switch room photos on for their team", W,
+        "insert into public.team_features (team_id, room_photos) values (%s, true)", [TW], sqlstate="42501")
+refused("RP: …nor read the switches", W, "select * from public.team_features", sqlstate="42501")
+refused("RP: …nor ask the database's own check directly", W, "select public.room_photos_on(%s)", [TW], sqlstate="42501")
+
+# ── With limits off, as the live project is today ───────────────────────────
+su("update public.app_settings set enforce_limits = false")
+check("RP: with limits off, a team that isn't switched on has no room photos",
+      one(X, "select public.room_photos_allowed(%s)", [TX]) is False)
+refused("RP: …can't record one", X,
+        "insert into public.attachments (team_id, room_id, category, storage_path) values (%s, %s, 'general', %s)",
+        [TX, RPX_ROOM, f"{TX}/rooms/{RPX_ROOM}/x.jpg"], sqlstate="PT402")
+refused("RP: …nor upload into its rooms folder", X,
+        "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [f"{TX}/rooms/{RPX_ROOM}/x.jpg"],
+        sqlstate="42501")
+RPX_LABEL = f"{TX}/assets/{uuid.uuid4()}/label.jpg"
+act(X, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [RPX_LABEL])
+act(X, "insert into public.attachments (team_id, storage_path, caption) values (%s, %s, 'Label')", [TX, RPX_LABEL])
+check("RP: …while label photos keep their rule: anyone's, until limits are on", True)
+refused("RP: with limits off, even a Pro team isn't switched on by being Pro", A,
+        "insert into public.attachments (team_id, room_id, category, storage_path) values (%s, %s, 'general', %s)",
+        [TA, RP_ROOM, f"{TA}/rooms/{RP_ROOM}/x.jpg"], sqlstate="PT402")
+
+su("insert into public.team_features (team_id, room_photos) values (%s, true) "
+   "on conflict (team_id) do update set room_photos = true, updated_at = now()", [TW])
+check("RP: a team M.D. switches on has room photos", one(W, "select public.room_photos_allowed(%s)", [TW]) is True)
+RPW1 = rp_photo(W, TW, RPW_ROOM, "general", "Taken while limits are off")
+check("RP: …and adds one, with both its files",
+      one(W, "select count(*) from public.attachments where id = %s and original_path is not null", [RPW1]) == 1
+      and one(W, "select count(*) from storage.objects where bucket_id = 'evidence' and name like %s",
+              [f"{TW}/rooms/{RPW_ROOM}/%"]) == 2)
+check("RP: an outsider can't tell whether another team is switched on",
+      one(X, "select public.room_photos_allowed(%s)", [TW]) is False)
+
+# ── With limits on ──────────────────────────────────────────────────────────
+su("update public.app_settings set enforce_limits = true")
+check("RP: with limits on, a Pro team has room photos", one(A, "select public.room_photos_allowed(%s)", [TA]) is True)
+check("RP: …a switched-on team keeps them", one(W, "select public.room_photos_allowed(%s)", [TW]) is True)
+rp_photo(W, TW, RPW_ROOM, "issue", "Still allowed")
+check("RP: …and still adds them, on Free", True)
+refused("RP: …and a Free team that isn't switched on still can't", X,
+        "insert into public.attachments (team_id, room_id, category, storage_path) values (%s, %s, 'general', %s)",
+        [TX, RPX_ROOM, f"{TX}/rooms/{RPX_ROOM}/y.jpg"], contains="not available", sqlstate="PT402")
+refused("RP: …nor upload into its rooms folder, while its label photos follow the Pro rule", X,
+        "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [f"{TX}/rooms/{RPX_ROOM}/y.jpg"],
+        sqlstate="42501")
+
+RP1 = rp_photo(A, TA, RP_ROOM, "general", "Switchboard behind the pantry door")
+row = act(A, """select room_id, category, caption, created_by, taken_at > now() - interval '1 minute', original_path like %s
+                  from public.attachments where id = %s""", [f"{TA}/rooms/{RP_ROOM}/%", RP1])[0]
+check("RP: a Pro team adds a photo to its own room, in a group, with a description and its full-quality file",
+      row[0] == RP_ROOM and row[1] == "general" and row[2] == "Switchboard behind the pantry door" and row[3] == A
+      and row[4] and row[5], str(row))
+
+# ── Groups ──────────────────────────────────────────────────────────────────
+refused("RP: a room photo needs a group", A,
+        "insert into public.attachments (team_id, room_id, storage_path) values (%s, %s, %s)",
+        [TA, RP_ROOM, f"{TA}/rooms/{RP_ROOM}/nogroup.jpg"], sqlstate="23514")
+refused("RP: …General or Issues, nothing else", A,
+        "insert into public.attachments (team_id, room_id, category, storage_path) values (%s, %s, 'misc', %s)",
+        [TA, RP_ROOM, f"{TA}/rooms/{RP_ROOM}/misc.jpg"], sqlstate="23514")
+refused("RP: a label photo has no group", A,
+        "insert into public.attachments (team_id, storage_path, category) values (%s, %s, 'general')",
+        [TA, f"{TA}/assets/x/label.jpg"], sqlstate="23514")
+act(A, "update public.attachments set category = 'issue' where id = %s", [RP1])
+check("RP: a photo moves to Issues", one(A, "select category from public.attachments where id = %s", [RP1]) == "issue")
+act(A, "update public.attachments set category = 'general' where id = %s", [RP1])
+check("RP: …and back to General", one(A, "select category from public.attachments where id = %s", [RP1]) == "general")
+refused("RP: …but can't lose its group", A, "update public.attachments set category = null where id = %s", [RP1], sqlstate="23514")
+
+# ── The date is the server's ────────────────────────────────────────────────
+RP2 = rp_photo(A, TA, RP_ROOM, "issue", "Old meter", extra={"taken_at": datetime(2020, 1, 1, tzinfo=timezone.utc), "created_by": X})
+check("RP: a photo can't be backdated: the date sent is replaced by the server's",
+      one(A, "select taken_at > now() - interval '1 minute' from public.attachments where id = %s", [RP2]) is True)
+check("RP: who added it is the signed-in person, whatever the app says",
+      one(A, "select created_by from public.attachments where id = %s", [RP2]) == A)
+refused("RP: …nor moved back afterwards", A,
+        "update public.attachments set taken_at = '2020-01-01' where id = %s", [RP2], sqlstate="42501")
+refused("RP: …nor given to someone else", A,
+        "update public.attachments set created_by = %s where id = %s", [X, RP2], sqlstate="42501")
+act(A, "update public.attachments set caption = 'Meter box, east wall' where id = %s", [RP2])
+check("RP: the description can be edited",
+      one(A, "select caption from public.attachments where id = %s", [RP2]) == "Meter box, east wall")
+
+# ── A description of at most 300 characters ─────────────────────────────────
+act(A, "update public.attachments set caption = %s where id = %s", ["x" * 300, RP2])
+check("RP: a 300-character description is kept", one(A, "select char_length(caption) from public.attachments where id = %s", [RP2]) == 300)
+refused("RP: a 301-character description is refused on update", A,
+        "update public.attachments set caption = %s where id = %s", ["x" * 301, RP2], sqlstate="23514")
+refused("RP: …and on insert", A,
+        "insert into public.attachments (team_id, room_id, category, storage_path, caption) values (%s, %s, 'general', %s, %s)",
+        [TA, RP_ROOM, f"{TA}/rooms/{RP_ROOM}/long.jpg", "y" * 301], sqlstate="23514")
+
+# ── Same team only, and nothing but the description and group changes ───────
+refused("RP: a photo can't hang off another team's room", A,
+        "insert into public.attachments (team_id, room_id, category, storage_path) values (%s, %s, 'general', %s)",
+        [TA, RPX_ROOM, f"{TA}/rooms/{RPX_ROOM}/x.jpg"], sqlstate="42501")
+refused("RP: …nor keep its full-quality file in another team's folder", A,
+        "insert into public.attachments (team_id, room_id, category, storage_path, original_path) values (%s, %s, 'general', %s, %s)",
+        [TA, RP_ROOM, f"{TA}/rooms/{RP_ROOM}/a.jpg", f"{TX}/rooms/{RPX_ROOM}/a.jpg"], sqlstate="42501")
+refused("RP: an update can't move a photo onto another team's room", A,
+        "update public.attachments set room_id = %s where id = %s", [RPX_ROOM, RP1], sqlstate="42501")
+refused("RP: …nor onto another of the team's own rooms", A,
+        "update public.attachments set room_id = %s where id = %s", [RP_ROOM2, RP1], sqlstate="42501")
+refused("RP: …nor into another team", A,
+        "update public.attachments set team_id = %s where id = %s", [TX, RP1])   # by 0007's keep_team(), first
+refused("RP: …nor point it at other files", A,
+        "update public.attachments set storage_path = %s where id = %s", [f"{TA}/rooms/{RP_ROOM}/other.jpg", RP1], sqlstate="42501")
+refused("RP: …or another full-quality file", A,
+        "update public.attachments set original_path = %s where id = %s", [f"{TA}/rooms/{RP_ROOM}/other.jpg", RP1], sqlstate="42501")
+check("RP: another team can't see a room's photos",
+      one(X, "select count(*) from public.attachments where room_id = %s", [RP_ROOM]) == 0)
+check("RP: …or their files",
+      one(X, "select count(*) from storage.objects where bucket_id = 'evidence' and name like %s", [f"{TA}/rooms/%"]) == 0)
+act(X, "update public.attachments set category = 'issue' where id = %s", [RP1])   # RLS: matches nothing
+check("RP: …or move one", one(A, "select category from public.attachments where id = %s", [RP1]) == "general")
+act(X, "delete from public.attachments where id = %s", [RP1])
+check("RP: …or delete one", su("select count(*) from public.attachments where id = %s", [RP1])[0][0] == 1)
+
+# ── Deleting ────────────────────────────────────────────────────────────────
+RP3 = rp_photo(A, TA, RP_ROOM, "general")
+RP3_FILES = act(A, "select storage_path, original_path from public.attachments where id = %s", [RP3])[0]
+act(A, "delete from storage.objects where bucket_id = 'evidence' and name in (%s, %s)", list(RP3_FILES))
+act(A, "delete from public.attachments where id = %s", [RP3])
+check("RP: a member deletes a photo and both its files",
+      su("select count(*) from public.attachments where id = %s", [RP3])[0][0] == 0
+      and su("select count(*) from storage.objects where name in (%s, %s)", list(RP3_FILES))[0][0] == 0)
+act(A, "delete from public.rooms where id = %s", [RP_ROOM])
+check("RP: deleting a room deletes its photos' records",
+      su("select count(*) from public.attachments where room_id = %s", [RP_ROOM])[0][0] == 0
+      and su("select count(*) from public.attachments where id in (%s, %s)", [RP1, RP2])[0][0] == 0)
+
+# ── Label photos ────────────────────────────────────────────────────────────
+RP_ASSET = one(A, "select id from public.assets where team_id = %s limit 1", [TA])
+RP_LABEL = f"{TA}/assets/{RP_ASSET}/{uuid.uuid4()}.jpg"
+act(A, "insert into storage.objects (bucket_id, name) values ('evidence', %s)", [RP_LABEL])
+act(A, "insert into public.attachments (team_id, asset_id, storage_path, caption, taken_at) values (%s, %s, %s, 'Label', '2021-06-01')",
+    [TA, RP_ASSET, RP_LABEL])
+check("RP: a label photo still saves as it did, dated by the server",
+      one(A, "select taken_at > now() - interval '1 minute' from public.attachments where storage_path = %s", [RP_LABEL]) is True)
+su("delete from public.assets where id = %s", [RP_ASSET])
+check("RP: deleting its item still empties the photo's item, as the foreign key says",
+      su("select asset_id is null from public.attachments where storage_path = %s", [RP_LABEL])[0][0] is True)
+run_file(NEW / "0022_room_photos.sql")
+check("RP: 0022 re-runs with room photos in place",
+      su("select room_photos from public.team_features where team_id = %s", [TW])[0][0] is True)
 
 print(f"\n{passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

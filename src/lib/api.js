@@ -342,7 +342,12 @@ export async function saveMemberPrefs(teamId, userId, patch) {
 
 // Null if this person isn't in the team. A null limit is no limit.
 export async function getEntitlements(teamId) {
-  const { data, error } = await supabase.rpc('team_entitlements', { p_team_id: teamId })
+  // Room photos are asked for beside the rest (0022): team_entitlements() is
+  // Phase E's to change, so it isn't touched for them.
+  const [{ data, error }, roomPhotos] = await Promise.all([
+    supabase.rpc('team_entitlements', { p_team_id: teamId }),
+    roomPhotosAllowed(teamId),
+  ])
   if (error) throw error
   if (!data) return null
   return {
@@ -361,6 +366,7 @@ export async function getEntitlements(teamId) {
     openVisits: Number(data.open_visits ?? 0),
     starterPack: data.starter_pack ?? null,
     starterInUse: !!data.starter_in_use,
+    roomPhotos,
   }
 }
 
@@ -721,6 +727,9 @@ export async function updateClientDetails(clientId, patch) {
 }
 
 export async function deleteClient(clientId) {
+  const sites = await supabase.from('locations').select('floors(rooms(id))').eq('client_id', clientId)
+  if (sites.error) throw sites.error
+  await removeRoomPhotoFiles(sites.data.flatMap(l => roomIdsOf(l.floors)))
   const { error } = await supabase.from('clients').delete().eq('id', clientId)
   if (error) throw error
 }
@@ -761,6 +770,9 @@ export async function updateLocation(locationId, details) {
 }
 
 export async function deleteLocation(locationId) {
+  const floors = await supabase.from('floors').select('rooms(id)').eq('location_id', locationId)
+  if (floors.error) throw floors.error
+  await removeRoomPhotoFiles(roomIdsOf(floors.data))
   const { error } = await supabase.from('locations').delete().eq('id', locationId)
   if (error) throw error
 }
@@ -787,6 +799,9 @@ export async function updateFloor(floorId, patch) {
 }
 
 export async function deleteFloor(floorId) {
+  const rooms = await supabase.from('rooms').select('id').eq('floor_id', floorId)
+  if (rooms.error) throw rooms.error
+  await removeRoomPhotoFiles(rooms.data.map(r => r.id))
   const { error } = await supabase.from('floors').delete().eq('id', floorId)
   if (error) throw error
 }
@@ -813,7 +828,9 @@ export async function updateRoom(roomId, patch) {
   if (error) throw error
 }
 
+// A room's photos go with it: the files here, their records by the foreign key.
 export async function deleteRoom(roomId) {
+  await removeRoomPhotoFiles([roomId])
   const { error } = await supabase.from('rooms').delete().eq('id', roomId)
   if (error) throw error
 }
@@ -836,6 +853,7 @@ export async function saveFloorPlan(teamId, locationId, floors) {
   const keptFloors = new Set(floors.map(f => f.id).filter(Boolean))
   const goneFloors = before.data.filter(f => !keptFloors.has(f.id)).map(f => f.id)
   if (goneFloors.length) {
+    await removeRoomPhotoFiles(roomIdsOf(before.data.filter(f => !keptFloors.has(f.id))))
     const { error } = await supabase.from('floors').delete().in('id', goneFloors)
     if (error) throw error
   }
@@ -853,6 +871,7 @@ export async function saveFloorPlan(teamId, locationId, floors) {
     const kept = new Set((floor.rooms ?? []).map(r => r.id).filter(Boolean))
     const gone = (roomsBefore.get(floor.id) ?? []).filter(id => !kept.has(id))
     if (gone.length) {
+      await removeRoomPhotoFiles(gone)
       const { error } = await supabase.from('rooms').delete().in('id', gone)
       if (error) throw error
     }
@@ -1159,6 +1178,204 @@ export async function photoUrl(path) {
   if (error) throw error
   return data.signedUrl
 }
+
+/** Links to several photos at once, as { path: link }, good for five minutes. */
+export async function photoUrls(paths) {
+  if (!paths.length) return {}
+  const { data, error } = await supabase.storage.from(EVIDENCE).createSignedUrls(paths, 300)
+  if (error) throw error
+  return Object.fromEntries(data.filter(d => d.signedUrl && !d.error).map(d => [d.path, d.signedUrl]))
+}
+
+// ── Room photos (0022) ───────────────────────────────────────────────────────
+//
+// Photos kept with a site's room, not with a visit, in two groups (General and
+// Issues), each with a description and the date it was added. The database sets
+// that date itself, so it can't be backdated. Each photo is two files in the
+// team's folder under rooms/<room id>/: a display copy (1600 px) for the screen
+// and the PDF, and the best full-quality JPEG that fits the bucket, to download.
+// For now only teams M.D. switches on have them; Pro teams too once the limits
+// are on (room_photos_allowed()).
+
+export const ROOM_PHOTO_LIMIT = 20 // a group
+export const CAPTION_LIMIT = 300
+export const PHOTO_GROUPS = [
+  { id: 'general', label: 'General' },
+  { id: 'issue', label: 'Issues' },
+]
+
+/**
+ * The database has no attachments.room_id until 0022 is applied. A read of the
+ * missing column answers 42703, a write PGRST204: either way, room photos aren't
+ * there yet, and the app carries on without them.
+ */
+export const roomPhotosMissing = error => error?.code === '42703' || error?.code === 'PGRST204'
+
+/**
+ * Whether this team has room photos. False before 0022 (no such function), and
+ * on any failure: the section simply stays hidden.
+ */
+export async function roomPhotosAllowed(teamId) {
+  try {
+    const { data, error } = await supabase.rpc('room_photos_allowed', { p_team_id: teamId })
+    return !error && data === true
+  } catch {
+    return false
+  }
+}
+
+const ROOM_PHOTO_COLUMNS = 'id, room_id, category, storage_path, original_path, caption, taken_at, created_by'
+const roomPhotoFromRow = (r, emails = {}) => ({
+  id: r.id,
+  roomId: r.room_id,
+  category: r.category ?? 'general',
+  path: r.storage_path,
+  originalPath: r.original_path ?? null,
+  caption: r.caption ?? '',
+  takenAt: r.taken_at,
+  createdBy: r.created_by ?? null,
+  uploader: emails[r.created_by] ?? '',
+})
+
+/**
+ * A room's photos, newest first, each with its group and who added it (their
+ * email). Null when the database has no room photos yet (0022 not applied).
+ */
+export async function listRoomPhotos(teamId, roomId) {
+  const [photos, members] = await Promise.all([
+    supabase
+      .from('attachments')
+      .select(ROOM_PHOTO_COLUMNS)
+      .eq('team_id', teamId)
+      .eq('room_id', roomId)
+      .order('taken_at', { ascending: false }),
+    // Who added each one. Without it they still show, unnamed.
+    supabase.rpc('team_members_list', { p_team_id: teamId }).then(
+      r => r,
+      () => ({ data: null }),
+    ),
+  ])
+  if (roomPhotosMissing(photos.error)) return null
+  if (photos.error) throw photos.error
+  const emails = Object.fromEntries((members.data ?? []).map(m => [m.user_id, m.email]))
+  return photos.data.map(r => roomPhotoFromRow(r, emails))
+}
+
+/**
+ * The photos of these rooms, oldest first, as { roomId: [photo] }, in one
+ * request: what a report shows (no uploader). Empty when the database has no
+ * room photos yet.
+ */
+export async function roomPhotosOf(teamId, roomIds) {
+  if (!roomIds.length) return {}
+  const { data, error } = await supabase
+    .from('attachments')
+    .select(ROOM_PHOTO_COLUMNS)
+    .eq('team_id', teamId)
+    .in('room_id', roomIds)
+    .order('taken_at', { ascending: true })
+  if (roomPhotosMissing(error)) return {}
+  if (error) throw error
+  const byRoom = {}
+  for (const photo of data.map(r => roomPhotoFromRow(r))) (byRoom[photo.roomId] ??= []).push(photo)
+  return byRoom
+}
+
+/**
+ * Adds a photo to a room's group: `files.display`, made small (photo.js), and
+ * `files.original`, the full-quality JPEG. The room has to be in the database
+ * first. As for a label photo: the record first, where the database says no
+ * with the code the app looks for, then the files; if either fails to upload,
+ * what went up is removed and the record with it.
+ */
+export async function addRoomPhoto(teamId, roomId, files, category, caption = '') {
+  const base = `${teamId}/rooms/${roomId}/${crypto.randomUUID()}`
+  const path = `${base}.jpg`
+  const originalPath = `${base}-original.jpg`
+  const { data, error } = await supabase
+    .from('attachments')
+    .insert({
+      team_id: teamId,
+      room_id: roomId,
+      category,
+      storage_path: path,
+      original_path: originalPath,
+      caption: String(caption).slice(0, CAPTION_LIMIT),
+    })
+    .select(ROOM_PHOTO_COLUMNS)
+    .single()
+  if (error) throw await whenParentGone(error, [['rooms', roomId]])
+  const sent = []
+  for (const [where, blob] of [[path, files.display], [originalPath, files.original]]) {
+    const { error: failed } = await supabase.storage
+      .from(EVIDENCE)
+      .upload(where, blob, { contentType: 'image/jpeg', upsert: false })
+    if (failed) {
+      if (sent.length) await supabase.storage.from(EVIDENCE).remove(sent)
+      await supabase.from('attachments').delete().eq('id', data.id)
+      throw failed
+    }
+    sent.push(where)
+  }
+  return roomPhotoFromRow(data)
+}
+
+/** A room photo's description, at most 300 characters. */
+export async function setRoomPhotoCaption(photoId, caption) {
+  const { error } = await supabase
+    .from('attachments')
+    .update({ caption: String(caption ?? '').slice(0, CAPTION_LIMIT) })
+    .eq('id', photoId)
+  if (error) throw error
+}
+
+/** Moves a room photo to the other group: 'general' or 'issue'. */
+export async function setRoomPhotoCategory(photoId, category) {
+  const { error } = await supabase.from('attachments').update({ category }).eq('id', photoId)
+  if (error) throw error
+}
+
+/**
+ * A link that downloads a photo's full-quality file, named `filename`, good
+ * for five minutes. A photo with no full-quality file gives its display copy.
+ */
+export async function originalPhotoUrl(photo, filename) {
+  const { data, error } = await supabase.storage
+    .from(EVIDENCE)
+    .createSignedUrl(photo.originalPath ?? photo.path, 300, { download: filename })
+  if (error) throw error
+  return data.signedUrl
+}
+
+/** Deletes a room photo: both its files, then its record, so no record names a file that's gone. */
+export async function deleteRoomPhoto(photo) {
+  const { error: failed } = await supabase.storage.from(EVIDENCE).remove([photo.path, photo.originalPath].filter(Boolean))
+  if (failed) throw failed
+  const { error } = await supabase.from('attachments').delete().eq('id', photo.id)
+  if (error) throw error
+}
+
+const chunks = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size))
+
+/**
+ * Removes the photo files of rooms about to be deleted. Storage can't follow a
+ * foreign key: the records go with the room (0022), so the files go first, or
+ * nothing would be left to find them by. Nothing to do before 0022.
+ */
+async function removeRoomPhotoFiles(roomIds) {
+  for (const ids of chunks(roomIds.filter(Boolean), 100)) {
+    const { data, error } = await supabase.from('attachments').select('storage_path, original_path').in('room_id', ids)
+    if (roomPhotosMissing(error)) return
+    if (error) throw error
+    const paths = data.flatMap(r => [r.storage_path, r.original_path]).filter(Boolean)
+    for (const some of chunks(paths, 100)) {
+      const { error: failed } = await supabase.storage.from(EVIDENCE).remove(some)
+      if (failed) throw failed
+    }
+  }
+}
+
+const roomIdsOf = floors => (floors ?? []).flatMap(f => (f.rooms ?? []).map(r => r.id))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sending reports (D2)

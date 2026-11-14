@@ -4,6 +4,7 @@ import { buildPdf } from './pdfReport.js'
 import { buildFilename, triggerDownload } from './report.js'
 import { latestAssetPhotos, photoUrl } from './api.js'
 import { entitledTeam } from './entitlements.js'
+import { roomPhotosForReport } from './roomPhotoReport.js'
 
 // The browser's half of the PDF report: the fonts, fetched once and only when a
 // PDF is made, then the download. The build's own files, so the service worker
@@ -38,14 +39,21 @@ async function labelPhotos(assets) {
 }
 
 /**
- * Builds the PDF report: its bytes, its filename, and whether label photos had to
- * be left out for want of a connection. Sending a report (D2) uses this too.
+ * Builds the PDF report: its bytes, its filename, and whether label or room
+ * photos had to be left out for want of a connection. Sending a report (D2) uses
+ * this too, handing over the room photos it already fetched for its snapshot.
  */
-export async function makePdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout }) {
-  const { photos, missing } = await labelPhotos(assets)
-  const bytes = await buildPdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, photos, fonts: await loadFonts() })
+export async function makePdf({ client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, roomPhotos, include = 'all' }) {
+  const [{ photos, missing }, room] = await Promise.all([
+    labelPhotos(assets),
+    roomPhotos ?? roomPhotosForReport(rooms, visit, { withBytes: true, include }),
+  ])
+  const bytes = await buildPdf({
+    client, location, visit, rooms, revision, reportTitle, settings, assets, showLogo, layout, photos,
+    roomPhotos: room.photos, roomPhotoBytes: room.bytes, fonts: await loadFonts(),
+  })
   const filename = buildFilename(client, visit, revision, reportTitle).replace(/\.xlsx$/, '.pdf')
-  return { bytes, filename, photosMissing: missing }
+  return { bytes, filename, photosMissing: missing || room.missing }
 }
 
 /** Builds the PDF report and downloads it. */
